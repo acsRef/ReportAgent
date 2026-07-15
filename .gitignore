@@ -41,6 +41,8 @@ env/
 # LangChain / ChromaDB / DuckDB
 *.db
 *.duckdb
+.chroma/
+.mem0/
 chroma_data/
 metabase_data/
 
