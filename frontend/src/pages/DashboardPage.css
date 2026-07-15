@@ -1,0 +1,56 @@
+.dashboard-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--header-h));
+  background: var(--bg-deep);
+}
+
+/* AI input bar */
+.dashboard-ai-bar {
+  padding: var(--space-3) var(--space-4);
+  background: rgba(5, 5, 6, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+
+.dashboard-ai-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 100%;
+}
+
+.dashboard-ai-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 8px var(--accent));
+}
+
+.dashboard-ai-input {
+  flex: 1;
+  padding: 9px 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  color: var(--text-primary);
+  outline: none;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.dashboard-ai-input::placeholder { color: var(--text-muted); }
+.dashboard-ai-input:focus {
+  border-color: var(--accent);
+  background: var(--glass-bg-hover);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* Body: lib + canvas + props */
+.dashboard-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}

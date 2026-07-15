@@ -1,0 +1,96 @@
+.table-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--space-2) 0;
+}
+
+.table-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 0 var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.table-panel-body {
+  flex: 1;
+  overflow: auto;
+}
+
+.table-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.table-panel thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-surface);
+}
+
+.table-panel th {
+  padding: 8px var(--space-3);
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--glass-border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  cursor: default;
+  user-select: none;
+}
+.table-panel th.sortable { cursor: pointer; }
+.table-panel th.sortable:hover { color: var(--accent); }
+.table-panel th .sort-icon { margin-left: 4px; font-size: 9px; opacity: 0.4; }
+.table-panel th.sort-active { color: var(--accent); }
+
+.table-panel td {
+  padding: 7px var(--space-3);
+  border-bottom: 1px solid var(--glass-border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-size: 12px;
+}
+.table-panel tbody tr:hover td { background: var(--glass-bg-hover); }
+.table-panel tbody tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+.table-panel tbody tr:nth-child(even):hover td { background: var(--glass-bg-hover); }
+
+.table-panel-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+.table-pagination button {
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+.table-pagination button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.table-pagination button:disabled { opacity: 0.4; cursor: not-allowed; }
+.table-pagination span { font-size: 11px; color: var(--text-muted); }
