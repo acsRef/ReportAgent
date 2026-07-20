@@ -20,8 +20,11 @@ def get_connection() -> duckdb.DuckDBPyConnection:
 
 
 def get_readonly_connection() -> duckdb.DuckDBPyConnection:
-    conn = duckdb.connect(str(_DB_PATH), read_only=True)
-    return conn
+    global _conn
+    if _conn is not None:
+        return _conn
+    _conn = duckdb.connect(str(_DB_PATH), read_only=True)
+    return _conn
 
 
 def _seed_if_empty(conn: duckdb.DuckDBPyConnection) -> None:

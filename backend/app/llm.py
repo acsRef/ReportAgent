@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -18,3 +19,12 @@ _LLM_CONFIG = {
 def get_chat_llm(**kwargs) -> ChatOpenAI:
     config = {**_LLM_CONFIG, **kwargs}
     return ChatOpenAI(**config)
+
+
+def call_llm(prompt: str | list, **kwargs) -> str:
+    """Call the LLM and strip reasoning blocks (e.g. <think>...</think>)."""
+    llm = get_chat_llm(**kwargs)
+    resp = llm.invoke(prompt)
+    text: str = resp.content or ""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    return text.strip()
