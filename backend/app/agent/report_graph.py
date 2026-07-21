@@ -9,6 +9,8 @@ from langgraph.graph import END, StateGraph
 from app.llm import call_llm
 from app.models.contracts import ComponentSpec, QueryResult, ReportSpec
 from app.tools.sql_tools import chart_advisor, insight_analyst
+from app.utils.text import strip_markdown_fence
+from app.tools.registry import registry
 
 
 class ReportAgentState(TypedDict):
@@ -54,9 +56,7 @@ def _plan_analysis(state: ReportAgentState) -> dict:
 只返回JSON。"""
 
     plan_text = call_llm(prompt)
-    if plan_text.startswith("```"):
-        plan_text = plan_text.split("\n", 1)[-1]
-        plan_text = plan_text.rsplit("```", 1)[0]
+    plan_text = strip_markdown_fence(plan_text)
 
     try:
         plan = json.loads(plan_text)
@@ -86,18 +86,24 @@ def _run_step(state: ReportAgentState) -> dict:
         "rows": qr.rows if qr else [],
     }, ensure_ascii=False, default=str)
 
+    def _call_tool(caps: list[str], *args) -> str:
+        tools = registry.get(caps)
+        if tools:
+            return tools[0](*args)
+        return f"工具不可用: {caps[0]}"
+
     tool_name = step.get("tool", "")
     if tool_name == "chart_advisor":
         text = chart_advisor(data_json)
     elif tool_name == "trend_analysis":
-        text = _safe_import_call("trend_analysis", data_json)
+        text = _call_tool(["trend_analysis"], data_json)
     elif tool_name == "group_compare":
-        text = _safe_import_call("group_compare", data_json,
-                                 step.get("args", {}).get("group_col", ""),
-                                 step.get("args", {}).get("value_col", ""))
+        text = _call_tool(["group_compare"], data_json,
+                          step.get("args", {}).get("group_col", ""),
+                          step.get("args", {}).get("value_col", ""))
     elif tool_name == "detect_anomaly":
-        text = _safe_import_call("detect_anomaly", data_json,
-                                 step.get("args", {}).get("value_col", ""))
+        text = _call_tool(["detect_anomaly"], data_json,
+                          step.get("args", {}).get("value_col", ""))
     else:
         text = chart_advisor(data_json)
 
@@ -176,9 +182,3 @@ def build_report_graph():
     return workflow.compile()
 
 
-def _safe_import_call(name: str, data_json: str, *args) -> str:
-    from app.tools import report_tools
-    fn = getattr(report_tools, name, None)
-    if fn:
-        return fn(data_json, *args)
-    return f"未知工具: {name}"

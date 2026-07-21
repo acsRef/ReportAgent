@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 import duckdb
+
+logger = logging.getLogger(__name__)
 
 _DB_PATH = Path(__file__).parent.parent / "report.duckdb"
 _SEED_SQL_PATH = Path(__file__).parent.parent / "seed_data.sql"
@@ -45,10 +48,10 @@ def _seed_if_empty(conn: duckdb.DuckDBPyConnection) -> None:
             try:
                 conn.execute(stmt)
             except Exception as exc:
-                print(f"[db] Warning: seed statement skipped ({exc}): {stmt[:80]}")
+                logger.warning("seed statement skipped (%s): %s", exc, stmt[:80])
 
     conn.commit()
-    print(f"[db] Database seeded: {_DB_PATH}")
+    logger.info("Database seeded: %s", _DB_PATH)
 
 
 def close_connection() -> None:

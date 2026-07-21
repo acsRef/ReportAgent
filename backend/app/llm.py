@@ -3,13 +3,10 @@ from __future__ import annotations
 import os
 import re
 
-from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
-
 _LLM_CONFIG = {
-    "model": os.getenv("LLM_MODEL", "deepseek-chat"),
+    "model": os.getenv("LLM_MODEL", "MiniMax-M2.7-highspeed"),
     "api_key": os.getenv("LLM_API_KEY") or os.getenv("MINIMAX_API_KEY"),
     "base_url": os.getenv("LLM_BASE_URL", "https://api.minimax.chat/v1"),
     "temperature": 0.1,
@@ -22,9 +19,8 @@ def get_chat_llm(**kwargs) -> ChatOpenAI:
 
 
 def call_llm(prompt: str | list, **kwargs) -> str:
-    """Call the LLM and strip reasoning blocks (e.g. <think>...</think>)."""
     llm = get_chat_llm(**kwargs)
     resp = llm.invoke(prompt)
-    text: str = resp.content or ""
+    text = resp.content or ""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     return text.strip()

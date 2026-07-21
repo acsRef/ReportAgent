@@ -11,6 +11,7 @@ class ToolMetadata(BaseModel):
     capability: str
     agent_type: str
     source: str = "local"
+    risk_level: str = "low"
     permission_required: list[str] = []
     input_schema: dict = {}
     output_schema: dict = {}

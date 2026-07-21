@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+logger = logging.getLogger(__name__)
 
 _MEM0_ENABLED = os.getenv("MEM0_ENABLED", "false").lower() == "true"
 _memory_client = None
@@ -24,7 +23,7 @@ def get_memory():
                 "llm": {
                     "provider": "openai",
                     "config": {
-                        "model": os.getenv("LLM_MODEL", "deepseek-chat"),
+                        "model": os.getenv("LLM_MODEL", "MiniMax-M2.7-highspeed"),
                         "api_key": os.getenv("LLM_API_KEY") or os.getenv("MINIMAX_API_KEY"),
                         "base_url": os.getenv("LLM_BASE_URL", "https://api.minimax.chat/v1"),
                     },
@@ -47,7 +46,7 @@ def get_memory():
             }
             _memory_client = Memory.from_config(config)
         except ImportError:
-            print("[memory] mem0 not installed, memory disabled")
+            logger.warning("mem0 not installed, memory disabled")
             return None
     return _memory_client
 

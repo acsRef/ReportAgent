@@ -7,6 +7,7 @@ from langgraph.graph import END, StateGraph
 
 from app.llm import call_llm
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
+from app.utils.text import strip_markdown_fence
 from app.tools.sql_tools import validate_sql, execute_sql
 
 
@@ -47,9 +48,7 @@ def _plan(state: SQLAgentState) -> dict:
 只返回JSON，不要额外解释。"""
 
     plan_text = call_llm(prompt)
-    if plan_text.startswith("```"):
-        plan_text = plan_text.split("\n", 1)[-1]
-        plan_text = plan_text.rsplit("```", 1)[0]
+    plan_text = strip_markdown_fence(plan_text)
 
     try:
         plan_dict = json.loads(plan_text)
@@ -96,9 +95,7 @@ def _generate_sql(state: SQLAgentState) -> dict:
 
     sql = call_llm([{"role": "user", "content": prompt}])
 
-    if sql.startswith("```"):
-        sql = sql.split("\n", 1)[-1]
-        sql = sql.rsplit("```", 1)[0]
+    sql = strip_markdown_fence(sql)
     sql = sql.strip()
 
     retry = state.get("retry_counters", {})

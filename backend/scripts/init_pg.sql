@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS agent.session (
     title VARCHAR(256),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
+    last_checkpoint_at TIMESTAMP,  -- nullable: LangGraph checkpoint may not exist yet
     status VARCHAR(32) DEFAULT 'active'
 );
 
@@ -25,12 +26,15 @@ CREATE TABLE IF NOT EXISTS agent.session (
 
 CREATE TABLE IF NOT EXISTS memory.query_template (
     id SERIAL PRIMARY KEY,
-    intent_embedding VECTOR(4096),
+    intent_embedding VECTOR(1536),
     question TEXT NOT NULL,
     sql_text TEXT NOT NULL,
     schema_context JSONB,
     target_metric VARCHAR(128),
     success_count INT DEFAULT 1,
+    failure_count INT DEFAULT 0,
+    access_count INT DEFAULT 0,
+    verified BOOLEAN DEFAULT FALSE,
     last_used_at TIMESTAMP DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -45,7 +49,12 @@ CREATE TABLE IF NOT EXISTS memory.semantic_entry (
     user_id VARCHAR(128) NOT NULL,
     content TEXT NOT NULL,
     entry_type VARCHAR(32) DEFAULT 'semantic',
+    memory_type VARCHAR(32) DEFAULT 'insight',
+    importance_score REAL DEFAULT 0.0,
+    intent_embedding VECTOR(1536),
     source VARCHAR(64),
+    access_count INT DEFAULT 0,
+    last_access_time TIMESTAMP DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW()
 );
 

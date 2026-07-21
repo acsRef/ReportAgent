@@ -9,7 +9,7 @@ from langgraph.types import interrupt
 from app.agent.data_graph import build_data_graph
 from app.agent.sql_graph import build_sql_graph
 from app.agent.report_graph import build_report_graph
-from app.infra.memory.query_memory import QueryMemory
+from app.infra.memory.memory_manager import MemoryManager
 from app.infra.trace.sdk import get_tracer, traced_node
 from app.llm import call_llm
 from app.models.contracts import (
@@ -20,12 +20,16 @@ from app.models.contracts import (
     ReportSpec,
     SchemaContext,
 )
+from app.agent.security_guard import SecurityGuard
 from app.tools.registry import registry
 from app.tools.__init__ import register_all_tools
 
 
 class AgentState(TypedDict):
     user_query: str
+    original_query: str
+    current_query: str
+    clarification_history: list
     session_id: str
     intent: str
     memory_context: str
@@ -43,6 +47,38 @@ class AgentState(TypedDict):
     active_sub_agent: str
     clarification_context: dict
     retry_count: int
+
+    security_score: int
+    security_level: str
+    security_warning: str
+
+
+# --- Security Guard ---
+
+@traced_node("security_guard")
+def _security_guard(state: AgentState) -> dict:
+    result = SecurityGuard.check(state["user_query"])
+    out = {
+        "security_score": result.score,
+        "security_level": result.level,
+        "security_warning": result.reason,
+    }
+    if result.blocked:
+        out["error"] = ErrorDetail(
+            code="SECURITY_REJECTED",
+            message="请求包含潜在危险指令，无法执行",
+        )
+        trace_id = state.get("trace_id")
+        if trace_id:
+            tracer = get_tracer(trace_id)
+            tracer.end("REJECTED")
+    return out
+
+
+def _route_security(state: AgentState) -> Literal["__end__", "classify"]:
+    if state.get("security_level") == "HIGH":
+        return "__end__"
+    return "classify"
 
 
 # --- Intent Classification ---
@@ -65,7 +101,7 @@ _INTENT_KEYWORDS_CHITCHAT = [
 
 @traced_node("classify")
 async def _classify_intent(state: AgentState) -> dict:
-    q = state["user_query"].lower()
+    q = state.get("current_query", state["user_query"]).lower()
     if any(k in q for k in _INTENT_KEYWORDS_CHITCHAT):
         intent = "闲聊"
     elif any(k in q for k in _INTENT_KEYWORDS_DASHBOARD):
@@ -78,17 +114,15 @@ async def _classify_intent(state: AgentState) -> dict:
     # Recall memories for context
     session_id = state.get("session_id", "")
     try:
-        qm = QueryMemory()
-        similar = await qm.search_similar(q, top_k=2)
-        semantic = await qm.search_semantic(session_id, q, top_k=3)
-        memory_lines = []
-        for s in similar:
-            memory_lines.append(f"[历史查询] {s['question']} → SQL已记录")
-        for s in semantic:
-            memory_lines.append(f"[记忆] {s[:100]}")
-        memory_context = "\n".join(memory_lines) if memory_lines else ""
+        mm = MemoryManager()
+        memory_context = await mm.recall(query=q, user_id=session_id, top_k_queries=2, top_k_preferences=3)
     except Exception:
         memory_context = ""
+
+    if state.get("security_level") == "MEDIUM":
+        notice = state.get("security_warning", "")
+        if notice:
+            memory_context = notice + "\n\n" + memory_context
 
     return {
         "intent": intent,
@@ -111,10 +145,10 @@ def _route_intent(state: AgentState) -> Literal["data_agent", "dashboard_agent",
 # --- Data Agent Node ---
 
 @traced_node("data_agent")
-def _run_data_agent(state: AgentState) -> dict:
+async def _run_data_agent(state: AgentState) -> dict:
     data_graph = build_data_graph()
-    ds = data_graph.invoke({
-        "user_query": state["user_query"],
+    ds = await data_graph.ainvoke({
+        "user_query": state.get("current_query", state["user_query"]),
         "discovered_tables": [],
         "mcp_tool_calls": [],
         "raw_schema": "",
@@ -139,7 +173,7 @@ async def _run_sql_agent(state: AgentState) -> dict:
         schema_input = None
     ss = sql_graph.invoke({
         "schema_context": schema_input,
-        "user_query": state["user_query"],
+        "user_query": state.get("current_query", state["user_query"]),
         "query_plan": None,
         "generated_sql": "",
         "validation_result": {},
@@ -161,9 +195,9 @@ async def _run_sql_agent(state: AgentState) -> dict:
     qr = ss.get("query_result")
     if status == "SUCCESS" and qr and qr.sql:
         try:
-            qm = QueryMemory()
-            await qm.save_query(
-                question=state["user_query"],
+            mm = MemoryManager()
+            await mm.remember_query(
+                question=state.get("original_query", state["user_query"]),
                 sql=qr.sql,
                 schema=schema.model_dump() if schema else None,
                 target_metric=ss.get("query_plan", {}).target_metric if ss.get("query_plan") else "",
@@ -196,7 +230,7 @@ def _route_evaluate(state: AgentState) -> Literal["report_agent", "clarify", "__
         return "clarify"
     else:
         if state.get("retry_count", 0) < 3:
-            return "report_agent"
+            return "sql_agent"
         tracer = get_tracer(state.get("trace_id", ""))
         tracer.end("FAILED")
         return "clarify"
@@ -210,7 +244,7 @@ async def _run_report_agent(state: AgentState) -> dict:
     qr = state.get("query_result")
     rs = report_graph.invoke({
         "query_result": qr.model_dump() if qr else None,
-        "user_query": state["user_query"],
+        "user_query": state.get("current_query", state["user_query"]),
         "chart_config": {},
         "insight_text": "",
         "report_spec": None,
@@ -224,12 +258,13 @@ async def _run_report_agent(state: AgentState) -> dict:
     # Save insight to semantic memory
     if insight:
         try:
-            qm = QueryMemory()
-            await qm.save_semantic(
+            mm = MemoryManager()
+            await mm.remember_preference(
                 user_id=state.get("session_id", "anonymous"),
                 content=insight,
                 source="report_agent",
-                entry_type="insight",
+                memory_type="insight",
+                importance=0.3,
             )
         except Exception:
             pass
@@ -251,8 +286,9 @@ async def _run_report_agent(state: AgentState) -> dict:
 @traced_node("clarify")
 def _clarify(state: AgentState) -> dict:
     error_info = state.get("error")
+    current_q = state.get("current_query", state["user_query"])
 
-    prompt = f"""用户的问题是: "{state['user_query']}"
+    prompt = f"""用户的问题是: "{current_q}"
 
 经过分析，这个问题缺少关键信息无法完成查询。
 {'错误信息: ' + (error_info.message if isinstance(error_info, ErrorDetail) else error_info.get('message', '') if error_info else '')}
@@ -271,17 +307,23 @@ def _clarify(state: AgentState) -> dict:
         "question": question,
     })
 
+    answer = str(user_response)
+    clarification_entry = {"question": question, "answer": answer}
+    history = list(state.get("clarification_history", []))
+    history.append(clarification_entry)
+
+    # Build augmented query: original + clarification context
+    current_q = state.get("current_query", state["user_query"])
+    augmented = f"{current_q}\n\n补充信息: {answer}"
+
     return {
-        "user_query": str(user_response),
-        "clarification_context": {"question": question, "answer": str(user_response)},
+        "current_query": augmented,
+        "clarification_history": history,
+        "clarification_context": {"question": question, "answer": answer},
         "execution_status": "RETRY",
         "retry_count": 0,
         "active_sub_agent": "sql",
     }
-
-
-# --- Dashboard Agent (placeholder) ---
-
 def _dashboard_placeholder(state: AgentState) -> dict:
     tracer = get_tracer(state.get("trace_id", ""))
     tracer.end("DONE")
@@ -295,6 +337,7 @@ def build_parent_graph():
 
     workflow = StateGraph(AgentState)
 
+    workflow.add_node("security_guard", _security_guard)
     workflow.add_node("classify", _classify_intent)
     workflow.add_node("data_agent", _run_data_agent)
     workflow.add_node("sql_agent", _run_sql_agent)
@@ -303,8 +346,9 @@ def build_parent_graph():
     workflow.add_node("clarify", _clarify)
     workflow.add_node("dashboard_agent", _dashboard_placeholder)
 
-    workflow.set_entry_point("classify")
+    workflow.set_entry_point("security_guard")
 
+    workflow.add_conditional_edges("security_guard", _route_security)
     workflow.add_conditional_edges("classify", _route_intent)
     workflow.add_edge("data_agent", "sql_agent")
     workflow.add_edge("sql_agent", "evaluate")
