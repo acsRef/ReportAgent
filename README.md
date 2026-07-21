@@ -1,35 +1,39 @@
 # ReportAgent
 
-AI 驱动的自然语言 → 报表系统。用户用中文提问，LangGraph Agent 自动生成并执行 SQL，返回表格 + 图表 + 洞察分析。
+AI 驱动的自然语言 → 报表系统。用户用中文提问，LangGraph Agent 自动生成并执行 SQL，在前端呈现图表 + 洞察分析。
 
 ## 系统架构
 
 ```
-用户 ←SSE→ FastAPI + LangGraph Agent (:8100) ←MCP→ MCP Schema Server (:8101)
-                                                          |
-                                                     DuckDB (只读)
-                                                          |
-                                                     PostgreSQL (记忆 + 追踪)
+用户 ←SSE→ React + Vite (:3000)
+              ↓ 代理 /api
+        FastAPI + LangGraph Agent (:8100)
+              ↓
+         DuckDB (只读查询)
+         PostgreSQL (会话 + 追踪 + 记忆)
 ```
 
-两个后端服务：
-- **ReportAgent** (:8100) — FastAPI + LangGraph Agent，负责 SQL 生成/执行、图表渲染、洞察分析
-- **MCP Schema Server** (:8101) — 独立 MCP 服务，按需发现表结构
+两个服务：
+- **前端** (:3000) — React + Vite + Ant Design + ECharts，双面板布局
+- **后端** (:8100) — FastAPI + LangGraph 8 节点父图 (+ 3 个子图)
 
 ## 技术栈
 
-| 层        | 技术                                   |
-|-----------|----------------------------------------|
-| API       | FastAPI + SSE 流式推送                   |
-| Agent     | LangGraph (Parent + 3 SubGraph)         |
-| LLM       | OpenAI 兼容 (MiniMax API，可配置)         |
-| Embedding | SiliconFlow API (pgvector 语义搜索)       |
-| 业务数据库  | DuckDB (嵌入，只读查询)                   |
-| 持久化     | PostgreSQL + asyncpg + pgvector          |
-| 记忆       | MemoryManager (UserMemory + QueryMemory, pgvector 混合排序) |
-| 安全       | SecurityGuard 规则引擎 (风险评分: LOW / HIGH) |
-| 追踪       | 自定义 Trace SDK → PostgreSQL            |
-| 检查点     | LangGraph MemorySaver (dev) / PG (计划)   |
+| 层          | 技术                                           |
+|-------------|------------------------------------------------|
+| 前端         | React 18 + Vite + TypeScript + Ant Design 5.x   |
+| 渲染         | ECharts (SVG) + 自定义 ReportBlock 组件          |
+| 状态管理      | Zustand                                         |
+| API 协议     | Server-Sent Events (SSE) 流式推送                |
+| Agent       | LangGraph (Parent + 3 SubGraph)                 |
+| LLM         | OpenAI 兼容 (MiniMax M2.7-highspeed，可配置)      |
+| Embedding   | SiliconFlow API (pgvector 语义搜索)              |
+| 业务数据库    | DuckDB (嵌入，只读查询)                           |
+| 持久化       | PostgreSQL + asyncpg + pgvector (pgvector/pgvector:0.7.0-pg15) |
+| 记忆         | MemoryManager (UserMemory + QueryMemory, pgvector 混合排序) |
+| 安全         | SecurityGuard 规则引擎 (风险评分: LOW / HIGH)      |
+| 追踪         | 自定义 Trace SDK → PostgreSQL                     |
+| 检查点       | LangGraph MemorySaver (dev)                      |
 
 ## 数据模型
 
