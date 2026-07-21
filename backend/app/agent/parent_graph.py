@@ -57,7 +57,7 @@ class AgentState(TypedDict):
 
 @traced_node("security_guard")
 def _security_guard(state: AgentState) -> dict:
-    result = SecurityGuard.check(state["user_query"])
+    result = SecurityGuard.check(state.get("current_query", state["user_query"]))
     out = {
         "security_score": result.score,
         "security_level": result.level,
@@ -118,11 +118,6 @@ async def _classify_intent(state: AgentState) -> dict:
         memory_context = await mm.recall(query=q, user_id=session_id, top_k_queries=2, top_k_preferences=3)
     except Exception:
         memory_context = ""
-
-    if state.get("security_level") == "MEDIUM":
-        notice = state.get("security_warning", "")
-        if notice:
-            memory_context = notice + "\n\n" + memory_context
 
     return {
         "intent": intent,

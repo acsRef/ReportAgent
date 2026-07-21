@@ -27,7 +27,7 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，LangGraph Ag
 | 业务数据库  | DuckDB (嵌入，只读查询)                   |
 | 持久化     | PostgreSQL + asyncpg + pgvector          |
 | 记忆       | MemoryManager (UserMemory + QueryMemory, pgvector 混合排序) |
-| 安全       | SecurityGuard 规则引擎 (风险评分分级: LOW/MEDIUM/HIGH) |
+| 安全       | SecurityGuard 规则引擎 (风险评分: LOW / HIGH) |
 | 追踪       | 自定义 Trace SDK → PostgreSQL            |
 | 检查点     | LangGraph MemorySaver (dev) / PG (计划)   |
 
@@ -163,7 +163,7 @@ mcp_schema_server/
 ```
 用户输入 → security_guard (规则引擎 + 风险评分)
   ├── HIGH → 直接拒绝，返回错误
-  └── LOW/MEDIUM → classify_intent
+  └── LOW → classify_intent
        ├── "闲聊" → 直接结束
        └── "报表" → data_agent (Schema发现)
                        ↓
@@ -175,7 +175,7 @@ mcp_schema_server/
 ```
 
 - **Security Guard** 在入口层做 Prompt Injection 风险检测，纯规则匹配 (<1ms)
-- **风险分级:** LOW (放行) / MEDIUM (追加安全警告后继续) / HIGH (阻断)
+- **风险分级:** LOW (放行) / HIGH (阻断)
 - SQL Agent 支持自动重试 (语法错误重试3次，Schema错误重试1次)
 - 追问是唯一调用 `interrupt()` 的节点
 - 所有节点自动记录 Trace
@@ -209,4 +209,5 @@ mcp_schema_server/
 
 - SecurityGuard 不引入 LLM 分类器，避免增加延迟
 - 10 条规则覆盖英文 jailbreak、中文变体、SQL DDL、数据泄露
+- score ≥ 3 即阻断，无 MEDIUM 降级（避免不被消费的未使用代码路径）
 - 工具元数据含 `risk_level` (low/medium/high)，引导 LLM 正确调用

@@ -27,7 +27,7 @@ def register_all_tools():
             agent_type="data",
             risk_level="low",
             input_schema={"query": "string", "top_k": "int"},
-            output_schema={"type": "array", "items": {"table_name": "string", "columns": "array", "ddl": "string"}},
+            output_schema={"tables": "array"},
         ),
     )
 
@@ -72,7 +72,7 @@ def register_all_tools():
             capability="schema_list",
             agent_type="data",
             risk_level="low",
-            output_schema={"type": "array", "items": {"table_name": "string", "description": "string", "column_count": "int"}},
+            output_schema={"tables": "array"},
         ),
     )
 

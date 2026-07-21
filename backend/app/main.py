@@ -132,6 +132,9 @@ async def chat(request: ChatRequest, req: Request):
                 "active_sub_agent": "",
                 "clarification_context": {},
                 "retry_count": 0,
+                "security_score": 0,
+                "security_level": "LOW",
+                "security_warning": "",
             } if is_new else None
 
             async for event in _agent.astream_events(
