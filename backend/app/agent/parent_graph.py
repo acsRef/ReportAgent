@@ -133,7 +133,7 @@ def _route_intent(state: AgentState) -> Literal["data_agent", "dashboard_agent",
         tracer.end("SUCCESS")
         return "__end__"
     elif intent == "看板":
-        return "clarify"
+        return "dashboard_agent"
     return "data_agent"
 
 
@@ -166,7 +166,8 @@ async def _run_sql_agent(state: AgentState) -> dict:
         schema_input = SchemaCtx(**schema_dict)
     else:
         schema_input = None
-    ss = sql_graph.invoke({
+    parent_retries = state.get("retry_count", 0)
+    ss = await sql_graph.ainvoke({
         "schema_context": schema_input,
         "user_query": state.get("current_query", state["user_query"]),
         "query_plan": None,
@@ -175,7 +176,7 @@ async def _run_sql_agent(state: AgentState) -> dict:
         "sql_result": "",
         "execution_status": "",
         "error": None,
-        "retry_counters": {"plan": 0, "sql_generation": 0},
+        "retry_counters": {"plan": 0, "sql_generation": parent_retries},
     })
     error_raw = ss.get("error")
     if error_raw and isinstance(error_raw, str):
@@ -237,7 +238,7 @@ def _route_evaluate(state: AgentState) -> Literal["report_agent", "clarify", "__
 async def _run_report_agent(state: AgentState) -> dict:
     report_graph = build_report_graph()
     qr = state.get("query_result")
-    rs = report_graph.invoke({
+    rs = await report_graph.ainvoke({
         "query_result": qr.model_dump() if qr else None,
         "user_query": state.get("current_query", state["user_query"]),
         "chart_config": {},
@@ -250,7 +251,7 @@ async def _run_report_agent(state: AgentState) -> dict:
 
     insight = rs.get("insight_text", "")
 
-    # Save insight to semantic memory
+    # Save insight to user memory
     if insight:
         try:
             mm = MemoryManager()
@@ -265,8 +266,10 @@ async def _run_report_agent(state: AgentState) -> dict:
             pass
 
     # End trace
-    tracer = get_tracer(state["trace_id"])
-    tracer.end("DONE")
+    trace_id = state.get("trace_id")
+    if trace_id:
+        tracer = get_tracer(trace_id)
+        tracer.end("DONE")
 
     return {
         "chart_config": rs.get("chart_config"),
@@ -319,6 +322,8 @@ def _clarify(state: AgentState) -> dict:
         "retry_count": 0,
         "active_sub_agent": "sql",
     }
+
+
 def _dashboard_placeholder(state: AgentState) -> dict:
     tracer = get_tracer(state.get("trace_id", ""))
     tracer.end("DONE")
