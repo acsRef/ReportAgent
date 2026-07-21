@@ -29,7 +29,7 @@ Two backend services:
 | Embeddings | SiliconFlow API (via `embedding/service.py`) |
 | Database | DuckDB (embedded, read-only queries) |
 | Schema Discovery | MCP protocol (separate process) + local fallback |
-| Memory | QueryMemory (DuckDB-based SQL templates) + Mem0 (optional) |
+| Memory | PostgreSQL + pgvector (cosine similarity search) |
 | Tracing | Custom Tracer SDK (in-memory accumulation, async PostgreSQL flush) |
 | Checkpoint | LangGraph MemorySaver (dev) / PostgreSQL (planned) |
 | Persistence | PostgreSQL + asyncpg + pgvector |
@@ -47,7 +47,7 @@ Three schemas in PostgreSQL (separate from DuckDB business data):
 | Schema | Tables | Purpose |
 | ------- | ------- | --------- |
 | `agent` | `session` | Session tracking (thread_id, user_id, status) |
-| `memory` | `query_template`, `semantic_entry` | SQL templates with VECTOR(4096) embeddings, semantic memory |
+| `memory` | `query_template`, `semantic_entry` | SQL templates with VECTOR(1536) embeddings, semantic memory |
 | `observability` | `agent_trace`, `agent_trace_span`, `llm_call` | Trace spans, token usage, latency |
 
 ## Setup & Run
@@ -72,12 +72,7 @@ docker run -d --name ragent-postgres \
 # 4. Initialize PostgreSQL tables
 docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/init_pg.sql
 
-# Note: If PostgreSQL was already initialized, re-run init_pg.sql after the VECTOR(4096)→VECTOR(1536) change:
-# docker exec -i ragent-postgres psql -U ragent -d ragent -c "DROP TABLE IF EXISTS memory.query_template CASCADE;"
-# Then re-run init_pg.sql
-
-# 5. Configure .env (copy from template, fill in keys)
-# MINIMAX_API_KEY, LLM_MODEL, LLM_BASE_URL, SILICONFLOW_API_KEY, DATABASE_URL
+# 5. Configure .env (MINIMAX_API_KEY, LLM_MODEL, LLM_BASE_URL, SILICONFLOW_API_KEY, DATABASE_URL)
 
 # 6. Terminal 1: MCP Schema Server
 python -m mcp_schema_server.server
@@ -105,148 +100,73 @@ event: error     → error message
 event: done      → stream complete
 ```
 
-## Key Configuration (.env)
-
-| Variable | Default | Notes |
-| --------- | ------- | ----- |
-| `MINIMAX_API_KEY` | — | LLM API key (primary) |
-| `LLM_MODEL` | `MiniMax-M2.7-highspeed` | Model name |
-| `LLM_BASE_URL` | `https://api.minimax.chat/v1` | API base URL |
-| `LLM_API_KEY` | (falls back to MINIMAX_API_KEY) | Alternative key name |
-| `SILICONFLOW_API_KEY` | — | Embedding API key (separate provider) |
-| `EMBEDDING_MODEL` | `Qwen/Qwen3-Embedding-8B` | Embedding model |
-| `DATABASE_URL` | `postgresql://ragent:ragent@localhost:5432/ragent` | PostgreSQL connection |
-| `MEM0_ENABLED` | (disabled) | Optional semantic memory |
-
 ## Code Architecture
 
-### Directory Structure
+### Key Files
 
-```
-backend/
-  app/
-    main.py              — FastAPI entrypoint, SSE streaming, session resume
-    llm.py               — Unified LLM client (OpenAI-compatible, strips reasoning blocks)
-    db.py                — DuckDB connection manager (auto-seeds from seed_data.sql)
-    memory.py            — Top-level memory integration (wires QueryMemory + Mem0)
-
-    agent/               — LangGraph Agent definitions
-      parent_graph.py    — Parent graph: 7 nodes, interrupt-only in clarify node
-      data_graph.py      — Data SubGraph: intent detection → schema search → context building
-      sql_graph.py       — SQL SubGraph: plan → generate → validate → execute → evaluate
-      report_graph.py    — Report SubGraph: plan analysis → run steps → finalize
-
-    models/
-      contracts.py       — 7 Pydantic models: SchemaContext, QueryPlan, QueryResult,
-                           ReportSpec, ComponentSpec, ClarificationRequest, ErrorDetail
-
-    tools/               — Capability-based tool registry
-      __init__.py        — register_all_tools() wires 10 tools
-      registry.py        — ToolRegistry + ToolMetadata (capability-based binding)
-      data_tools.py      — search_tables, get_table_ddl, list_tables
-      sql_tools.py       — validate_sql, execute_sql, chart_advisor, insight_analyst
-      report_tools.py    — trend_analysis, group_compare, detect_anomaly
-
-    infra/               — Infrastructure layer
-      db/postgres.py     — asyncpg connection pool management
-      trace/             — Tracer SDK + models + async PostgreSQL repository
-      memory/            — QueryMemory (pgvector) + MemoryPolicy
-      checkpoint/        — SessionManager + MemorySaver factory
-
-    embedding/
-      service.py         — EmbeddingService (SiliconFlow API, separate from LLM)
-
-  scripts/
-    init_pg.sql          — PostgreSQL schema (agent, memory, observability)
-  seed_data.sql          — DuckDB sample data (retail star schema)
-
-mcp_schema_server/
-  server.py              — MCP Schema Server exposing search_tables, get_table_ddl, list_tables
-  registry.py            — SchemaRegistry with keyword-scoring logic
-```
+- **`backend/app/main.py`** — FastAPI entrypoint, SSE streaming, session resume. Uses `agr.astream_events()` for streaming, `_agent.get_state(config)` for interrupt detection. Initializes PostgreSQL pool + embedding dimension check on startup.
+- **`backend/app/llm.py`** — Unified LLM client (OpenAI-compatible). Strips reasoning blocks from responses.
+- **`backend/app/db.py`** — DuckDB connection manager. Auto-seeds from `seed_data.sql` if database is empty.
+- **`backend/app/models/contracts.py`** — 6 Pydantic models: `SchemaContext`, `QueryPlan`, `QueryResult`, `ReportSpec`, `ComponentSpec`, `ClarificationRequest`.
+- **`backend/app/agent/security_guard.py`** — Prompt injection guard. Scans user input for 10 rule patterns (ignore_previous, role_hijack, SQL DDL, data exfiltration, etc.). Score ≥ 3 → HIGH → blocked.
+- **`backend/app/agent/parent_graph.py`** — Parent LangGraph with 8 nodes: security_guard → classify → data_agent → sql_agent → evaluate → report_agent/clarify/dashboard_agent. `interrupt()` is called **only** in the clarify node.
+- **`backend/app/agent/sql_graph.py`** — SQL SubGraph: plan → generate_sql → validate → execute → evaluate → build_output. Retry logic: SQL syntax errors retry generation (up to 3×), schema errors retry planning (up to 1×), then escalates to `NEED_CLARIFICATION`.
+- **`backend/app/agent/report_graph.py`** — Report SubGraph: plan_analysis → run_step (loop) → finalize. Uses `chart_advisor`, `trend_analysis`, `group_compare`, `detect_anomaly` tools.
+- **`backend/app/agent/data_graph.py`** — Data SubGraph: detect_intent → search_schema → build_context. Discovers table schemas via MCP/local tools.
+- **`backend/app/tools/registry.py`** — Capability-based tool registry with optional permission checking.
+- **`backend/app/embedding/service.py`** — Embedding service using SiliconFlow API (separate from LLM MiniMax). Used by QueryMemory and UserMemory for pgvector search.
+- **`backend/app/infra/memory/query_memory.py`** — PostgreSQL + pgvector memory for SQL templates. Scores results by semantic similarity (0.5) + success rate (0.3) + frequency (0.1) + recency (0.1).
+- **`backend/app/infra/memory/user_memory.py`** — PostgreSQL + pgvector memory for user preferences/insights. Scores by semantic similarity (0.6) + importance (0.2) + frequency (0.1) + recency (0.1). Uses `embed_or_none` fallback.
+- **`backend/app/infra/memory/memory_manager.py`** — Orchestrates `QueryMemory` + `UserMemory` for unified recall.
+- **`backend/app/infra/trace/sdk.py`** — Tracer SDK with `traced_node` decorator. Accumulates spans in memory during graph execution, flushes to PostgreSQL via `await tracer.flush()`.
+- **`backend/app/infra/db/postgres.py`** — asyncpg connection pool (min_size=2, max_size=10). Initialized by `main.py` lifespan.
+- **`mcp_schema_server/server.py`** — MCP server exposing `search_tables`, `get_table_ddl`, `list_tables` tools. Has its own `SchemaRegistry` with keyword-scoring logic (independent from local `data_tools.py`).
 
 ### Agent Architecture (Parent + SubGraph)
 
 ```
-User Query → classify_intent
-  ├── "闲聊" → END
-  └── "报表/看板" → data_agent → sql_agent → evaluate
-       ┌────────────────────────────────┴──────────────┐
-       │ SUCCESS                                 NEED_CLARIFICATION
-       ▼                                                    ▼
-  report_agent                                        clarify_node (interrupt)
-       │                                                    │
-       ▼                                              user reply → data_agent
-      END
+User Query → security_guard
+  ├── HIGH → END (blocked)
+  └── LOW → classify_intent
+        ├── "闲聊" → END
+        └── "报表/看板" → data_agent → sql_agent → evaluate
+             ┌────────────────────────────────┴──────────────┐
+             │ SUCCESS                                 NEED_CLARIFICATION
+             ▼                                                    ▼
+        report_agent                                        clarify_node (interrupt)
+             │                                                    │
+             ▼                                              user reply → data_agent
+            END
 ```
 
 **Key design rules:**
 - `evaluate` routes purely on `execution_status` — no business logic
 - `clarify` is the **only** node that calls `interrupt()` — SubGraphs never interrupt
-- SubGraphs run synchronously via `.invoke()` inside parent nodes (not as sub-graphs in the LangGraph sense)
+- SubGraphs run via `.ainvoke()` inside parent nodes (not as sub-graphs in the LangGraph sense)
 - Checkpoint saves Parent State only (SubStates are ephemeral)
-- Parent State = cross-Agent data contract; SubState = internal execution details
 
-### Parent State (AgentState)
+### State Management
 
-```python
-class AgentState(TypedDict):
-    user_query, original_query, current_query, clarification_history: list
-    session_id, intent, memory_context
-    schema_context: Optional[SchemaContext]   # Data Agent output
-    query_plan: Optional[QueryPlan]           # SQL Agent planning output
-    query_result: Optional[QueryResult]       # SQL Agent execution output
-    report_spec: Optional[ReportSpec]         # Report Agent output
-    chart_config: dict, insight_text: str
-    execution_status: str                     # RUNNING / SUCCESS / FAILED / NEED_CLARIFICATION
-    error: Optional[ErrorDetail]
-    trace_id: str, active_sub_agent: str, retry_count: int
-    clarification_context: dict
-```
-
-**State management rules:**
-
+**Parent State** (`AgentState` in `parent_graph.py`):
 - `original_query` = the user's first message, frozen at session start (used for memory storage)
 - `current_query` = augmented query with clarification context appended (used for SQL/report generation)
 - `clarification_history` = list of {"question", "answer"} dicts from clarify turns
-- `user_query` = maintained for backward compatibility with SubGraphs (they receive current_query as user_query)
-- Memory saves always use `original_query` to prevent garbage accumulation
-
-### Tool Registry (Capability-based)
-
-10 tools registered via `register_all_tools()` in `tools/__init__.py`:
-
-| Tool | Capability | Agent |
-| ---- | ---------- | ----- |
-| `search_tables` | `schema_search` | data |
-| `get_table_ddl` | `schema_read` | data |
-| `list_tables` | `schema_list` | data |
-| `validate_sql` | `sql_validate` | sql |
-| `execute_sql` | `sql_execute` | sql (requires `data.query.execute` permission) |
-| `chart_advisor` | `chart_recommend` | report |
-| `insight_analyst` | `insight_generate` | report |
-| `trend_analysis` | `trend_analysis` | report |
-| `group_compare` | `group_compare` | report |
-| `detect_anomaly` | `anomaly_detection` | report |
+- `security_score`, `security_level`, `security_warning` — from SecurityGuard
 
 ### SQL Agent Retry Logic
 
 **Internal (sql_graph):**
-
 ```
 SQL_SYNTAX_ERROR → regenerate SQL (up to 3 retries)
 SCHEMA_ERROR     → re-plan query (up to 1 retry)
 Exhausted        → NEED_CLARIFICATION (ask user)
 ```
 
-**Parent graph retry (augmented):**
-
+**Parent graph retry:**
 ```
 Failed SQL execution → retry sql_agent (up to 3×) instead of report_agent
 Exhausted retries    → route to clarify node
 ```
-
-This prevents the report agent from hallucinating on null/empty SQL results.
 
 ### SQL Safety (3-layer validation)
 
@@ -254,47 +174,36 @@ This prevents the report agent from hallucinating on null/empty SQL results.
 2. **AST parse**: use `sqlglot` to verify the parsed statement is a `Select`
 3. **EXPLAIN**: execute `EXPLAIN <sql>` to catch DuckDB-specific syntax errors
 
-### Session Management
+### Memory Ranking System
 
-- `POST /api/v1/chat` with `session_id` → checks if session exists via `session_manager.get_session()`
-- New session: creates session in `agent.session` table, starts fresh graph
-- Existing session: resumes from LangGraph checkpoint (via `thread_id` config)
-- Checkpoint uses `MemorySaver` (in-memory) in dev; PostgreSQL interface reserved
+**QueryMemory** scoring formula: `semantic_sim × 0.5 + success_rate × 0.3 + frequency × 0.1 + recency × 0.1`
 
-### Trace SDK
+**UserMemory** scoring formula: `semantic_sim × 0.6 + importance × 0.2 + frequency × 0.1 + recency × 0.1`
 
-- `Tracer` accumulates spans in memory during graph execution
-- `traced_node` decorator wraps graph nodes with span recording (supports sync + async)
-- `tracer.flush()` writes to PostgreSQL via `TraceRepository` (asyncpg) at the end of the request
-- TraceRepository uses asyncpg pool but is called synchronously in `sdk.py` — repository code is effectively dead code until the SDK is updated to match
+Both use `embed_or_none` — if embedding API fails, gracefully falls back to keyword matching with `ILIKE ANY($1::text[])` (parameterized, no SQL injection).
 
 ## Known Architectural Notes
 
 - **No tests exist anywhere in the repo.** All verification is manual via curl.
-- **TraceRepository is async PostgreSQL** (`infra/trace/repository.py` uses `asyncpg`), but **`sdk.py` calls it with `await` in flush()** — this is correct for the async flush path, but `main.py` must ensure flush is awaited.
+- **TraceRepository is async PostgreSQL** (`infra/trace/repository.py` uses `asyncpg`), and **`sdk.py` now calls it with `await` in flush()** — this is correct for the async flush path, but `main.py` must ensure flush is awaited.
 - **PostgreSQL pool** (`infra/db/postgres.py`) is initialized in `main.py` lifespan via `init_pool()`.
 - **MCP Schema Server has its own `SchemaRegistry`** with independent scoring logic. The local `data_tools.py` also has its own keyword-matching approach. These are two separate implementations of the same concept.
 - **Embedding service** uses SiliconFlow API (configured via `SILICONFLOW_API_KEY`), a different provider from the LLM (MiniMax). This is not yet wired into QueryMemory (which uses keyword matching, not vector search).
 - **`.claude/settings.local.json`** contains stale permission paths referencing `d:/PyProject/ragent-py/` (the old project path).
 - **`infra/trace/repository.py`** uses asyncpg directly (not the pool from `infra/db/postgres.py`).
-- **Source files are TSD-encrypted** — all `.py` files show `%TSD-Header-###%` and are unreadable without the decryption layer. Use `git show HEAD:<path>` to read decrypted content.
-- **No `.env.example` or `.env.template` exists** in the repo. Create `.env` manually with the env vars listed in the Key Configuration section above.
-- **`sqlglot` is used for SQL AST validation** (3-layer safety) but is not listed in `backend/requirements.txt`. Install manually: `pip install sqlglot`.
-- **`__init__.py` files are empty (0 bytes)** — intentional; Python 3.3+ namespace packages make content unnecessary.
 
-### Fixes Applied (2026-07-21)
+## Key Configuration (.env)
 
-| # | Issue | Files Changed | Status |
-|---|-------|---------------|--------|
-| 1 | Embedding dimension 4096→1536 | `init_pg.sql`, `main.py` (+startup check) | ✅ |
-| 2 | Clarify overwrites user_query | `parent_graph.py`, `main.py` | ✅ |
-| 3 | Evaluate routes failed SQL to report_agent | `parent_graph.py` (→`sql_agent` on retry) | ✅ |
-| 4 | SQL injection in LIKE queries | `query_memory.py` (→`LIKE ANY($1::text[])`) | ✅ |
-| 5 | Default model deepseek-chat | `llm.py` (→`MiniMax-M2.7-highspeed`) | ✅ |
-| 6 | Markdown fence duplication | `utils/text.py` + `sql_graph.py`, `report_graph.py` | ✅ |
-| 7 | `_safe_import_call` → `registry.get()` | `report_graph.py` | ✅ |
-| 8 | `sqlglot` missing from deps | `requirements.txt` | ✅ |
-| 9 | Session table missing `last_checkpoint_at` | `init_pg.sql` | ✅ |
+| Variable | Default | Notes |
+| --------- | ------- | ----- |
+| `MINIMAX_API_KEY` | — | LLM API key (primary) |
+| `LLM_MODEL` | `MiniMax-M3` | Model name |
+| `LLM_BASE_URL` | `https://api.minimax.chat/v1` | API base URL |
+| `LLM_API_KEY` | (falls back to MINIMAX_API_KEY) | Alternative key name |
+| `SILICONFLOW_API_KEY` | — | Embedding API key (separate) |
+| `EMBEDDING_MODEL` | `Qwen/Qwen2.5-7B-Instruct` | Embedding model |
+| `DATABASE_URL` | `postgresql://ragent:ragent@localhost:5432/ragent` | PostgreSQL connection |
+| `MEM0_ENABLED` | (disabled) | Optional semantic memory |
 
 ## Development Commands
 
@@ -318,3 +227,4 @@ curl http://localhost:8100/health
 
 - `docs/development-plan.md` — Detailed 8-phase plan with 17 architecture decisions, design rationale, and future roadmap. Many decisions in the code match this plan exactly.
 - `backend/seed_data.sql` — Complete data model with all dimension and fact table definitions and sample data.
+- `backend/scripts/init_pg.sql` — PostgreSQL schema for session, memory, and observability tables.

@@ -39,6 +39,7 @@ class EmbeddingService:
         resp = await self.client.embeddings.create(
             model=self._model,
             input=text,
+            dimensions=self._dimension,
         )
         return resp.data[0].embedding
 
@@ -48,6 +49,7 @@ class EmbeddingService:
         resp = await self.client.embeddings.create(
             model=self._model,
             input=texts,
+            dimensions=self._dimension,
         )
         return [d.embedding for d in resp.data]
 

@@ -9,7 +9,7 @@ from langgraph.graph import END, StateGraph
 from app.llm import call_llm
 from app.models.contracts import ComponentSpec, QueryResult, ReportSpec
 from app.tools.sql_tools import chart_advisor, insight_analyst
-from app.utils.text import strip_markdown_fence
+from app.utils.text import safe_json_parse, strip_markdown_fence
 from app.tools.registry import registry
 
 
@@ -51,17 +51,16 @@ def _plan_analysis(state: ReportAgentState) -> dict:
 3. group_compare(data, group_col, value_col) — 分组对比
 4. detect_anomaly(data, value_col) — 异常检测
 
-输出JSON分析计划：
-{{"steps": [{{"tool": "...", "args": {{}}, "description": "..."}}], "reasoning": "..."}}
-只返回JSON。"""
+只输出JSON，禁止解释，禁止markdown，禁止思考过程。
+格式：
+{{"steps": [{{"tool": "...", "args": {{}}, "description": "..."}}], "reasoning": "..."}}"""
 
-    plan_text = call_llm(prompt)
-    plan_text = strip_markdown_fence(plan_text)
+    plan_text = call_llm(prompt, max_tokens=500)
 
-    try:
-        plan = json.loads(plan_text)
+    plan = safe_json_parse(plan_text)
+    if isinstance(plan, dict):
         steps = plan.get("steps", [])
-    except (json.JSONDecodeError, Exception):
+    else:
         steps = [{"tool": "chart_advisor", "args": {}, "description": "推荐图表"}]
 
     return {"assemble_plan": steps, "assemble_step_idx": 0, "assemble_results": []}
@@ -72,7 +71,7 @@ def _run_step(state: ReportAgentState) -> dict:
     idx = state.get("assemble_step_idx", 0)
 
     if not plan or idx >= len(plan):
-        return _finalize(state)
+        return _build_output(state)
 
     step = plan[idx]
     qr_raw = state.get("query_result")
@@ -113,7 +112,7 @@ def _run_step(state: ReportAgentState) -> dict:
     return {"assemble_step_idx": idx + 1, "assemble_results": results}
 
 
-def _finalize(state: ReportAgentState) -> dict:
+def _build_output(state: ReportAgentState) -> dict:
     results = state.get("assemble_results", [])
     chart_config = {}
     insight_text = ""
@@ -137,13 +136,7 @@ def _finalize(state: ReportAgentState) -> dict:
             "columns": qr.columns if qr else [],
             "rows": qr.rows if qr else [],
         }, ensure_ascii=False, default=str)
-        chart_config = json.loads(chart_advisor(data_json))
-
-    # LLM-generated insight summary
-    if results:
-        summary = "\n".join(f"- {r['step']}: {r['result'][:200]}" for r in results)
-        prompt = f"基于以下分析结果，用一句话总结核心洞察：\n{summary}"
-        insight_text = call_llm(prompt)
+        chart_config = safe_json_parse(chart_advisor(data_json)) or {}
 
     comps = []
     if chart_config.get("type") and chart_config["type"] != "table":
@@ -154,16 +147,16 @@ def _finalize(state: ReportAgentState) -> dict:
             visual_config=chart_config.get("config", {}),
         ))
 
-    spec = ReportSpec(version="1.0", components=comps, insight=insight_text)
+    spec = ReportSpec(version="1.0", components=comps, insight=insight_text.strip())
 
-    return {"chart_config": chart_config, "insight_text": insight_text, "report_spec": spec}
+    return {"chart_config": chart_config, "insight_text": insight_text.strip(), "report_spec": spec}
 
 
 def _route_step(state: ReportAgentState) -> str:
     plan = state.get("assemble_plan", [])
     idx = state.get("assemble_step_idx", 0)
     if not plan or idx >= len(plan):
-        return "finalize"
+        return "build_output"
     return "run_step"
 
 
@@ -172,12 +165,12 @@ def build_report_graph():
 
     workflow.add_node("plan_analysis", _plan_analysis)
     workflow.add_node("run_step", _run_step)
-    workflow.add_node("finalize", _finalize)
+    workflow.add_node("build_output", _build_output)
 
     workflow.set_entry_point("plan_analysis")
     workflow.add_edge("plan_analysis", "run_step")
     workflow.add_conditional_edges("run_step", _route_step)
-    workflow.add_edge("finalize", END)
+    workflow.add_edge("build_output", END)
 
     return workflow.compile()
 

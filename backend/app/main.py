@@ -11,8 +11,12 @@ from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 
-_ENV_PATH = Path(__file__).parent.parent / ".env"
+_ENV_PATH = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=str(_ENV_PATH))
+
+_llm_key = os.getenv("LLM_API_KEY") or os.getenv("MINIMAX_API_KEY")
+if _llm_key and not os.getenv("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = _llm_key
 
 logger = logging.getLogger(__name__)
 from fastapi import FastAPI, Request
@@ -182,12 +186,15 @@ async def chat(request: ChatRequest, req: Request):
 
 def _format_event(event: dict) -> dict:
     kind = event.get("event")
+    metadata = event.get("metadata", {}) or {}
+    node = metadata.get("langgraph_node", "")
 
     if kind == "on_chat_model_stream":
-        chunk = event.get("data", {}).get("chunk", {})
-        content = chunk.content if hasattr(chunk, "content") else ""
-        if content:
-            return {"event": "token", "data": content}
+        # All LLM calls in this architecture are internal (planning, SQL
+        # generation, clarification). The final output is always sent as a
+        # structured event (report, clarify, error). Streaming LLM reasoning
+        # as tokens only confuses the user — suppress all token events.
+        return None
 
     elif kind == "on_tool_start":
         return {
@@ -208,6 +215,30 @@ def _format_event(event: dict) -> dict:
                 "detail": str(event.get("data", {}).get("output", ""))[:200],
             }, ensure_ascii=False),
         }
+
+    elif kind == "on_chain_start":
+        node_name = event.get("name", "") or node
+        if node_name and node_name not in ("LangGraph", "LangGraphRunnableSequence"):
+            return {
+                "event": "trace",
+                "data": json.dumps({
+                    "step": f"节点开始: {node_name}",
+                    "status": "running",
+                    "detail": "",
+                }, ensure_ascii=False),
+            }
+
+    elif kind == "on_chain_end":
+        node_name = event.get("name", "") or node
+        if node_name and node_name not in ("LangGraph", "LangGraphRunnableSequence"):
+            return {
+                "event": "trace",
+                "data": json.dumps({
+                    "step": f"节点完成: {node_name}",
+                    "status": "success",
+                    "detail": "",
+                }, ensure_ascii=False),
+            }
 
     return None
 

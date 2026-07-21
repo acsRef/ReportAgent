@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 
 def strip_markdown_fence(text: str) -> str:
     """Remove markdown code fence markers (```) from LLM output.
@@ -35,3 +37,44 @@ def extract_json_from_llm(text: str) -> str:
         Cleaned text ready for json.loads().
     """
     return strip_markdown_fence(text)
+
+
+def safe_json_parse(text: str) -> dict | list | None:
+    """Parse JSON from LLM output with fallback extraction.
+
+    Handles common LLM quirks:
+    - Markdown code fences (```json ... ```)
+    - Leading/trailing text before/after JSON
+    - Partial JSON truncation
+
+    Args:
+        text: Raw LLM output that may contain JSON.
+
+    Returns:
+        Parsed JSON object, or None if parsing fails.
+    """
+    if not text:
+        return None
+
+    cleaned = strip_markdown_fence(text)
+
+    # Try direct parse first
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: find first { or [ and last } or ]
+    for start_char, end_char in [("{", "}"), ("[", "]")]:
+        start = cleaned.find(start_char)
+        if start == -1:
+            continue
+        end = cleaned.rfind(end_char)
+        if end > start:
+            candidate = cleaned[start:end + 1]
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+
+    return None

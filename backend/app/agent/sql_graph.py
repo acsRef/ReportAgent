@@ -7,7 +7,7 @@ from langgraph.graph import END, StateGraph
 
 from app.llm import call_llm
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
-from app.utils.text import strip_markdown_fence
+from app.utils.text import safe_json_parse, strip_markdown_fence
 from app.tools.sql_tools import validate_sql, execute_sql
 
 
@@ -30,30 +30,32 @@ def _plan(state: SQLAgentState) -> dict:
         f"- {t.name}: {t.description}" for t in schema.tables
     )
 
-    prompt = f"""你是一个数据分析专家。根据用户问题和可用表结构，制定查询计划。
+    prompt = f"""你是一个SQL规划器。根据用户问题和可用表结构，制定查询计划。
 
 用户问题: {state["user_query"]}
 
 可用表结构:
 {schema_text}
 
-请输出一个JSON格式的查询计划：
+只输出JSON，禁止解释，禁止markdown，禁止思考过程。
+输出格式:
 {{
   "target_metric": "目标指标",
   "dimensions": ["维度1", "维度2"],
   "filters": [{{"field": "字段", "operator": "=", "value": "值"}}],
   "aggregation": "sum/count/avg",
   "time_range": "时间范围或null"
-}}
-只返回JSON，不要额外解释。"""
+}}"""
 
-    plan_text = call_llm(prompt)
-    plan_text = strip_markdown_fence(plan_text)
+    plan_text = call_llm(prompt, max_tokens=500)
 
-    try:
-        plan_dict = json.loads(plan_text)
-        plan = QueryPlan(**plan_dict)
-    except (json.JSONDecodeError, Exception):
+    plan_dict = safe_json_parse(plan_text)
+    if plan_dict:
+        try:
+            plan = QueryPlan(**plan_dict)
+        except Exception:
+            plan = QueryPlan(target_metric=state["user_query"])
+    else:
         plan = QueryPlan(target_metric=state["user_query"])
 
     return {
@@ -91,9 +93,9 @@ def _generate_sql(state: SQLAgentState) -> dict:
 - 表名和列名必须严格使用上面列出的名称
 - JOIN 条件使用外键关联（如 fact_sales.region_id = dim_region.region_id）
 - 使用中文别名
-- 返回纯SQL，不加解释，不要markdown代码块"""
+- 只输出纯SQL，禁止解释，禁止markdown代码块"""
 
-    sql = call_llm([{"role": "user", "content": prompt}])
+    sql = call_llm([{"role": "user", "content": prompt}], max_tokens=800)
 
     sql = strip_markdown_fence(sql)
     sql = sql.strip()
