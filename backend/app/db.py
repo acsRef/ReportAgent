@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 import os
@@ -11,23 +11,21 @@ logger = logging.getLogger(__name__)
 _DB_PATH = Path(__file__).parent.parent / "report.duckdb"
 _SEED_SQL_PATH = Path(__file__).parent.parent / "seed_data.sql"
 
-_conn: duckdb.DuckDBPyConnection | None = None
-
+_conn_rw: duckdb.DuckDBPyConnection | None = None
+_conn_ro: duckdb.DuckDBPyConnection | None = None
 
 def get_connection() -> duckdb.DuckDBPyConnection:
-    global _conn
-    if _conn is None:
-        _conn = duckdb.connect(str(_DB_PATH), read_only=False)
-        _seed_if_empty(_conn)
-    return _conn
-
+    global _conn_rw
+    if _conn_rw is None:
+        _conn_rw = duckdb.connect(str(_DB_PATH), read_only=False)
+        _seed_if_empty(_conn_rw)
+    return _conn_rw
 
 def get_readonly_connection() -> duckdb.DuckDBPyConnection:
-    global _conn
-    if _conn is not None:
-        return _conn
-    _conn = duckdb.connect(str(_DB_PATH), read_only=True)
-    return _conn
+    global _conn_ro
+    if _conn_ro is None:
+        _conn_ro = duckdb.connect(str(_DB_PATH), read_only=True)
+    return _conn_ro
 
 
 def _seed_if_empty(conn: duckdb.DuckDBPyConnection) -> None:
@@ -55,7 +53,10 @@ def _seed_if_empty(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def close_connection() -> None:
-    global _conn
-    if _conn is not None:
-        _conn.close()
-        _conn = None
+    global _conn_rw, _conn_ro
+    if _conn_rw is not None:
+        _conn_rw.close()
+        _conn_rw = None
+    if _conn_ro is not None:
+        _conn_ro.close()
+        _conn_ro = None

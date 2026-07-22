@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Literal, Optional, TypedDict
 
@@ -87,7 +87,7 @@ _INTENT_KEYWORDS_REPORT = [
     "销售", "排名", "趋势", "增长", "利润", "退货",
     "多少", "统计", "哪个", "分析", "最高", "最低",
     "占比", "比较", "去年", "本月", "上月", "季度",
-    "查询", "数据", "报表",
+    "查询", "数据", "报表", "显示", "展示", "查看", "列表", "明细", "汇总", "报告", "情况",
 ]
 
 _INTENT_KEYWORDS_DASHBOARD = [
@@ -147,6 +147,7 @@ async def _run_data_agent(state: AgentState) -> dict:
         "discovered_tables": [],
         "mcp_tool_calls": [],
         "raw_schema": "",
+        "trace_id": state.get("trace_id", ""),
     })
     return {
         "schema_context": ds.get("schema_context"),
@@ -177,6 +178,7 @@ async def _run_sql_agent(state: AgentState) -> dict:
         "execution_status": "",
         "error": None,
         "retry_counters": {"plan": 0, "sql_generation": parent_retries},
+        "trace_id": state.get("trace_id", ""),
     })
     error_raw = ss.get("error")
     if error_raw and isinstance(error_raw, str):
@@ -196,7 +198,7 @@ async def _run_sql_agent(state: AgentState) -> dict:
                 question=state.get("original_query", state["user_query"]),
                 sql=qr.sql,
                 schema=schema.model_dump() if schema else None,
-                target_metric=ss.get("query_plan", {}).target_metric if ss.get("query_plan") else "",
+                target_metric=ss["query_plan"].target_metric if ss.get("query_plan") else "",
             )
         except Exception:
             pass
@@ -225,7 +227,7 @@ def _route_evaluate(state: AgentState) -> Literal["report_agent", "clarify", "__
         tracer.end("NEED_CLARIFICATION")
         return "clarify"
     else:
-        if state.get("retry_count", 0) < 3:
+        if state.get("retry_count", 0) <= 3:
             return "sql_agent"
         tracer = get_tracer(state.get("trace_id", ""))
         tracer.end("FAILED")
@@ -247,6 +249,7 @@ async def _run_report_agent(state: AgentState) -> dict:
         "assemble_plan": [],
         "assemble_step_idx": 0,
         "assemble_results": [],
+        "trace_id": state.get("trace_id", ""),
     })
 
     insight = rs.get("insight_text", "")

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import functools
@@ -9,7 +9,7 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any, Callable, Generator, Optional
 
-from app.infra.trace.models import Span, Trace
+from app.infra.trace.models import LLMCall, Span, Trace
 from app.infra.trace.repository import TraceRepository
 
 _local: dict[str, "Tracer"] = {}
@@ -31,6 +31,7 @@ class Tracer:
             start_time=self._start_time,
         )
         self._spans: list[Span] = []
+        self._llm_calls: list[LLMCall] = []
         self._stack: list[Span] = []
 
     def start(self):
@@ -70,6 +71,17 @@ class Tracer:
             self._stack.pop()
             self._spans.append(span)
 
+    def add_llm_call(self, model: str, prompt_tokens: int, completion_tokens: int, latency_ms: int) -> None:
+        """Record an LLM call associated with the current span."""
+        span_id = self._current_span_id() or ''
+        self._llm_calls.append(LLMCall(
+            span_id=span_id,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=latency_ms,
+        ))
+
     def _current_span_id(self) -> Optional[str]:
         return self._stack[-1].span_id if self._stack else None
 
@@ -79,11 +91,17 @@ class Tracer:
             await repo.save_trace(self._trace)
         except Exception:
             pass
+        for llm_call in self._llm_calls:
+            try:
+                await repo.save_llm_call(llm_call)
+            except Exception:
+                pass
         for span in self._spans:
             try:
                 await repo.save_span(span)
             except Exception:
                 pass
+        _local.pop(self.trace_id, None)
 
 
 def get_tracer(trace_id: str, session_id: Optional[str] = None,

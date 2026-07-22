@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -165,13 +165,12 @@ async def chat(request: ChatRequest, req: Request):
                 logger.warning("Could not check graph state for interrupts")
 
             if not interrupted:
-                async for s in _agent.astream(input_data, config):
-                    final_state = _extract_final_state(s)
-                    if final_state:
-                        result = _build_response(final_state)
-                        yield {"event": "report", "data": json.dumps(result, ensure_ascii=False)}
-                        await session_manager.update_checkpoint_time(session_id)
-                        break
+                snapshot = _agent.get_state(config)
+                final_state = snapshot.values if snapshot else None
+                if final_state:
+                    result = _build_response(final_state)
+                    yield {"event": "report", "data": json.dumps(result, ensure_ascii=False)}
+                    await session_manager.update_checkpoint_time(session_id)
 
         except Exception as exc:
             yield {"event": "error", "data": str(exc)}
@@ -194,6 +193,21 @@ def _format_event(event: dict) -> dict:
         # generation, clarification). The final output is always sent as a
         # structured event (report, clarify, error). Streaming LLM reasoning
         # as tokens only confuses the user — suppress all token events.
+        node = metadata.get("langgraph_node", "")
+        if node in ("report_agent", "report_plan_analysis", "report_run_step", "report_build_output"):
+            chunk = event.get("data", {}).get("chunk", {})
+            content = ""
+            if hasattr(chunk, "content"):
+                content = chunk.content
+            elif isinstance(chunk, dict):
+                content = chunk.get("content", "")
+            elif isinstance(chunk, str):
+                content = chunk
+            if content:
+                return {
+                    "event": "token",
+                    "data": json.dumps({"text": content}, ensure_ascii=False),
+                }
         return None
 
     elif kind == "on_tool_start":
@@ -218,7 +232,7 @@ def _format_event(event: dict) -> dict:
 
     elif kind == "on_chain_start":
         node_name = event.get("name", "") or node
-        if node_name and node_name not in ("LangGraph", "LangGraphRunnableSequence"):
+        if node_name and node_name not in ("LangGraph", "LangGraphRunnableSequence", "LangGraphRunnableGraph", "RunnableSequence", "RunnableParallel", "RunnableLambda", "RunnablePassthrough"):
             return {
                 "event": "trace",
                 "data": json.dumps({
@@ -230,7 +244,7 @@ def _format_event(event: dict) -> dict:
 
     elif kind == "on_chain_end":
         node_name = event.get("name", "") or node
-        if node_name and node_name not in ("LangGraph", "LangGraphRunnableSequence"):
+        if node_name and node_name not in ("LangGraph", "LangGraphRunnableSequence", "LangGraphRunnableGraph", "RunnableSequence", "RunnableParallel", "RunnableLambda", "RunnablePassthrough"):
             return {
                 "event": "trace",
                 "data": json.dumps({
@@ -243,11 +257,6 @@ def _format_event(event: dict) -> dict:
     return None
 
 
-def _extract_final_state(stream_output: dict) -> dict | None:
-    for node_name, node_state in stream_output.items():
-        if isinstance(node_state, dict) and "report_spec" in node_state:
-            return node_state
-    return None
 
 
 def _build_response(state: dict) -> dict:
@@ -256,19 +265,19 @@ def _build_response(state: dict) -> dict:
     query_result = state.get("query_result")
 
     table = None
-    if query_result and query_result.get("rows"):
+    if query_result and query_result.rows:
         cols = []
-        for c in query_result.get("columns", []):
+        for c in query_result.columns:
             name = c["name"] if isinstance(c, dict) else c
             cols.append({"key": name, "title": name})
-        table = {"columns": cols, "rows": query_result.get("rows", [])}
+        table = {"columns": cols, "rows": query_result.rows}
 
     chart = state.get("chart_config") or {}
     insight = state.get("insight_text") or ""
 
     return {
         "answer": {
-            "text": insight or "查询完成",
+            "text": "查询完成",
             "table": table,
             "chart": chart if chart else None,
             "insight": insight or None,

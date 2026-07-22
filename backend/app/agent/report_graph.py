@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import time
@@ -11,6 +11,7 @@ from app.models.contracts import ComponentSpec, QueryResult, ReportSpec
 from app.tools.sql_tools import chart_advisor, insight_analyst
 from app.utils.text import safe_json_parse, strip_markdown_fence
 from app.tools.registry import registry
+from app.infra.trace.sdk import traced_node
 
 
 class ReportAgentState(TypedDict):
@@ -24,6 +25,7 @@ class ReportAgentState(TypedDict):
     assemble_results: list[dict]
 
 
+@traced_node("report_plan_analysis")
 def _plan_analysis(state: ReportAgentState) -> dict:
     qr_raw = state.get("query_result")
     if not qr_raw:
@@ -66,6 +68,7 @@ def _plan_analysis(state: ReportAgentState) -> dict:
     return {"assemble_plan": steps, "assemble_step_idx": 0, "assemble_results": []}
 
 
+@traced_node("report_run_step")
 def _run_step(state: ReportAgentState) -> dict:
     plan = state.get("assemble_plan", [])
     idx = state.get("assemble_step_idx", 0)
@@ -112,6 +115,7 @@ def _run_step(state: ReportAgentState) -> dict:
     return {"assemble_step_idx": idx + 1, "assemble_results": results}
 
 
+@traced_node("report_build_output")
 def _build_output(state: ReportAgentState) -> dict:
     results = state.get("assemble_results", [])
     chart_config = {}
@@ -173,5 +177,4 @@ def build_report_graph():
     workflow.add_edge("build_output", END)
 
     return workflow.compile()
-
 

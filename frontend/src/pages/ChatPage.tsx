@@ -49,7 +49,7 @@ export default function ChatPage() {
       .replace(/<think>[\s\S]*?<\/think>/g, '')
       .replace(/```[\s\S]*?```/g, '')
       .replace(/^ping - .*/gm, '')
-      .replace(/^[{\[].*[}\]]$/gm, '')
+      // .replace(/^[{\[].*[}\]]$/gm, '') — removed: too aggressive, kills JSON-like insight text
       .replace(/\n{3,}/g, '\n\n')
       .trim()
   }

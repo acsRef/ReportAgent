@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from typing import Literal, Optional, TypedDict
@@ -8,6 +8,7 @@ from langgraph.graph import END, StateGraph
 from app.llm import call_llm
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
 from app.utils.text import safe_json_parse, strip_markdown_fence
+from app.infra.trace.sdk import traced_node
 from app.tools.sql_tools import validate_sql, execute_sql
 
 
@@ -24,6 +25,7 @@ class SQLAgentState(TypedDict):
     query_result: Optional[QueryResult]
 
 
+@traced_node("sql_plan")
 def _plan(state: SQLAgentState) -> dict:
     schema = state.get("schema_context")
     schema_text = "无可用表结构" if not schema else "\n".join(
@@ -64,6 +66,7 @@ def _plan(state: SQLAgentState) -> dict:
     }
 
 
+@traced_node("sql_generate")
 def _generate_sql(state: SQLAgentState) -> dict:
     plan = state.get("query_plan")
     schema = state.get("schema_context")
@@ -105,6 +108,7 @@ def _generate_sql(state: SQLAgentState) -> dict:
     return {"generated_sql": sql, "retry_counters": retry}
 
 
+@traced_node("sql_validate")
 def _validate(state: SQLAgentState) -> dict:
     sql = state.get("generated_sql", "")
     if not sql:
@@ -115,6 +119,7 @@ def _validate(state: SQLAgentState) -> dict:
     return {"validation_result": validation}
 
 
+@traced_node("sql_execute")
 def _execute(state: SQLAgentState) -> dict:
     sql = state.get("generated_sql", "")
     if not sql:
@@ -124,6 +129,7 @@ def _execute(state: SQLAgentState) -> dict:
     return {"sql_result": result}
 
 
+@traced_node("sql_evaluate")
 def _evaluate(state: SQLAgentState) -> dict:
     raw = state.get("sql_result", "")
     if not raw:
@@ -152,6 +158,7 @@ def _evaluate(state: SQLAgentState) -> dict:
     return {"execution_status": "SUCCESS"}
 
 
+@traced_node("sql_build_output")
 def _build_output(state: SQLAgentState) -> dict:
     raw = state.get("sql_result", "")
     if not raw:

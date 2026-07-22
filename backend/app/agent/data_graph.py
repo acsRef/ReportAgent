@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import time
@@ -9,6 +9,7 @@ from langgraph.graph import END, StateGraph
 from app.models.contracts import ErrorDetail, SchemaContext, TableSchema, ColumnSchema
 from app.tools.data_tools import search_tables, get_table_ddl, list_tables
 from app.tools.registry import registry
+from app.infra.trace.sdk import traced_node
 
 
 class DataAgentState(TypedDict):
@@ -19,6 +20,7 @@ class DataAgentState(TypedDict):
     schema_context: SchemaContext
 
 
+@traced_node("data_detect_intent")
 def _detect_intent(state: DataAgentState) -> dict:
     query = state["user_query"]
     keywords_data = ["查询", "统计", "数据", "表", "字段", "销售", "订单", "库存", "退货"]
@@ -27,6 +29,7 @@ def _detect_intent(state: DataAgentState) -> dict:
     return {"discovered_tables": [] if not has_data_intent else []}
 
 
+@traced_node("data_search_schema")
 def _search_schema(state: DataAgentState) -> dict:
     query = state["user_query"]
     if not state.get("discovered_tables"):
@@ -39,6 +42,7 @@ def _search_schema(state: DataAgentState) -> dict:
     return {}
 
 
+@traced_node("data_build_context")
 def _build_context(state: DataAgentState) -> dict:
     tables = state.get("discovered_tables", [])
     schema_tables = []

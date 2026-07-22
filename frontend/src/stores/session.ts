@@ -5,12 +5,19 @@ import { chatStream, parseReportData, parseTraceData } from '../api/chat'
 import { adaptReport } from '../adapter/reportAdapter'
 
 const SESSION_KEY = 'ragent_session_id'
+const SESSION_TS_KEY = 'ragent_session_ts'
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24h
 
 function loadSessionId(): string {
   const stored = localStorage.getItem(SESSION_KEY)
-  if (stored) return stored
+  const ts = localStorage.getItem(SESSION_TS_KEY)
+  if (stored && ts) {
+    const age = Date.now() - Number(ts)
+    if (age < SESSION_MAX_AGE_MS) return stored
+  }
   const id = uuid()
   localStorage.setItem(SESSION_KEY, id)
+  localStorage.setItem(SESSION_TS_KEY, String(Date.now()))
   return id
 }
 
@@ -94,9 +101,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           const report = { ...s.currentReport! }
 
           switch (event.event) {
-            case 'token':
-              report.content += event.data
+            case 'token': {
+              try {
+                const parsed = JSON.parse(event.data)
+                report.content += parsed.text || ''
+              } catch { /* ignore */ }
               break
+            }
 
             case 'trace': {
               const trace = parseTraceData(event.data)
