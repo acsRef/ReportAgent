@@ -109,3 +109,29 @@ CREATE TABLE IF NOT EXISTS observability.llm_call (
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_call_span_id ON observability.llm_call (span_id);
+
+-- ============================================================
+-- app schema (auth + conversation)
+-- ============================================================
+
+CREATE SCHEMA IF NOT EXISTS app;
+
+CREATE TABLE IF NOT EXISTS app.users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(64) UNIQUE NOT NULL,
+    password_hash VARCHAR(256) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS app.conversations (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(64) NOT NULL,
+    user_id INT NOT NULL REFERENCES app.users(id),
+    role VARCHAR(16) NOT NULL,
+    content TEXT,
+    message_type VARCHAR(32) DEFAULT 'text',
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_user_session ON app.conversations (user_id, session_id, created_at);

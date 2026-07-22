@@ -1,5 +1,6 @@
 import { parseSSEChunk } from './sse'
 import type { SSEEvent, ReportResponse } from '../types/report'
+import { useAuthStore } from '../stores/authStore'
 
 type EventHandler = (event: SSEEvent) => void
 
@@ -17,11 +18,17 @@ export async function chatStream(
     ? combineSignals(signal, controller.signal)
     : controller.signal
 
+  const { token } = useAuthStore.getState()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
   let response: Response
   try {
     response = await fetch('/api/v1/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ user_query: userQuery, session_id: sessionId }),
       signal: combinedSignal,
     })
@@ -33,6 +40,12 @@ export async function chatStream(
     throw err
   }
   clearTimeout(timeoutId)
+
+  if (response.status === 401) {
+    useAuthStore.getState().logout()
+    window.location.href = '/login'
+    throw new Error('登录已过期，请重新登录')
+  }
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`)

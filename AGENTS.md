@@ -1,26 +1,38 @@
 # ReportAgent — Agent Instructions
 
-## 启动顺序（重要）
+## Startup Order (MCRITICAL)
 
-1. `python -m mcp_schema_server.server` (MCP 先启动)
-2. `cd backend && uvicorn app.main:app --port 8100 --reload` (后端)
-3. `cd frontend && npm run dev` (前端，port 3000，Vite 自动代理 `/api` → `:8100`)
+1. `python -m mcp_schema_server.server` (MCP first — no fixed port)
+2. `cd backend && uvicorn app.main:app --port 8100 --reload` (FastAPI backend)
+3. `cd frontend && npm run dev` (Vite dev server on :3000)
 
-MCP Schema Server 无端口固定，后端通过 MCP 协议自动发现。先后端先启动会导致连接失败。
+Backend auto-discovers MCP Schema Server via MCP protocol. Starting backend first causes connection failure.
 
-## 架构总览
+## Architecture Overview
 
 ```
 User ←SSE→ React+Vite (:3000) → proxy /api → FastAPI+LangGraph (:8100)
                                               ↓ MCP
-                                         MCP Schema Server (:8101)
+                                         MCP Schema Server
                                               ↓
-                                         DuckDB (只读，自动种子)
+                                         DuckDB (read-only, auto-seeded)
                                          PostgreSQL (session+trace+memory)
 ```
 
-- 前端无 `.env` 要求，Vite proxy 将 `/api/*` 转发到后端
-- DuckDB 首次连接时从 `backend/seed_data.sql` 自动建表+填充
+## Key Commands
+
+| Purpose | Command |
+|---------|---------|
+| MCP start | `python -m mcp_schema_server.server` |
+| Backend | `cd backend && uvicorn app.main:app --port 8100 --reload` |
+| Frontend dev | `cd frontend && npm run dev` |
+| Frontend build | `cd frontend && npm run build` (tsc -b && vite build) |
+| Frontend lint | `cd frontend && npm run lint` (oxlint, not eslint) |
+| Frontend preview | `cd frontend && npm run preview` |
+| Test API | `curl -X POST http://localhost:8100/api/v1/chat -H "Content-Type: application/json" -d '{"user_query":"今年华东销售趋势","session_id":"test-1"}'` |
+| Health check | `curl http://localhost:8100/health` |
+
+**No tests exist in this repo.** All verification is manual via curl. No CI, no Dockerfile, no Makefile.
 
 ## Setup
 
@@ -31,70 +43,76 @@ pip install -r mcp_schema_server/requirements.txt
 cd frontend && npm install
 ```
 
-- PostgreSQL: `docker run -d --name ragent-postgres -e POSTGRES_USER=ragent -e POSTGRES_PASSWORD=ragent -e POSTGRES_DB=ragent -p 5432:5432 pgvector/pgvector:0.7.0-pg15`
-- 初始化 PG 表: `docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/init_pg.sql`
-- 无 `.env.example`，需手动创建 `.env`，必填项: `MINIMAX_API_KEY`, `SILICONFLOW_API_KEY`, `DATABASE_URL`, `LLM_MODEL`
-- 向量维度 **1536** (`init_pg.sql` 中 VECTOR(1536)，需与 `.env` 的 `EMBEDDING_DIM` 一致)
+PostgreSQL: `docker run -d --name ragent-postgres -e POSTGRES_USER=ragent -e POSTGRES_PASSWORD=ragent -e POSTGRES_DB=ragent -p 5432:5432 pgvector/pgvector:0.7.0-pg15`
+Init PG: `docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/init_pg.sql`
 
-## 关键命令
+**.env** (create manually, no `.env.example`): `MINIMAX_API_KEY`, `SILICONFLOW_API_KEY`, `DATABASE_URL`, `LLM_MODEL`, `LLM_BASE_URL`, `EMBEDDING_DIM` (must be 1536 to match `VECTOR(1536)` in `init_pg.sql`).
 
-| 用途 | 命令 |
-|------|------|
-| 后端启动 | `cd backend && uvicorn app.main:app --port 8100 --reload` |
-| MCP 启动 | `python -m mcp_schema_server.server` |
-| 前端启动 | `cd frontend && npm run dev` |
-| 前端 lint | `cd frontend && npm run lint`（oxlint，不是 eslint） |
-| 前端构建 | `cd frontend && npm run build`（tsc -b && vite build） |
-| 测试 API | `curl -X POST http://localhost:8100/api/v1/chat -H "Content-Type: application/json" -d '{"user_query":"今年华东销售趋势","session_id":"test-1"}'` |
-| 健康检查 | `curl http://localhost:8100/health` |
+## Code Style — Python (Backend)
 
-**整个仓库无测试代码**，所有验证通过 curl 手动完成。无 CI 配置、无 Dockerfile、无 Makefile。
+- **Imports:** stdlib first, then third-party, then local. Group with blank lines. Use `from __future__ import annotations` at top of every file. Prefer `from X import Y` over `import X` when Y is a class/function used directly.
+- **Types:** Always annotate function signatures. Use `|` for unions (`str | None` not `Optional[str]`) consistently. Use `BaseModel` from pydantic for data contracts. Prefer `list[dict]` over `List[dict]`.
+- **Naming:** `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE` for constants/module-level configs. Private helpers prefixed with `_`.
+- **Error handling:** Catch specific exceptions; use `logger.warning` for recoverable errors, `raise` for fatal. Avoid bare `except:`. Log exceptions with `%s` formatting (not f-strings in log calls).
+- **Patterns:** Module-level lazy singletons (e.g. `_conn_rw: DuckDBPyConnection | None = None` with getter). Globals are acceptable for connections.
+- **Docstrings:** Optional. Keep them short when present. Comments in Chinese when addressing domain concepts, English for technical notes.
 
-## TSD 加密源文件
+## Code Style — TypeScript/React (Frontend)
 
-许多 `.py` 文件直接查看显示 `%TSD-Header-###%`（加密占位符）。需通过 `git show HEAD:<path>` 读取解密内容。只有 `main.py`、`llm.py` 和空的 `__init__.py` 可读。
+- **Imports:** React/external first, then local relative imports. Use `import type` for type-only imports. Group with blank lines.
+- **Types:** Prefer `interface` for Props/State shapes, `type` for unions/utility types. Use `Record<string, unknown>` for dynamic data. Use `as const` on literal type assertions. Enable `verbatimModuleSyntax` — always use `import type` for type-only imports.
+- **Naming:** `PascalCase` for components and interfaces, `camelCase` for functions/variables, `UPPER_SNAKE` for constants. File names match default export (e.g. `ChartBlock.tsx` exports `ChartBlock`).
+- **Components:** Default export function components. Props interface named `Props` (local to file). Use `interface Props { block: ReportBlock }` pattern. Avoid class components.
+- **Styling:** Inline `style={{}}` objects (no CSS modules/tailwind). Use Ant Design `Typography.Text`, `Typography.Title`, etc. for text styling. Color tokens: `#1677ff` (primary blue), `#e8e8e8` (border), `#f0f0f0` (divider), `#8f959e`/`#646a73` (secondary text), `#1f2329` (body text).
+- **Error handling:** Use `try/catch` with `err instanceof Error` type narrowing. Fallback rendering with `Text type="secondary"`. `catch { /* ignore */ }` for non-critical JSON parsing.
+- **Imports from `antd`:** Destructure specific components (`import { Typography, Button } from 'antd'`). Avoid `import antd from 'antd'`.
+- **State management:** Zustand stores only. No Redux or Context. Store interfaces defined inline in the `create<>()` call.
 
-## Agent 图（Parent + 3 SubGraphs）
+## Agent Graph (Parent + 3 SubGraphs)
 
 ```
-User Query → security_guard (score≥3→block)
+User Query → security_guard (score ≥ 3 → block)
   ├─ 闲聊 → END
-  └─ 报表/看板 → data_agent → sql_agent → evaluate
+  └─ 报表 → data_agent → sql_agent → evaluate
        ├─ SUCCESS → report_agent → END
        └─ NEED_CLARIFICATION → clarify_node (interrupt) → data_agent
 ```
 
-关键规则：
-- `clarify` 是**唯一**调用 `interrupt()` 的节点 — SubGraphs 从不 interrupt
-- SubGraphs 通过 `.invoke()` 在父节点内同步执行（非 LangGraph sub-graph 概念）
-- Checkpoint 只保存 Parent State（SubStates 是临时的）
-- `original_query` = 首条用户消息冻结；`current_query` = 携带追问上下文的增强查询
+Rules:
+- `clarify` is the **only** node calling `interrupt()` — SubGraphs never interrupt
+- SubGraphs run via `.ainvoke()` inside parent nodes (not LangGraph sub-graphs)
+- Checkpoint saves Parent State only (SubStates are ephemeral)
+- `original_query` = first user message frozen; `current_query` = enhanced with clarification context
 
-## SQL 重试逻辑
+## SQL Retry Logic
 
-**内部（sql_graph）：** 语法错误 → 重新生成（最多 3 次），Schema 错误 → 重新规划（1 次），耗尽 → `NEED_CLARIFICATION`
+**Internal (sql_graph):** syntax error → regenerate (max 3×), schema error → replan (1×), exhausted → `NEED_CLARIFICATION`
+**Parent graph:** SQL fail → retry `sql_agent` (max 3×) instead of falling through to `report_agent`
 
-**父图：** SQL 失败 → 重试 `sql_agent`（最多 3 次）而非跳到 `report_agent`，防止对空结果产生幻觉。
+## SQL Safety (3 Layers)
 
-## SQL 安全（3 层）
+1. Blacklist: reject non-SELECT (DDL/DML keywords)
+2. AST: `sqlglot` verifies parsed result is `Select`
+3. EXPLAIN: run `EXPLAIN <sql>` to catch DuckDB-specific syntax errors
 
-1. 黑名单：拦截非 SELECT 语句（DDL/DML 关键字）
-2. AST 解析：`sqlglot` 验证解析结果为 `Select`
-3. EXPLAIN：执行 `EXPLAIN <sql>` 捕获 DuckDB 特有语法错误
+## Memory System
 
-## 记忆系统
+Entry point: `infra/memory/memory_manager.py`. Two backends:
+- **QueryMemory** (`memory.query_template`): pgvector + keyword hybrid search. Score: `semantic×0.5 + success_rate×0.3 + freq×0.1 + recency×0.1`
+- **UserMemory** (`memory.semantic_entry`): Score: `semantic×0.6 + importance×0.2 + freq×0.1 + recency×0.1`
+- Embedding API failure → graceful fallback to `ILIKE ANY($1::text[])` parameterized keyword matching
 
-统一入口 `infra/memory/memory_manager.py`，两个后端：
-- **QueryMemory**（`memory.query_template`）：pgvector 语义 + 关键词混合搜索，排序 `semantic×0.5 + success_rate×0.3 + freq×0.1 + recency×0.1`
-- **UserMemory**（`memory.semantic_entry`）：用户偏好/洞察，排序 `semantic×0.6 + importance×0.2 + freq×0.1 + recency×0.1`
+## TSD-Encrypted Source Files
 
-Embedding API 失败时优雅回退到关键词匹配（`ILIKE ANY($1::text[])` 参数化）。
+Many `.py` files show `%TSD-Header-###%` (encrypted placeholders). Read via `git show HEAD:<path>`. Only `main.py`, `llm.py`, and empty `__init__.py` are readable directly.
 
-## 已知怪癖
+## Known Quirks
 
-- `__init__.py` 文件故意为空（0 字节）— Python 3.3+ namespace packages
-- `infra/trace/repository.py` 直接使用 `asyncpg`（非 `infra/db/postgres.py` 的连接池）— 在 sdk.py 使用连接池前实际上无效
-- MCP Schema Server 的 `registry.py` 和 `app/tools/data_tools.py` 是**两个独立的**关键字 Schema 匹配实现
-- `POST /api/v1/chat` 的 `session_id` 同时用于新建会话和恢复检查点
-- 前端 TypeScript ~6.0（非常新），lint 使用 oxlint 而非 eslint
-- Embedding 用 SiliconFlow API（`.env` 中 `SILICONFLOW_API_KEY`），与 LLM（MiniMax）不同厂商
+- `__init__.py` files are intentionally 0 bytes (namespace packages, Python 3.3+)
+- `infra/trace/repository.py` uses raw `asyncpg` (not `infra/db/postgres.py` pool) — pool integration not yet wired
+- MCP Schema Server's `registry.py` and `app/tools/data_tools.py` are **two independent** keyword schema-matching implementations
+- `POST /api/v1/chat` `session_id` doubles for new session and checkpoint resume
+- Frontend TypeScript ~6.0 (very new); lint uses oxlint, not eslint
+- Embedding uses SiliconFlow API (`.env`: `SILICONFLOW_API_KEY`), separate from LLM (MiniMax)
+- Session persisted in `localStorage` key `ragent_session_id` (Zustand, `stores/session.ts`)
+- No Cursor rules (`.cursor/rules/`) or Copilot instructions (`.github/copilot-instructions.md`) exist

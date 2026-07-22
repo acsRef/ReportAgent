@@ -1,64 +1,206 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Optional
 
-import duckdb
 
-_DB_PATH = Path(__file__).parent.parent / "backend" / "report.duckdb"
+# ── Hardcoded schema — matches backend/seed_data.sql ──────────────────────
+_TABLES: list[dict] = [
+    {
+        "table_name": "dim_date",
+        "columns": [
+            {"name": "date_id", "type": "INTEGER"},
+            {"name": "full_date", "type": "DATE"},
+            {"name": "year", "type": "INTEGER"},
+            {"name": "quarter_num", "type": "INTEGER"},
+            {"name": "quarter", "type": "VARCHAR"},
+            {"name": "week_of_year", "type": "INTEGER"},
+            {"name": "day_name", "type": "VARCHAR"},
+            {"name": "is_holiday", "type": "BOOLEAN"},
+        ],
+        "ddl": None,  # generated on init
+        "description": "日期维度表，包含年/季度/月/周以及节假日标记",
+    },
+    {
+        "table_name": "dim_region",
+        "columns": [
+            {"name": "region_id", "type": "INTEGER"},
+            {"name": "region_name", "type": "VARCHAR"},
+            {"name": "province", "type": "VARCHAR"},
+            {"name": "city", "type": "VARCHAR"},
+            {"name": "tier", "type": "VARCHAR"},
+        ],
+        "ddl": None,
+        "description": "区域和城市映射表，包含华北/华东/华南/西南等大区及对应城市",
+    },
+    {
+        "table_name": "dim_product",
+        "columns": [
+            {"name": "product_id", "type": "INTEGER"},
+            {"name": "product_name", "type": "VARCHAR"},
+            {"name": "category", "type": "VARCHAR"},
+            {"name": "sub_category", "type": "VARCHAR"},
+            {"name": "brand", "type": "VARCHAR"},
+            {"name": "unit_price", "type": "DECIMAL(10,2)"},
+            {"name": "cost_price", "type": "DECIMAL(10,2)"},
+            {"name": "supplier", "type": "VARCHAR"},
+        ],
+        "ddl": None,
+        "description": "产品信息表，包含产品名称、所属品类、子品类、品牌和单价",
+    },
+    {
+        "table_name": "dim_customer",
+        "columns": [
+            {"name": "customer_id", "type": "INTEGER"},
+            {"name": "customer_name", "type": "VARCHAR"},
+            {"name": "customer_tier", "type": "VARCHAR"},
+            {"name": "industry", "type": "VARCHAR"},
+            {"name": "city", "type": "VARCHAR"},
+            {"name": "register_date", "type": "DATE"},
+        ],
+        "ddl": None,
+        "description": "客户维度表，包含客户名称、等级、行业和注册日期",
+    },
+    {
+        "table_name": "dim_warehouse",
+        "columns": [
+            {"name": "warehouse_id", "type": "INTEGER"},
+            {"name": "warehouse_name", "type": "VARCHAR"},
+            {"name": "city", "type": "VARCHAR"},
+            {"name": "capacity", "type": "INTEGER"},
+        ],
+        "ddl": None,
+        "description": "仓库维度表，包含仓库名称、所在城市和容量",
+    },
+    {
+        "table_name": "dim_employee",
+        "columns": [
+            {"name": "employee_id", "type": "INTEGER"},
+            {"name": "employee_name", "type": "VARCHAR"},
+            {"name": "department", "type": "VARCHAR"},
+            {"name": "position", "type": "VARCHAR"},
+            {"name": "city", "type": "VARCHAR"},
+            {"name": "hire_date", "type": "DATE"},
+        ],
+        "ddl": None,
+        "description": "员工维度表，包含部门、岗位和入职日期",
+    },
+    {
+        "table_name": "fact_sales",
+        "columns": [
+            {"name": "sale_id", "type": "INTEGER"},
+            {"name": "date_id", "type": "INTEGER"},
+            {"name": "product_id", "type": "INTEGER"},
+            {"name": "region_id", "type": "INTEGER"},
+            {"name": "customer_id", "type": "INTEGER"},
+            {"name": "channel", "type": "VARCHAR"},
+            {"name": "quantity", "type": "INTEGER"},
+            {"name": "unit_price", "type": "DECIMAL(10,2)"},
+            {"name": "discount", "type": "DECIMAL(4,2)"},
+            {"name": "total_amount", "type": "DECIMAL(12,2)"},
+            {"name": "cost_amount", "type": "DECIMAL(12,2)"},
+            {"name": "profit", "type": "DECIMAL(12,2)"},
+        ],
+        "ddl": None,
+        "description": "销售记录事实表，含区域、产品、客户、数量、金额、折扣、成本和利润",
+    },
+    {
+        "table_name": "fact_returns",
+        "columns": [
+            {"name": "return_id", "type": "INTEGER"},
+            {"name": "sale_id", "type": "INTEGER"},
+            {"name": "product_id", "type": "INTEGER"},
+            {"name": "return_date_id", "type": "INTEGER"},
+            {"name": "return_quantity", "type": "INTEGER"},
+            {"name": "return_amount", "type": "DECIMAL(10,2)"},
+            {"name": "return_reason", "type": "VARCHAR"},
+            {"name": "handling", "type": "VARCHAR"},
+        ],
+        "ddl": None,
+        "description": "退货记录事实表，关联销售记录，包含退货原因和处理方式",
+    },
+    {
+        "table_name": "fact_inventory",
+        "columns": [
+            {"name": "inventory_id", "type": "INTEGER"},
+            {"name": "product_id", "type": "INTEGER"},
+            {"name": "warehouse_id", "type": "INTEGER"},
+            {"name": "date_id", "type": "INTEGER"},
+            {"name": "quantity_on_hand", "type": "INTEGER"},
+            {"name": "quantity_reserved", "type": "INTEGER"},
+            {"name": "quantity_available", "type": "INTEGER"},
+        ],
+        "ddl": None,
+        "description": "库存记录事实表，按产品+仓库+日期记录库存量、预留量和可售量",
+    },
+    {
+        "table_name": "fact_attendance",
+        "columns": [
+            {"name": "attendance_id", "type": "INTEGER"},
+            {"name": "employee_id", "type": "INTEGER"},
+            {"name": "date_id", "type": "INTEGER"},
+            {"name": "status", "type": "VARCHAR"},
+            {"name": "work_hours", "type": "DECIMAL(4,1)"},
+        ],
+        "ddl": None,
+        "description": "考勤记录事实表，关联员工，包含考勤状态和工时",
+    },
+]
+
+
+def _build_ddl(table: dict) -> str:
+    lines = [f"CREATE TABLE {table['table_name']} ("]
+    col_lines = [f"  {c['name']} {c['type']}" for c in table["columns"]]
+    lines.append(",\n".join(col_lines))
+    lines.append(");")
+    return "\n".join(lines)
 
 
 class SchemaRegistry:
     def __init__(self):
         self._tables_cache: list[dict] | None = None
 
-    def build_index(self, embedding_fn=None):
-        conn = duckdb.connect(str(_DB_PATH), read_only=True)
-        tables = conn.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
-        ).fetchall()
-
+    def build_index(self):
         self._tables_cache = []
-        for (tname,) in tables:
-            cols = conn.execute(
-                "SELECT column_name, data_type FROM information_schema.columns "
-                "WHERE table_schema='main' AND table_name=?",
-                [tname],
-            ).fetchall()
+        for t in _TABLES:
+            entry = dict(t)
+            entry["ddl"] = _build_ddl(t)
+            entry["col_lines"] = [f"- {c['name']} ({c['type']})" for c in t["columns"]]
+            self._tables_cache.append(entry)
+        count = len(self._tables_cache)
 
-            col_list = [{"name": c[0], "type": c[1]} for c in cols]
-            col_lines = [f"- {c[0]} ({c[1]})" for c in cols]
-            description = self._gen_description(tname, [c[0] for c in cols])
-            ddl = f"CREATE TABLE {tname} (\n" + ",\n".join(
-                f"  {c[0]} {c[1]}" for c in cols
-            ) + "\n);"
+        # Try DuckDB for dynamic enrichment (optional — schema mismatch silently falls back)
+        try:
+            import duckdb
+            from pathlib import Path
+            db_path = Path(__file__).parent.parent / "backend" / "report.duckdb"
+            if db_path.exists():
+                conn = duckdb.connect(str(db_path), read_only=True)
+                known = {t["table_name"] for t in self._tables_cache}
+                rows = conn.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+                ).fetchall()
+                for (tname,) in rows:
+                    if tname not in known:
+                        cols = conn.execute(
+                            "SELECT column_name, data_type FROM information_schema.columns "
+                            "WHERE table_schema='main' AND table_name=?",
+                            [tname],
+                        ).fetchall()
+                        col_list = [{"name": c[0], "type": c[1]} for c in cols]
+                        entry = {
+                            "table_name": tname,
+                            "columns": col_list,
+                            "ddl": None,
+                            "description": f"表 {tname}，包含字段: {', '.join(c[0] for c in cols)}",
+                        }
+                        entry["ddl"] = _build_ddl(entry)
+                        entry["col_lines"] = [f"- {c['name']} ({c['type']})" for c in col_list]
+                        self._tables_cache.append(entry)
+                conn.close()
+        except Exception:
+            pass
 
-            self._tables_cache.append({
-                "table_name": tname,
-                "columns": col_list,
-                "ddl": ddl,
-                "description": description,
-                "col_lines": col_lines,
-            })
-
-        conn.close()
-        return len(self._tables_cache)
-
-    def _gen_description(self, table_name: str, columns: list[str]) -> str:
-        descriptions = {
-            "dim_region": "区域和城市映射表，包含华北/华东/华南/西南等大区及对应城市",
-            "dim_product": "产品信息表，包含产品名称、所属品类、子品类、品牌和单价",
-            "dim_customer": "客户维度表，包含客户名称、等级、行业和注册日期",
-            "dim_date": "日期维度表，包含年/季度/月/周以及节假日标记",
-            "dim_warehouse": "仓库维度表，包含仓库名称、所在城市和容量",
-            "dim_employee": "员工维度表，包含部门、岗位和入职日期",
-            "fact_sales": "销售记录事实表，含区域、产品、客户、数量、金额、折扣、成本和利润",
-            "fact_returns": "退货记录事实表，关联销售记录，包含退货原因和处理方式",
-            "fact_inventory": "库存记录事实表，按产品+仓库+日期记录库存量、预留量和可售量",
-            "fact_attendance": "考勤记录事实表，关联员工，包含考勤状态和工时",
-        }
-        return descriptions.get(table_name, f"表 {table_name}，包含字段: {', '.join(columns)}")
+        return count
 
     def search_tables(self, query: str, top_k: int = 3) -> list[dict]:
         if not self._tables_cache:

@@ -76,3 +76,12 @@ export interface ReportTemplate {
   createdAt: number
   updatedAt: number
 }
+
+export interface ConversationMessage {
+  id: number
+  role: 'user' | 'assistant'
+  content: string | null
+  message_type: string
+  metadata: unknown
+  created_at: string
+}

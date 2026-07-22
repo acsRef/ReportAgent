@@ -1,115 +1,120 @@
-import { Typography, Space, Button } from 'antd'
+import { Layout, Menu, Typography, Dropdown, Tag } from 'antd'
 import {
   MessageOutlined,
   AppstoreOutlined,
   HistoryOutlined,
-  SaveOutlined,
-  DownloadOutlined,
+  UserOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { useAuthStore } from '../../stores/authStore'
 
 const { Text } = Typography
 
 const NAV_ITEMS = [
-  { key: '/', label: '对话与生成 (Chat)', icon: <MessageOutlined /> },
-  { key: '/templates', label: '模板中心 (Templates)', icon: <AppstoreOutlined /> },
-  { key: '/history', label: '历史报告 (History)', icon: <HistoryOutlined /> },
+  { key: '/', label: '对话与生成', icon: <MessageOutlined /> },
+  { key: '/templates', label: '模板中心', icon: <AppstoreOutlined /> },
+  { key: '/history', label: '历史报告', icon: <HistoryOutlined /> },
 ]
 
 export default function Navbar() {
   const location = useLocation()
   const navigate = useNavigate()
+  const { username, logout } = useAuthStore()
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login')
+  }
 
   return (
-    <header
+    <Layout.Header
       style={{
         height: 52,
-        background: '#001529',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '0 20px',
-        borderBottom: '1px solid rgba(255,255,255,0.08)',
-        flexShrink: 0,
-        zIndex: 100,
+        background: '#0F172A',
+        borderBottom: '1px solid #1E293B',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 18 }}>📊</span>
-          <Text strong style={{ fontSize: 15, color: '#fff', letterSpacing: '0.3px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <rect x="2" y="2" width="9" height="9" rx="2" fill="#3B82F6" />
+            <rect x="13" y="2" width="9" height="9" rx="2" fill="#60A5FA" opacity="0.8" />
+            <rect x="2" y="13" width="9" height="9" rx="2" fill="#60A5FA" opacity="0.8" />
+            <rect x="13" y="13" width="9" height="9" rx="2" fill="#3B82F6" />
+          </svg>
+          <Text strong style={{ fontSize: 15, color: '#F1F5F9', letterSpacing: '0.3px' }}>
             ReportAgent
           </Text>
-          <span
+          <Tag
+            color="default"
             style={{
-              background: 'rgba(255,255,255,0.12)',
               fontSize: 10,
-              padding: '1px 7px',
-              borderRadius: 10,
-              color: '#91caff',
-              fontWeight: 500,
+              lineHeight: '18px',
+              padding: '0 6px',
+              borderRadius: 4,
+              background: 'rgba(59,130,246,0.15)',
+              border: '1px solid rgba(59,130,246,0.3)',
+              color: '#93C5FD',
             }}
           >
-            Enterprise v1.2
-          </span>
+            v2.0
+          </Tag>
         </div>
-
-        <nav style={{ display: 'flex', gap: 2 }}>
-          {NAV_ITEMS.map((item) => {
-            const isActive = location.pathname === item.key
-            return (
-              <div
-                key={item.key}
-                onClick={() => navigate(item.key)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '14px 14px',
-                  cursor: 'pointer',
-                  color: isActive ? '#fff' : 'rgba(255,255,255,0.55)',
-                  borderBottom: '2px solid',
-                  borderBottomColor: isActive ? '#1677ff' : 'transparent',
-                  transition: 'all 0.2s',
-                  fontSize: 13,
-                  fontWeight: isActive ? 500 : 400,
-                  userSelect: 'none',
-                }}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </div>
-            )
-          })}
-        </nav>
+        <Menu
+          mode="horizontal"
+          theme="dark"
+          selectedKeys={[location.pathname]}
+          items={NAV_ITEMS.map((item) => ({
+            key: item.key,
+            icon: item.icon,
+            label: item.label,
+            onClick: () => navigate(item.key),
+          }))}
+          style={{
+            background: 'transparent',
+            borderBottom: 'none',
+            minWidth: 340,
+          }}
+        />
       </div>
 
-      <Space size="small">
-        <Button
-          size="small"
-          icon={<SaveOutlined />}
+      <Dropdown
+        menu={{
+          items: [
+            {
+              key: 'logout',
+              icon: <LogoutOutlined />,
+              label: '退出登录',
+              onClick: handleLogout,
+            },
+          ],
+        }}
+        placement="bottomRight"
+      >
+        <div
           style={{
-            background: 'rgba(255,255,255,0.08)',
-            border: '1px solid rgba(255,255,255,0.15)',
-            color: 'rgba(255,255,255,0.85)',
-            fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            cursor: 'pointer',
+            padding: '4px 10px',
+            borderRadius: 6,
+            color: '#94A3B8',
+            fontSize: 13,
+            transition: 'background 0.15s',
           }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
         >
-          保存为模板
-        </Button>
-        <Button
-          size="small"
-          icon={<DownloadOutlined />}
-          style={{
-            background: 'rgba(255,255,255,0.08)',
-            border: '1px solid rgba(255,255,255,0.15)',
-            color: 'rgba(255,255,255,0.85)',
-            fontSize: 12,
-          }}
-        >
-          导出
-        </Button>
-      </Space>
-    </header>
+          <UserOutlined style={{ fontSize: 14, color: '#94A3B8' }} />
+          <Text style={{ color: '#E2E8F0', fontSize: 13 }}>{username || '用户'}</Text>
+        </div>
+      </Dropdown>
+    </Layout.Header>
   )
 }

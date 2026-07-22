@@ -1,13 +1,21 @@
-import { Typography, List, Empty, Tag } from 'antd'
-import { HistoryOutlined, FileTextOutlined, ClockCircleOutlined } from '@ant-design/icons'
+import { useEffect } from 'react'
+import { Typography, Empty } from 'antd'
+import { HistoryOutlined, FileTextOutlined, ClockCircleOutlined, MessageOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useSessionStore } from '../stores/session'
 
 const { Text, Title } = Typography
 
 export default function HistoryPage() {
-  const { reports } = useSessionStore()
+  const { sessions, fetchSessionsList, loadConversation } = useSessionStore()
   const navigate = useNavigate()
+
+  useEffect(() => { fetchSessionsList() }, [fetchSessionsList])
+
+  const handleClick = (sessionId: string) => {
+    loadConversation(sessionId)
+    navigate('/')
+  }
 
   return (
     <div
@@ -31,48 +39,46 @@ export default function HistoryPage() {
           </Text>
         </div>
 
-        {reports.length === 0 ? (
+        {sessions.length === 0 ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={<Text style={{ fontSize: 13 }}>暂无历史报告</Text>}
             style={{ marginTop: 60 }}
           />
         ) : (
-          <List
-            dataSource={[...reports].reverse()}
-            renderItem={(item) => (
-              <List.Item
-                onClick={() => navigate('/')}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {sessions.map((item) => (
+              <div
+                key={item.session_id}
+                onClick={() => handleClick(item.session_id)}
                 style={{
                   cursor: 'pointer',
                   background: '#fff',
                   borderRadius: 8,
                   padding: '16px 20px',
-                  marginBottom: 8,
                   border: '1px solid #e8e8e8',
-                  transition: 'box-shadow 0.2s',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 12,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, width: '100%' }}>
-                  <FileTextOutlined style={{ color: '#1677ff', fontSize: 18, marginTop: 2 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <Text strong style={{ fontSize: 14, display: 'block' }}>
-                      {item.query}
-                    </Text>
-                    <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <ClockCircleOutlined style={{ fontSize: 11, color: '#999' }} />
-                      <Text type="secondary" style={{ fontSize: 11 }}>
-                        {new Date(item.timestamp).toLocaleString('zh-CN')}
-                      </Text>
-                      <Tag color={item.status === 'done' ? 'success' : 'processing'} style={{ fontSize: 10 }}>
-                        {item.status === 'done' ? '已完成' : '生成中'}
-                      </Tag>
-                    </div>
+                <FileTextOutlined style={{ color: '#1677ff', fontSize: 18, marginTop: 2 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Text strong style={{ fontSize: 14, display: 'block' }}>
+                    {item.first_message}
+                  </Text>
+                  <div style={{ marginTop: 6, display: 'flex', gap: 16, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: '#999' }}>
+                      <MessageOutlined style={{ marginRight: 4 }} />{item.msg_count} 条消息
+                    </span>
+                    <span style={{ fontSize: 11, color: '#999' }}>
+                      <ClockCircleOutlined style={{ marginRight: 4 }} />{new Date(item.last_message).toLocaleString('zh-CN')}
+                    </span>
                   </div>
                 </div>
-              </List.Item>
-            )}
-          />
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>

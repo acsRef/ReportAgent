@@ -70,3 +70,35 @@ class ClarificationRequest(BaseModel):
     question: str
     resume_point: str = "sql"
     alternatives: list[str] = []
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    user_id: int
+    username: str
+
+
+class ConversationMessage(BaseModel):
+    id: int
+    role: str
+    content: str | None
+    message_type: str
+    metadata: dict | None
+    created_at: str
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    msg_count: int
+    first_message: str
+    last_message: str

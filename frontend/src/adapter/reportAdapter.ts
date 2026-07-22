@@ -14,7 +14,7 @@ export function adaptReport(resp: ReportResponse): ReportBlock[] {
     })
   }
 
-  if (answer.text && answer.text !== '查询完成') {
+  if (answer.text) {
     blocks.push({
       id: 'summary',
       type: 'markdown',

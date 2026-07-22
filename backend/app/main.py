@@ -19,7 +19,7 @@ if _llm_key and not os.getenv("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = _llm_key
 
 logger = logging.getLogger(__name__)
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -29,6 +29,11 @@ from app.db import get_connection, close_connection
 from app.infra.db.postgres import init_pool, close_pool
 from app.infra.checkpoint.session import session_manager
 from app.infra.trace.sdk import get_tracer
+from app.infra.auth.repository import ensure_default_user, verify_user
+from app.infra.auth.jwt import create_token
+from app.infra.auth.deps import get_current_user
+from app.infra.conversation.repository import save_message, get_messages, list_sessions
+from app.models.contracts import LoginRequest, RegisterRequest
 
 VECTOR_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
@@ -66,6 +71,7 @@ async def lifespan(app: FastAPI):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     get_connection()
     await init_pool()
+    await ensure_default_user()
     await _check_embedding_dimension()
     _agent = build_parent_graph()
     yield
@@ -93,8 +99,50 @@ async def health():
     return {"status": "ok"}
 
 
+@app.post("/api/v1/auth/login")
+async def login(request: LoginRequest):
+    user = await verify_user(request.username, request.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_token(user["id"], user["username"])
+    return {"access_token": token, "user_id": user["id"], "username": user["username"]}
+
+
+@app.post("/api/v1/auth/register")
+async def register(request: RegisterRequest):
+    from app.infra.auth.repository import verify_user, get_user_by_id
+    from app.infra.db.postgres import get_pool
+    import hashlib
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            "SELECT id FROM app.users WHERE username = $1", request.username
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="Username already exists")
+        pw_hash = hashlib.sha256(request.password.encode()).hexdigest()
+        row = await conn.fetchrow(
+            "INSERT INTO app.users (username, password_hash) VALUES ($1, $2) RETURNING id",
+            request.username, pw_hash,
+        )
+        token = create_token(row["id"], request.username)
+        return {"access_token": token, "user_id": row["id"], "username": request.username}
+
+
+@app.get("/api/v1/sessions")
+async def get_sessions(user: dict = Depends(get_current_user)):
+    sessions = await list_sessions(user["id"])
+    return {"sessions": sessions}
+
+
+@app.get("/api/v1/conversations/{session_id}")
+async def get_conversation(session_id: str, user: dict = Depends(get_current_user)):
+    messages = await get_messages(session_id, user["id"])
+    return {"messages": messages}
+
+
 @app.post("/api/v1/chat")
-async def chat(request: ChatRequest, req: Request):
+async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_current_user)):
     session_id = request.session_id or str(uuid.uuid4())
 
     existing = await session_manager.get_session(session_id)
@@ -109,12 +157,17 @@ async def chat(request: ChatRequest, req: Request):
             session_id, user_id=request.session_id or "anonymous"
         )
 
+    await save_message(session_id, user["id"], "user", request.user_query, "text")
+
     config = {
         "configurable": {"thread_id": session_id},
     }
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         trace_id = str(uuid.uuid4())
+        report_result = None
+        error_result = None
+        clarify_result = None
         try:
             input_data = {
                 "user_query": request.user_query,
@@ -158,6 +211,7 @@ async def chat(request: ChatRequest, req: Request):
                         val = getattr(task, 'interrupt', None)
                         if val is not None:
                             q = val.get("question", "") if isinstance(val, dict) else str(val)
+                            clarify_result = q
                             yield {"event": "clarify", "data": json.dumps({"question": q}, ensure_ascii=False)}
                             interrupted = True
                             break
@@ -169,14 +223,22 @@ async def chat(request: ChatRequest, req: Request):
                 final_state = snapshot.values if snapshot else None
                 if final_state:
                     result = _build_response(final_state)
+                    report_result = result
                     yield {"event": "report", "data": json.dumps(result, ensure_ascii=False)}
                     await session_manager.update_checkpoint_time(session_id)
 
         except Exception as exc:
+            error_result = str(exc)
             yield {"event": "error", "data": str(exc)}
         finally:
             tracer = get_tracer(trace_id)
             await tracer.flush()
+            if clarify_result:
+                await save_message(session_id, user["id"], "assistant", clarify_result, "clarify")
+            elif report_result:
+                await save_message(session_id, user["id"], "assistant", json.dumps(report_result, ensure_ascii=False), "report")
+            elif error_result:
+                await save_message(session_id, user["id"], "assistant", error_result, "error")
 
         yield {"event": "done", "data": ""}
 

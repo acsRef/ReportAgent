@@ -1,12 +1,23 @@
 import { create } from 'zustand'
 import { v4 as uuid } from 'uuid'
-import type { AgentStep, ReportEntry, TimelineEntry, TemplateParams } from '../types/report'
+import type { AgentStep, ReportEntry, TimelineEntry, TemplateParams, ReportTemplate, ConversationMessage } from '../types/report'
 import { chatStream, parseReportData, parseTraceData } from '../api/chat'
+import { fetchSessions as fetchSessionsAPI, fetchConversations as fetchConversationsAPI } from '../api/api'
 import { adaptReport } from '../adapter/reportAdapter'
 
 const SESSION_KEY = 'ragent_session_id'
 const SESSION_TS_KEY = 'ragent_session_ts'
-const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24h
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const HISTORY_KEY = 'ragent_history'
+const TEMPLATES_KEY = 'ragent_templates'
+
+function loadFromStorage<T>(key: string, fallback: T): T {
+  try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback } catch { return fallback }
+}
+
+function saveToStorage(key: string, data: unknown) {
+  try { localStorage.setItem(key, JSON.stringify(data)) } catch { /* quota exceeded */ }
+}
 
 function loadSessionId(): string {
   const stored = localStorage.getItem(SESSION_KEY)
@@ -21,33 +32,52 @@ function loadSessionId(): string {
   return id
 }
 
+type ViewMode = 'chat' | 'running' | 'report'
+type ReportStyle = 'flat'
+
 interface SessionStore {
   sessionId: string
   sessionLabel: string
   currentReport: ReportEntry | null
   reports: ReportEntry[]
+  templates: ReportTemplate[]
   isStreaming: boolean
   currentSteps: AgentStep[]
   timeline: TimelineEntry[]
   templateParams: TemplateParams
   error: string | null
+  viewMode: ViewMode
+  reportStyle: ReportStyle
+  sessions: Array<{ session_id: string; msg_count: number; first_message: string; last_message: string }>
+  chatMessages: ConversationMessage[]
 
   resetSession: () => void
   sendMessage: (text: string) => Promise<void>
   selectReport: (id: string) => void
   setTemplateParams: (params: Partial<TemplateParams>) => void
+  setViewMode: (mode: ViewMode) => void
+  setReportStyle: (style: ReportStyle) => void
+  saveAsTemplate: (name: string, description: string) => void
+  deleteTemplate: (id: string) => void
+  fetchSessionsList: () => Promise<void>
+  loadConversation: (sessionId: string) => Promise<void>
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
   sessionId: loadSessionId(),
   sessionLabel: `#${Math.floor(Math.random() * 9000 + 1000)}`,
   currentReport: null,
-  reports: [],
+  reports: loadFromStorage<ReportEntry[]>(HISTORY_KEY, []),
+  templates: loadFromStorage<ReportTemplate[]>(TEMPLATES_KEY, []),
   isStreaming: false,
   currentSteps: [],
   timeline: [],
   templateParams: { year: '2024', region: '华东区域' },
   error: null,
+  viewMode: 'chat',
+  reportStyle: 'flat',
+  sessions: [],
+  chatMessages: [],
 
   resetSession: () => {
     const id = uuid()
@@ -58,6 +88,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       currentReport: null,
       timeline: [],
       error: null,
+      chatMessages: [],
     })
   },
 
@@ -68,6 +99,51 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   setTemplateParams: (params: Partial<TemplateParams>) => {
     set((s) => ({ templateParams: { ...s.templateParams, ...params } }))
+  },
+
+  setViewMode: (mode: ViewMode) => set({ viewMode: mode }),
+
+  setReportStyle: (style: ReportStyle) => set({ reportStyle: style }),
+
+  saveAsTemplate: (name: string, description: string) => {
+    const { currentReport, templateParams, templates } = get()
+    if (!currentReport) return
+    const tmpl: ReportTemplate = {
+      id: uuid(),
+      name,
+      description,
+      params: { ...templateParams },
+      blocks: currentReport.blocks,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }
+    const updated = [...templates, tmpl]
+    set({ templates: updated })
+    saveToStorage(TEMPLATES_KEY, updated)
+  },
+
+  deleteTemplate: (id: string) => {
+    const updated = get().templates.filter((t) => t.id !== id)
+    set({ templates: updated })
+    saveToStorage(TEMPLATES_KEY, updated)
+  },
+
+  fetchSessionsList: async () => {
+    try {
+      const data = await fetchSessionsAPI()
+      set({ sessions: data.sessions })
+    } catch { /* not authenticated or network error */ }
+  },
+
+  loadConversation: async (sessionId: string) => {
+    set({ sessionId, currentReport: null, viewMode: 'chat' })
+    localStorage.setItem(SESSION_KEY, sessionId)
+    try {
+      const data = await fetchConversationsAPI(sessionId)
+      set({ chatMessages: data.messages as ConversationMessage[] })
+    } catch {
+      set({ chatMessages: [] })
+    }
   },
 
   sendMessage: async (text: string) => {
@@ -89,6 +165,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       currentSteps: [],
       timeline: [],
       error: null,
+      viewMode: 'running',
     })
 
     try {
@@ -211,15 +288,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             ...s.currentReport,
             status: s.currentReport.status === 'generating' ? 'done' as const : s.currentReport.status,
           }
+          const reports = s.reports.map((r) => (r.id === report.id ? report : r))
+          saveToStorage(HISTORY_KEY, reports.slice(-50))
           return {
             isStreaming: false,
             currentReport: report,
-            reports: s.reports.map((r) => (r.id === report.id ? report : r)),
+            reports,
             timeline: s.timeline,
+            viewMode: 'report' as ViewMode,
           }
         }
         return { isStreaming: false }
       })
+      get().fetchSessionsList()
     }
   },
 }))

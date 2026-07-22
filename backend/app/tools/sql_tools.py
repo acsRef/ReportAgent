@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 
 import sqlglot
 from sqlglot import exp as sql_exp
+import psycopg2
+import psycopg2.extras
 
 from decimal import Decimal
 
-from app.db import get_readonly_connection
+PG_DSN = os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent")
+
+
+def _get_pg_conn():
+    """创建同步 PostgreSQL 连接用于分析查询。"""
+    return psycopg2.connect(PG_DSN)
 
 
 DANGEROUS_KEYWORDS = [
@@ -46,12 +54,15 @@ def validate_sql(sql: str) -> str:
     if not safe:
         return json.dumps({"valid": False, "error": msg}, ensure_ascii=False)
 
-    conn = get_readonly_connection()
+    conn = _get_pg_conn()
     try:
-        conn.execute(f"EXPLAIN {sql}")
+        with conn.cursor() as cur:
+            cur.execute(f"EXPLAIN {sql}")
         return json.dumps({"valid": True, "error": ""}, ensure_ascii=False)
     except Exception as exc:
         return json.dumps({"valid": False, "error": str(exc)}, ensure_ascii=False)
+    finally:
+        conn.close()
 
 
 def execute_sql(sql: str) -> str:
@@ -60,22 +71,24 @@ def execute_sql(sql: str) -> str:
     if not safe:
         return json.dumps({"error": msg, "columns": [], "rows": []}, ensure_ascii=False)
 
-    conn = get_readonly_connection()
+    conn = _get_pg_conn()
     try:
-        result = conn.execute(sql)
-        columns = [{"name": desc[0], "type": str(desc[1])} for desc in result.description]
-        col_keys = [c["name"] for c in columns]
-        raw_rows = result.fetchall()
-        rows = []
-        for row in raw_rows:
-            row_dict = dict(zip(col_keys, row))
-            for k, v in row_dict.items():
-                if isinstance(v, Decimal):
-                    row_dict[k] = float(v)
-            rows.append(row_dict)
-        return json.dumps({"columns": columns, "rows": rows}, ensure_ascii=False, default=str)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            columns = [{"name": desc.name, "type": str(desc.type_code)} for desc in cur.description]
+            raw_rows = cur.fetchall()
+            rows = []
+            for row in raw_rows:
+                row_dict = dict(row)
+                for k, v in row_dict.items():
+                    if isinstance(v, Decimal):
+                        row_dict[k] = float(v)
+                rows.append(row_dict)
+            return json.dumps({"columns": columns, "rows": rows}, ensure_ascii=False, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc), "columns": [], "rows": []}, ensure_ascii=False)
+    finally:
+        conn.close()
 
 
 def chart_advisor(sql_result: str) -> str:
