@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import logging
 
 from langchain_openai import ChatOpenAI
 
@@ -12,6 +13,50 @@ _LLM_CONFIG = {
     "base_url": os.getenv("LLM_BASE_URL", "https://api.minimax.chat/v1"),
     "temperature": 0.1,
 }
+
+# Whitelist of tool names exposed to the user-facing intent analysis step
+# (stage 1 of the 3-stage report-generation UX). The registry is dynamic, so
+# we only filter — we don't hardcode descriptions. To add or remove a tool,
+# edit this set; everything else (description, schema) flows from the registry.
+_INTENT_TOOL_WHITELIST = {
+    "group_compare",
+    "trend_analysis",
+    "detect_anomaly",
+    "chart_advisor",
+    "insight_analyst",
+}
+
+
+def _format_tools_for_prompt() -> str:
+    """Render the available tool list (from the dynamic registry) for stage 1.
+
+    Falls back to an empty list if the registry hasn't been populated yet
+    (e.g., during import-time inspection).
+    """
+    try:
+        from app.tools import register_all_tools
+        from app.tools.registry import registry
+        # Idempotent: `register_all_tools` does dedup by tool name internally.
+        register_all_tools()
+    except Exception:
+        pass
+
+    try:
+        from app.tools.registry import registry
+        lines = []
+        # all_tools() returns dict[name, ToolMetadata]
+        all_tools = registry.all_tools()
+        for name, meta in all_tools.items():
+            if name not in _INTENT_TOOL_WHITELIST:
+                continue
+            # ToolMetadata.description may be long; take the first sentence-ish.
+            desc = (meta.description or "").strip().split("\n", 1)[0]
+            lines.append(f"- {name}: {desc}")
+        return "\n".join(lines)
+    except Exception as exc:  # registry not initialized yet (very early import)
+        logger = logging.getLogger(__name__)
+        logger.warning("registry unavailable for _format_tools_for_prompt: %s", exc)
+        return ""
 
 
 def get_chat_llm(**kwargs) -> ChatOpenAI:

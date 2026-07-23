@@ -3,7 +3,7 @@ import type { SSEEvent, SSEEventType } from '../types/report'
 /** 解析单个 SSE 事件文本（已由调用方按 \n\n 分割） */
 export function parseSSEChunk(chunk: string): SSEEvent[] {
   const lines = chunk.split('\n')
-  let event: SSEEventType = 'done'
+  let event: SSEEventType | null = null
   let data = ''
 
   for (const line of lines) {
@@ -12,6 +12,11 @@ export function parseSSEChunk(chunk: string): SSEEvent[] {
     } else if (line.startsWith('data: ')) {
       data = data ? data + '\n' + line.slice(6) : line.slice(6)
     }
+  }
+
+  if (!event) {
+    console.warn('[SSE] Ignoring event without an event field')
+    return []
   }
 
   return [{ event, data }]

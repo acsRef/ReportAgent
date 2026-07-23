@@ -7,6 +7,7 @@ import ChatPage from './pages/ChatPage'
 import TemplateCenter from './pages/TemplateCenter'
 import HistoryPage from './pages/HistoryPage'
 import LoginPage from './pages/LoginPage'
+import StandaloneReportPage from './pages/StandaloneReportPage'
 import { useAuthStore } from './stores/authStore'
 
 function AuthGuard() {
@@ -23,6 +24,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/report/:sessionId" element={<StandaloneReportPage />} />
           <Route element={<AuthGuard />}>
             <Route element={<AppShell />}>
               <Route path="/" element={<ChatPage />} />

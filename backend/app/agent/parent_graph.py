@@ -1,13 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from typing import Literal, Optional, TypedDict
+import logging
+from typing import Any, Literal, Optional, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
 from app.agent.data_graph import build_data_graph
-from app.agent.sql_graph import build_sql_graph
+from app.agent.sql_graph import ChatCard, build_sql_graph
 from app.agent.report_graph import build_report_graph
 from app.infra.memory.memory_manager import MemoryManager
 from app.infra.trace.sdk import get_tracer, traced_node
@@ -23,6 +24,8 @@ from app.models.contracts import (
 from app.agent.security_guard import SecurityGuard
 from app.tools.registry import registry
 from app.tools.__init__ import register_all_tools
+
+logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
@@ -51,6 +54,24 @@ class AgentState(TypedDict):
     security_score: int
     security_level: str
     security_warning: str
+
+    # Chat card fields (new) — populated by the sql_agent node when
+    # `query_plan.clarify_decision.action == "clarify"`. The SSE stream
+    # handler in main.py reads `pending_card` after astream_events ends
+    # and emits a single `event: card` frame, then clears the field.
+    pending_card: Optional[ChatCard]
+    cards: list[ChatCard]  # cumulative history within a turn
+
+    # Round-2 of the intent_card flow: when the user clicks an intent option,
+    # the frontend re-issues the request with `chosen_tool` set in the body.
+    # main.py writes it into state via `_agent.update_state`. When set, the
+    # `_run_sql_agent` node skips the stage-1 intent analyzer and goes
+    # straight into planning + SQL generation.
+    chosen_tool: Optional[str] = None
+    intent_card: Optional[ChatCard] = None
+    intent_needs_options_group: bool = False
+    intent_confidence: float = 0.0
+    intent_reasoning: str = ""
 
 
 # --- Security Guard ---
@@ -168,6 +189,40 @@ async def _run_sql_agent(state: AgentState) -> dict:
     else:
         schema_input = None
     parent_retries = state.get("retry_count", 0)
+
+    # Stage-1 intent-card short-circuit:
+    # If this is the first pass on this user_query (no `chosen_tool` chosen
+    # yet), run the lightweight intent analyzer and emit `event: card {type:
+    # intent_card}`. Stop the SQL subgraph entirely. The frontend will receive
+    # the card, prompt the user, and re-issue the request with
+    # `chosen_tool` set — at which point we skip intent and go straight to
+    # plan → generate_sql.
+    chosen_tool = state.get("chosen_tool") or state.get("metadata", {}).get("chosen_tool")
+    logger.info(
+        "sql_agent: chosen_tool=%r (state.chosen_tool=%r, state.metadata=%r)",
+        chosen_tool, state.get("chosen_tool"), state.get("metadata"),
+    )
+    if not chosen_tool:
+        from app.agent.sql_graph import _intent_analyze as _run_intent
+        intent_state = {
+            "user_query": state.get("current_query", state["user_query"]),
+            "intent_card": None,
+            "intent_needs_options_group": False,
+            "intent_confidence": 0.0,
+            "intent_reasoning": "",
+            "execution_status": "",
+        }
+        intent_result = _run_intent(intent_state)  # type: ignore[arg-type]
+        # Mark trace + bubble the intent_card up so main.py can emit it.
+        return {
+            "query_plan": None,
+            "query_result": None,
+            "execution_status": "INTENT_AWAIT",
+            "error": None,
+            "pending_card": ChatCard(**intent_result["intent_card"]) if intent_result.get("intent_card") else None,
+            "cards": [ChatCard(**intent_result["intent_card"])] if intent_result.get("intent_card") else [],
+        }
+
     ss = await sql_graph.ainvoke({
         "schema_context": schema_input,
         "user_query": state.get("current_query", state["user_query"]),
@@ -179,6 +234,7 @@ async def _run_sql_agent(state: AgentState) -> dict:
         "error": None,
         "retry_counters": {"plan": 0, "sql_generation": parent_retries},
         "trace_id": state.get("trace_id", ""),
+        "chosen_tool": chosen_tool,
     })
     error_raw = ss.get("error")
     if error_raw and isinstance(error_raw, str):
@@ -203,13 +259,124 @@ async def _run_sql_agent(state: AgentState) -> dict:
         except Exception:
             pass
 
+    # Pre-SQL clarification: if the plan node decided we need to clarify,
+    # build a card payload and route via execution_status rather than forcing
+    # the parent graph to inspect query_plan everywhere. The card is stored
+    # in state so the SSE layer can emit `event: card` after the node returns.
+    qp = ss.get("query_plan")
+    decision: dict[str, Any] = {}
+    if qp is not None:
+        cd = getattr(qp, "clarify_decision", None)
+        if cd is not None:
+            if isinstance(cd, dict):
+                decision = cd
+            else:
+                decision = cd.model_dump() if hasattr(cd, "model_dump") else {}
+
+    should_clarify = decision.get("action") == "clarify"
+    pending_card: Optional[ChatCard] = None
+    new_status = status
+    if should_clarify:
+        pending_card = _build_options_group_card(
+            user_query=state.get("current_query", state["user_query"]),
+            decision=decision,
+        )
+        # Route through the existing _route_evaluate → clarify branch by
+        # surfacing the same NEED_CLARIFICATION status. This keeps all
+        # downstream consumers (evaluate, retry logic) unchanged.
+        new_status = "NEED_CLARIFICATION"
+        error_obj = error_obj or ErrorDetail(
+            code="NEED_CLARIFICATION",
+            message="需要补充信息以完成查询",
+        )
+        logger.info(
+            "sql_agent: pre-SQL clarification triggered, confidence=%.2f, missing=%s",
+            decision.get("confidence", 0.0),
+            decision.get("missing_dimensions", []),
+        )
+
+    cards_history = list(state.get("cards") or [])
+    if pending_card is not None:
+        cards_history.append(pending_card)
+
     return {
         "query_plan": ss.get("query_plan"),
         "query_result": qr,
-        "execution_status": status,
+        "execution_status": new_status,
         "error": error_obj,
         "retry_count": state.get("retry_count", 0) + 1,
+        "pending_card": pending_card,
+        "cards": cards_history,
     }
+
+
+def _build_options_group_card(user_query: str, decision: dict) -> ChatCard:
+    """Construct an `options_group` chat card from a clarification decision.
+
+    The card groups options by the missing dimensions identified by the
+    `plan` node. This is the only card type emitted in the prototype
+    release; `preview_card` support is reserved for follow-up work.
+    """
+    missing = decision.get("missing_dimensions") or []
+    predicted_table = decision.get("predicted_table")
+    reasoning = decision.get("reasoning") or ""
+
+    time_opts = [
+        {"label": "本月", "value": {"time_range": "本月"}},
+        {"label": "上月", "value": {"time_range": "上月"}},
+        {"label": "本季度", "value": {"time_range": "本季度"}},
+        {"label": "今年", "value": {"time_range": "今年"}},
+    ]
+    region_opts = [
+        {"label": "华东", "value": {"region": "华东"}},
+        {"label": "华北", "value": {"region": "华北"}},
+        {"label": "华南", "value": {"region": "华南"}},
+        {"label": "全部区域", "value": {"region": "ALL"}},
+    ]
+    metric_opts = [
+        {"label": "销售额", "value": {"metric": "销售额"}},
+        {"label": "销售量", "value": {"metric": "销售量"}},
+        {"label": "订单数", "value": {"metric": "订单数"}},
+        {"label": "毛利率", "value": {"metric": "毛利率"}},
+    ]
+
+    dim_to_opts = {"time": time_opts, "region": region_opts, "metric": metric_opts,
+                   "时间": time_opts, "区域": region_opts, "指标": metric_opts,
+                   "time_range": time_opts, "metric_type": metric_opts}
+
+    # 当 LLM 决策 clarify 但没明确缺什么,默认推 3 个维度兜底
+    if not missing:
+        missing = ["time", "region", "metric"]
+
+    groups = []
+    for d in missing:
+        opts = dim_to_opts.get(d)
+        if opts:
+            groups.append({
+                "dimension": d,
+                "options": opts,
+            })
+
+    # 兜底 2:即便 LLM 报了维度名,结果 groups 仍为空,强制给全 3 组
+    if not groups:
+        for k in ("time", "region", "metric"):
+            groups.append({"dimension": k, "options": dim_to_opts[k]})
+
+    return ChatCard(
+        type="options_group",
+        version=1,
+        payload={
+            "title": "请补充以下信息以继续查询",
+            "subtitle": user_query,
+            "groups": groups,
+            "predicted_table": predicted_table,
+            "reasoning": reasoning,
+            "actions": [
+                {"label": "确认", "kind": "primary"},
+                {"label": "修改", "kind": "secondary"},
+            ],
+        },
+    )
 
 
 # --- Evaluate Node ---
@@ -226,6 +393,11 @@ def _route_evaluate(state: AgentState) -> Literal["report_agent", "clarify", "__
         tracer = get_tracer(state.get("trace_id", ""))
         tracer.end("NEED_CLARIFICATION")
         return "clarify"
+    elif status == "INTENT_AWAIT":
+        # Stage-1 intent card emitted; pause graph and wait for user choice.
+        tracer = get_tracer(state.get("trace_id", ""))
+        tracer.end("INTENT_AWAIT")
+        return "__end__"
     else:
         if state.get("retry_count", 0) <= 3:
             return "sql_agent"

@@ -116,3 +116,4 @@ Many `.py` files show `%TSD-Header-###%` (encrypted placeholders). Read via `git
 - Embedding uses SiliconFlow API (`.env`: `SILICONFLOW_API_KEY`), separate from LLM (MiniMax)
 - Session persisted in `localStorage` key `ragent_session_id` (Zustand, `stores/session.ts`)
 - No Cursor rules (`.cursor/rules/`) or Copilot instructions (`.github/copilot-instructions.md`) exist
+</｜DSML｜content>

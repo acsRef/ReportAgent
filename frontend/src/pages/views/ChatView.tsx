@@ -1,33 +1,73 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Typography, Input, Button, Spin } from 'antd'
-import { SendOutlined, UserOutlined, RobotOutlined, CheckCircleOutlined, LoadingOutlined, FileTextOutlined } from '@ant-design/icons'
+import type { InputRef } from 'antd'
+import { SendOutlined, UserOutlined, CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons'
+import { v4 as uuid } from 'uuid'
+
 import { useSessionStore } from '../../stores/session'
 import { adaptReport } from '../../adapter/reportAdapter'
 import EmptyState from '../../components/chat/EmptyState'
-import type { ConversationMessage, ReportEntry } from '../../types/report'
-import { v4 as uuid } from 'uuid'
+import ChatCards from '../../components/chat/ChatCards'
+import { IconChevronRight, IconLogo, IconReport, IconStop } from '../../components/ui/Icons'
+import type { ConversationMessage, ReportEntry, ChatCard } from '../../types/report'
+import { isChatCard } from '../../types/report'
 
 const { Text } = Typography
 const { TextArea } = Input
 
 const styles: Record<string, React.CSSProperties> = {
   messageBubble: {
-    padding: '10px 14px',
-    borderRadius: 10,
-    fontSize: 13,
-    lineHeight: 1.6,
-    boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+    padding: '12px 16px',
+    borderRadius: 8,
+    fontSize: 16,
+    lineHeight: 1.5,
+    boxShadow: 'none',
   },
 }
 
 export default function ChatView() {
   const {
-    currentReport, isStreaming, timeline, error, chatMessages,
-    sendMessage, setViewMode,
+    currentReport, busy, timeline, error, chatMessages, cardsByMessage,
+    intentPhase, busyStartedAt,
+    sendMessage, setViewMode, cancel,
   } = useSessionStore()
 
   const [inputText, setInputText] = useState('')
+  const [now, setNow] = useState(Date.now())
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<InputRef>(null)
+
+  // Heartbeat for the busy-timeout / "is it stuck?" banner.
+  useEffect(() => {
+    if (!busy) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [busy])
+
+  // 60s auto-cancel: if the busy state has lasted 60s and the user hasn't
+  // been nudged, give up and turn this into an error.
+  useEffect(() => {
+    if (!busy || !busyStartedAt) return
+    const elapsed = now - busyStartedAt
+    const remaining = 60_000 - elapsed
+    if (remaining <= 0) {
+      cancel()
+      useSessionStore.setState({
+        error: '生成超过 60 秒未响应,已自动取消',
+        intentPhase: 'error',
+      })
+      return
+    }
+    if (remaining > 5000) return
+    const t = setTimeout(() => {
+      cancel()
+      useSessionStore.setState({
+        error: '生成超过 60 秒未响应,已自动取消',
+        intentPhase: 'error',
+      })
+    }, remaining)
+    return () => clearTimeout(t)
+  }, [busy, busyStartedAt, now, cancel])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -35,15 +75,14 @@ export default function ChatView() {
 
   const handleSend = useCallback(() => {
     const trimmed = inputText.trim()
-    if (!trimmed || isStreaming) return
+    if (!trimmed || busy) return
     sendMessage(trimmed)
     setInputText('')
-  }, [inputText, isStreaming, sendMessage])
+  }, [inputText, busy, sendMessage])
 
   const handleExample = useCallback((query: string) => {
     sendMessage(query)
   }, [sendMessage])
-
   const viewReport = useCallback((reportData: Record<string, unknown>, queryText: string) => {
     const resp = reportData as unknown as Parameters<typeof adaptReport>[0]
     const blocks = adaptReport(resp)
@@ -71,14 +110,18 @@ export default function ChatView() {
     role: 'user' | 'assistant'
     content: string
     msgType?: string
-    isStreaming?: boolean
+    busy?: boolean
     reportData?: Record<string, unknown> | null
+    cards?: ChatCard[]
+    showStuck?: boolean
+    stuckSeconds?: number
   }
 
   const displayMessages: DisplayMsg[] = []
 
   for (const msg of chatMessages) {
     const reportData = getReportFromMessage(msg)
+    const cards = msg.metadata?.cards?.filter(isChatCard)
     displayMessages.push({
       id: `hist-${msg.id}`,
       role: msg.role,
@@ -87,10 +130,11 @@ export default function ChatView() {
         : (msg.content || ''),
       msgType: msg.message_type,
       reportData,
+      cards,
     })
   }
 
-  if (currentReport || isStreaming) {
+  if (currentReport || busy || intentPhase !== 'idle') {
     if (currentReport?.query) {
       displayMessages.push({
         id: 'cur-user',
@@ -99,20 +143,43 @@ export default function ChatView() {
       })
     }
 
-    const runningNode = timeline.find(t => t.status === 'running')
-    const statusText = !runningNode ? '正在分析数据...'
-      : runningNode.nodeName.includes('sql') || runningNode.nodeName.includes('plan') ? '正在生成查询...'
-      : runningNode.nodeName.includes('execute') ? '正在执行查询...'
-      : runningNode.nodeName.includes('report') || runningNode.nodeName.includes('chart') || runningNode.nodeName.includes('可视化') ? '正在生成报表...'
-      : runningNode.nodeName.includes('security') ? '正在安全审查...'
-      : '正在分析数据...'
+    const runningNode = timeline.length > 0 ? timeline[timeline.length - 1] : null
+    const phaseText =
+      intentPhase === 'analyzing' && busy ? '🧠 正在分析你的意图…'
+      : intentPhase === 'clarifying' && busy ? '💭 等待你确认查询维度…'
+      : intentPhase === 'error' ? '⚠️ 生成已中断'
+      : !runningNode ? '正在分析数据…'
+      : runningNode.nodeName.match(/plan_clarify|intent_analyz/) ? '🧠 正在分析你的意图…'
+      : runningNode.nodeName.match(/sql_plan|_plan[^_]|^plan$/) ? '📋 正在规划查询…'
+      : runningNode.nodeName.match(/sql_generate|generate_sql/) ? '✍️ 正在生成 SQL…'
+      : runningNode.nodeName.match(/sql_validate|sql_evaluat/) ? '🔍 正在校验 SQL…'
+      : runningNode.nodeName.match(/sql_execute|^execute$/) ? '⏳ 正在执行查询…'
+      : runningNode.nodeName.match(/build_output/) ? '🧮 正在整理结果…'
+      : runningNode.nodeName.match(/plan_analysis/) ? '📊 正在分析数据模式…'
+      : runningNode.nodeName.match(/run_step/) ? '📈 正在生成可视化…'
+      : runningNode.nodeName.match(/report_build/) ? '🎨 正在装配最终报告…'
+      : runningNode.nodeName.match(/security_guard/) ? '🛡️ 正在安全审查…'
+      : '正在分析数据…'
+
+    const statusText = busy
+      ? phaseText
+      : (intentPhase === 'report' ? '' : (currentReport?.content || ''))
+
+    // Stuck banner: show after 30s of silence.
+    const stuckSeconds = (busy && busyStartedAt)
+      ? Math.floor((now - busyStartedAt) / 1000)
+      : 0
+    const showStuck = busy && stuckSeconds >= 30
 
     displayMessages.push({
-      id: 'cur-ast',
+      id: currentReport?.id ?? 'cur-ast',
       role: 'assistant',
-      content: isStreaming ? statusText : (currentReport?.content || ''),
-      isStreaming,
-      msgType: isStreaming ? 'streaming' : 'done',
+      content: statusText,
+      busy,
+      showStuck,
+      stuckSeconds,
+      msgType: busy ? 'streaming' : (intentPhase === 'error' ? 'error' : 'done'),
+      cards: currentReport ? cardsByMessage[currentReport.id] : undefined,
     })
   }
 
@@ -124,7 +191,7 @@ export default function ChatView() {
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <EmptyState onExampleClick={handleExample} />
         </div>
-        <InputArea value={inputText} onChange={setInputText} onSend={handleSend} disabled={isStreaming} />
+        <InputArea inputRef={inputRef} value={inputText} onChange={setInputText} onSend={handleSend} onCancel={cancel} disabled={busy} />
       </div>
     )
   }
@@ -132,7 +199,7 @@ export default function ChatView() {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{
-        flex: 1, overflowY: 'auto', padding: '20px 24px',
+        flex: 1, overflowY: 'auto', padding: 24,
         display: 'flex', flexDirection: 'column', gap: 16,
       }}>
         {displayMessages.map((msg) =>
@@ -145,19 +212,19 @@ export default function ChatView() {
               }}
             >
               <div style={{
-                width: 28, height: 28, borderRadius: 14,
-                background: 'linear-gradient(135deg, #1E40AF, #3B82F6)',
+                width: 32, height: 32, borderRadius: 16,
+                background: '#EFF6FF',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0, color: '#fff', fontSize: 13,
-                boxShadow: '0 2px 4px rgba(30,64,175,0.3)',
+                flexShrink: 0, color: '#1677FF', fontSize: 14,
+                border: '1px solid #E5E7EB',
               }}>
                 <UserOutlined />
               </div>
               <div style={{
                 ...styles.messageBubble,
-                background: 'linear-gradient(135deg, #1E40AF, #2563EB)',
-                color: '#FFFFFF',
-                borderBottomRightRadius: 2,
+                background: '#EFF6FF',
+                color: '#0F172A',
+                border: '1px solid #E5E7EB',
               }}>
                 {msg.content}
               </div>
@@ -171,98 +238,157 @@ export default function ChatView() {
               }}
             >
               <div style={{
-                width: 28, height: 28, borderRadius: 14,
-                background: '#F1F5F9',
+                width: 32, height: 32, borderRadius: 16,
+                background: '#FAFAFA',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0, color: '#64748B', fontSize: 13,
-                border: '1px solid #E2E8F0',
+                flexShrink: 0, color: '#6B7280', fontSize: 14,
+                border: '1px solid #E5E7EB',
               }}>
-                <RobotOutlined />
+                <IconLogo />
               </div>
               <div style={{
                 ...styles.messageBubble,
                 background: '#FFFFFF',
-                border: '1px solid #E2E8F0',
-                borderBottomLeftRadius: 2,
-                color: '#1E293B',
+                border: '1px solid #E5E7EB',
+                color: '#0F172A',
                 minWidth: 60,
               }}>
-                {msg.isStreaming ? (
+                {msg.busy ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Spin indicator={<LoadingOutlined style={{ fontSize: 14, color: '#3B82F6' }} />} size="small" />
-                    <Text style={{ color: '#64748B', fontSize: 12 }}>{msg.content}</Text>
+                    <Spin indicator={<LoadingOutlined style={{ fontSize: 14, color: '#1677FF' }} />} size="small" />
+                    <Text style={{ color: '#6B7280', fontSize: 12 }}>{msg.content}</Text>
                   </div>
                 ) : msg.reportData ? (
                   <div>
-                    <Text style={{ fontSize: 12, color: '#1E293B' }}>{msg.content}</Text>
-                    <div style={{ marginTop: 10 }}>
+                    <Text style={{ fontSize: 14, color: '#0F172A' }}>{msg.content}</Text>
+                    <div style={{ marginTop: 12 }}>
                       <Button
-                        type="primary"
+                        type="default"
                         size="small"
-                        ghost
                         onClick={() => viewReport(msg.reportData!, msg.content)}
-                        style={{ fontSize: 12, padding: '2px 12px', borderRadius: 6 }}
+                        icon={<IconReport />}
+                        style={{ fontSize: 13, padding: '4px 12px', borderRadius: 6, boxShadow: 'none' }}
                       >
-                        <FileTextOutlined style={{ marginRight: 4 }} />查看完整报告 →
+                        查看完整报告 <IconChevronRight />
                       </Button>
                     </div>
                   </div>
                 ) : msg.msgType === 'error' ? (
-                  <Text style={{ color: '#DC2626', fontSize: 12 }}>{msg.content}</Text>
+                  <Text style={{ color: '#EF4444', fontSize: 12 }}>{msg.content}</Text>
                 ) : msg.msgType === 'clarify' ? (
-                  <Text style={{ fontSize: 12, color: '#1E40AF' }}>{msg.content}</Text>
-                ) : !msg.content ? (
+                  <Text style={{ fontSize: 14, color: '#1677FF' }}>{msg.content}</Text>
+                ) : !msg.content && !msg.cards?.length ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <CheckCircleOutlined style={{ color: '#059669', fontSize: 14 }} />
-                    <Text style={{ fontSize: 12, color: '#059669' }}>报告生成完成</Text>
+                    <CheckCircleOutlined style={{ color: '#10B981', fontSize: 14 }} />
+                    <Text style={{ fontSize: 12, color: '#10B981' }}>报告生成完成</Text>
                     <Button
                       type="primary"
                       size="small"
                       ghost
                       onClick={() => setViewMode('report')}
-                      style={{ fontSize: 12, padding: '2px 12px', borderRadius: 6, marginLeft: 4 }}
+                      style={{ fontSize: 13, padding: '4px 12px', borderRadius: 6, marginLeft: 4, boxShadow: 'none' }}
                     >
-                      查看完整报告 →
+                      查看完整报告 <IconChevronRight />
                     </Button>
                   </div>
                 ) : (
-                  <Text style={{ fontSize: 13, whiteSpace: 'pre-wrap', color: '#1E293B' }}>{msg.content}</Text>
+                  <div>
+                    {msg.content ? <Text style={{ fontSize: 14, whiteSpace: 'pre-wrap', color: '#0F172A' }}>{msg.content}</Text> : null}
+                    {msg.cards?.map((card) => (
+                      <ChatCards
+                        key={`${card.id}-${card.version}`}
+                        type={card.type}
+                        data={card}
+                        cardId={card.id}
+                        onModify={() => {
+                          const synthesized = 'synthesized_query' in card ? card.synthesized_query : undefined
+                          setInputText(synthesized ?? currentReport?.query ?? '')
+                          window.setTimeout(() => inputRef.current?.focus(), 0)
+                        }}
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
           )
         )}
-        {error && !isStreaming && (
+        {displayMessages.some((m) => m.showStuck) && (
           <div style={{
-            background: '#FEF2F2',
-            border: '1px solid #FECACA',
-            borderRadius: 8,
-            padding: '10px 14px',
-            fontSize: 12,
-            color: '#DC2626',
+            alignSelf: 'center',
+            background: '#FEF3C7', border: '1px solid #F59E0B',
+            borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#92400E',
+            display: 'flex', alignItems: 'center', gap: 10, maxWidth: '70%',
           }}>
-            {error}
+            <span>⏳ 这次想得有点久(已等 {(displayMessages.find((m) => m.showStuck)?.stuckSeconds ?? 0)}s)。要不要继续?</span>
+            <Button size="small" type="default" onClick={() => { useSessionStore.getState().cancel() }}
+              style={{ fontSize: 12, padding: '2px 10px', borderRadius: 4 }}>
+              重试
+            </Button>
+            <Button size="small" type="primary" danger onClick={() => { useSessionStore.getState().cancel(); setInputText(currentReport?.query ?? '') }}
+              style={{ fontSize: 12, padding: '2px 10px', borderRadius: 4 }}>
+              取消
+            </Button>
+          </div>
+        )}
+
+        {error && !busy && (
+          <div style={{
+            alignSelf: 'center',
+            background: '#FEF2F2',
+            border: '1px solid #EF4444',
+            borderRadius: 8,
+            padding: '12px 16px',
+            fontSize: 14,
+            color: '#991B1B',
+            maxWidth: '70%',
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 16 }}>⚠️</span>
+              <strong>生成已中断</strong>
+            </div>
+            <span style={{ fontSize: 13 }}>{error}</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button size="small" type="primary" onClick={() => {
+                if (currentReport?.query) sendMessage(currentReport.query)
+              }}
+                style={{ fontSize: 12, padding: '2px 10px', borderRadius: 4 }}>
+                重试同样条件
+              </Button>
+              <Button size="small" onClick={() => {
+                setInputText(currentReport?.query ?? '')
+                window.setTimeout(() => inputRef.current?.focus(), 0)
+              }}
+                style={{ fontSize: 12, padding: '2px 10px', borderRadius: 4 }}>
+                修改问题
+              </Button>
+            </div>
           </div>
         )}
         <div ref={messagesEndRef} />
       </div>
-      <InputArea value={inputText} onChange={setInputText} onSend={handleSend} disabled={isStreaming} />
+      <InputArea inputRef={inputRef} value={inputText} onChange={setInputText} onSend={handleSend} onCancel={cancel} disabled={busy} />
     </div>
   )
 }
 
-function InputArea({ value, onChange, onSend, disabled }: {
+interface InputAreaProps {
+  inputRef: React.RefObject<InputRef | null>
   value: string
-  onChange: (v: string) => void
+  onChange: (value: string) => void
   onSend: () => void
+  onCancel: () => void
   disabled: boolean
-}) {
+}
+
+function InputArea({ inputRef, value, onChange, onSend, onCancel, disabled }: InputAreaProps) {
   const [focused, setFocused] = useState(false)
 
   return (
     <div style={{
-      padding: '12px 16px',
-      borderTop: '1px solid #E2E8F0',
+      padding: '12px 24px',
+      borderTop: '1px solid #E5E7EB',
       background: '#FFFFFF',
       flexShrink: 0,
     }}>
@@ -270,13 +396,15 @@ function InputArea({ value, onChange, onSend, disabled }: {
         display: 'flex',
         gap: 8,
         alignItems: 'flex-end',
-        background: '#F8FAFC',
-        border: `1px solid ${focused ? '#3B82F6' : '#E2E8F0'}`,
-        borderRadius: 10,
-        padding: '6px 6px 6px 14px',
+        background: '#FFFFFF',
+        border: `1px solid ${focused ? '#1677FF' : '#E5E7EB'}`,
+        borderRadius: 8,
+        padding: '8px 8px 8px 16px',
         transition: 'border-color 0.2s',
+        boxShadow: 'none',
       }}>
         <TextArea
+          ref={inputRef}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onFocus={() => setFocused(true)}
@@ -291,32 +419,32 @@ function InputArea({ value, onChange, onSend, disabled }: {
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={disabled}
           variant="borderless"
-          style={{ fontSize: 13, resize: 'none' }}
+          style={{ fontSize: 14, lineHeight: 1.5, resize: 'none', color: '#0F172A' }}
         />
         <Button
           type="primary"
-          shape="round"
-          icon={<SendOutlined />}
-          onClick={onSend}
-          disabled={disabled || !value.trim()}
-          loading={disabled}
+          icon={disabled ? <IconStop /> : <SendOutlined />}
+          onClick={disabled ? onCancel : onSend}
+          disabled={!disabled && !value.trim()}
           style={{
-            height: 34,
-            minWidth: 34,
-            width: disabled ? 'auto' : 34,
-            padding: disabled ? '0 14px' : 0,
+            height: 32,
+            minWidth: 32,
+            width: disabled ? 'auto' : 32,
+            padding: disabled ? '0 12px' : 0,
+            borderRadius: 6,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
-            boxShadow: disabled ? 'none' : '0 2px 4px rgba(30,64,175,0.3)',
+            fontWeight: 500,
+            boxShadow: 'none',
           }}
         >
-          {disabled ? '生成中' : ''}
+          {disabled ? '停止' : ''}
         </Button>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, padding: '0 4px' }}>
-        <Text style={{ fontSize: 11, color: '#94A3B8' }}>Shift+Enter 换行 · Enter 发送</Text>
+        <Text style={{ fontSize: 11, color: '#9CA3AF' }}>Shift+Enter 换行 · Enter 发送</Text>
       </div>
     </div>
   )

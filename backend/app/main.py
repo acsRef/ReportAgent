@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -24,7 +24,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from app.agent.parent_graph import build_parent_graph
+from app.agent.parent_graph import AgentState, build_parent_graph
+from app.agent.sql_graph import ChatCard
 from app.db import get_connection, close_connection
 from app.infra.db.postgres import init_pool, close_pool
 from app.infra.checkpoint.session import session_manager
@@ -63,6 +64,8 @@ _server_start_time = datetime.datetime.now()
 class ChatRequest(BaseModel):
     user_query: str
     session_id: str | None = None
+    chosen_tool: str | None = None
+    metadata: dict | None = None
 
 
 @asynccontextmanager
@@ -168,6 +171,7 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
         report_result = None
         error_result = None
         clarify_result = None
+        pending_card: ChatCard | None = None
         try:
             input_data = {
                 "user_query": request.user_query,
@@ -192,10 +196,28 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
                 "security_score": 0,
                 "security_level": "LOW",
                 "security_warning": "",
+                "pending_card": None,
+                "cards": [],
             } if is_new else None
 
+            # If the user already chose an intent tool (round-2 of the
+            # intent_card flow), inject it into the LangGraph state before
+            # resuming. `_run_sql_agent` reads `chosen_tool` from state.
+            # We inject for BOTH new and existing sessions — `update_state`
+            # is idempotent (last write wins on subsequent astream_events
+            # input).
+            if request.chosen_tool:
+                try:
+                    _agent.update_state(config, {"chosen_tool": request.chosen_tool})
+                    snapshot = _agent.get_state(config)
+                    cur = (snapshot.values or {}).get("chosen_tool") if snapshot else None
+                    logger.info("chosen_tool=%r injected; state.chosen_tool=%r", request.chosen_tool, cur)
+                except Exception as e:
+                    logger.warning("update_state(chosen_tool) failed: %s", e)
+
             async for event in _agent.astream_events(
-                input_data, config, version="v2"
+                input_data if is_new else None,
+                config, version="v2"
             ):
                 if await req.is_disconnected():
                     break
@@ -218,14 +240,31 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
             except Exception:
                 logger.warning("Could not check graph state for interrupts")
 
+            # Read final state to: (a) emit any pending chat card produced by
+            # the pre-SQL clarification feature, and (b) build the final report.
+            snapshot = _agent.get_state(config)
+            final_state = snapshot.values if snapshot else None
+            if final_state:
+                raw_card = final_state.get("pending_card")
+                if raw_card is not None:
+                    card_json = raw_card.model_dump() if hasattr(raw_card, "model_dump") else dict(raw_card)
+                    yield {
+                        "event": "card",
+                        "data": json.dumps(card_json, ensure_ascii=False),
+                    }
+                    pending_card = raw_card
+
             if not interrupted:
-                snapshot = _agent.get_state(config)
-                final_state = snapshot.values if snapshot else None
                 if final_state:
-                    result = _build_response(final_state)
-                    report_result = result
-                    yield {"event": "report", "data": json.dumps(result, ensure_ascii=False)}
-                    await session_manager.update_checkpoint_time(session_id)
+                    # Stage-1 intent card pauses here — do NOT emit report.
+                    if final_state.get("execution_status") == "INTENT_AWAIT":
+                        logger.info("intent_card emitted; awaiting user choice")
+                        await session_manager.update_checkpoint_time(session_id)
+                    else:
+                        result = _build_response(final_state)
+                        report_result = result
+                        yield {"event": "report", "data": json.dumps(result, ensure_ascii=False)}
+                        await session_manager.update_checkpoint_time(session_id)
 
         except Exception as exc:
             error_result = str(exc)
@@ -294,6 +333,18 @@ def _format_event(event: dict) -> dict:
 
     elif kind == "on_chain_start":
         node_name = event.get("name", "") or node
+        # Emit a lightweight `thinking` snapshot right before the SQL
+        # `plan` node LLM call. This is the entire purpose of the new
+        # event: give the user a "the agent is reasoning" hint during
+        # the pre-SQL planning step that decides whether to clarify.
+        if node_name in ("plan", "sql_plan"):
+            return {
+                "event": "thinking",
+                "data": json.dumps({
+                    "phase": "planning",
+                    "text": "正在规划查询...",
+                }, ensure_ascii=False),
+            }
         if node_name and node_name not in ("LangGraph", "LangGraphRunnableSequence", "LangGraphRunnableGraph", "RunnableSequence", "RunnableParallel", "RunnableLambda", "RunnablePassthrough"):
             return {
                 "event": "trace",

@@ -9,6 +9,7 @@ export async function chatStream(
   sessionId: string,
   onEvent: EventHandler,
   signal?: AbortSignal,
+  chosenTool?: string,
 ): Promise<void> {
   const controller = new AbortController()
   // Long timeout — MiniMax LLM can take 60-120s
@@ -29,7 +30,11 @@ export async function chatStream(
     response = await fetch('/api/v1/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ user_query: userQuery, session_id: sessionId }),
+      body: JSON.stringify({
+        user_query: userQuery,
+        session_id: sessionId,
+        ...(chosenTool ? { chosen_tool: chosenTool } : {}),
+      }),
       signal: combinedSignal,
     })
   } catch (err) {

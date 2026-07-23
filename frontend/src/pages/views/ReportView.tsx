@@ -6,7 +6,7 @@ import ReportRenderer from '../../components/report/ReportRenderer'
 const { Text } = Typography
 
 export default function ReportView() {
-  const { currentReport, isStreaming, timeline, setViewMode } = useSessionStore()
+  const { currentReport, busy, timeline, setViewMode } = useSessionStore()
 
   if (!currentReport) return null
 
@@ -65,7 +65,7 @@ export default function ReportView() {
                     </span>
                   </div>
                 </div>
-                {isStreaming && (
+                {busy && (
                   <div style={{
                     background: '#EFF6FF',
                     color: '#1E40AF',
@@ -90,7 +90,7 @@ export default function ReportView() {
               <div style={{ animation: 'fadeInUp 0.3s ease' }}>
                 <ReportRenderer blocks={currentReport.blocks} />
               </div>
-            ) : isStreaming ? (
+            ) : busy ? (
               <Card
                 style={{
                   borderRadius: 12,
@@ -124,7 +124,7 @@ export default function ReportView() {
             )}
 
             {/* Footer */}
-            {!isStreaming && hasBlocks && (
+            {!busy && hasBlocks && (
               <div style={{ textAlign: 'center', paddingTop: 8, paddingBottom: 4 }}>
                 <Text style={{ fontSize: 11, color: '#CBD5E1' }}>
                   — ReportAgent AI 自动生成 —
