@@ -51,8 +51,8 @@ async def list_sessions(user_id: int) -> list[dict]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT session_id, COUNT(*) as msg_count,
-                      MIN(created_at) as first_msg,
-                      MAX(created_at) as last_msg
+                      MAX(created_at) as last_msg,
+                      (array_agg(content ORDER BY created_at ASC))[1] as first_message_text
                FROM app.conversations
                WHERE user_id = $1
                GROUP BY session_id
@@ -63,7 +63,7 @@ async def list_sessions(user_id: int) -> list[dict]:
             {
                 "session_id": r["session_id"],
                 "msg_count": r["msg_count"],
-                "first_message": r["first_msg"].isoformat(),
+                "first_message": r["first_message_text"] or "",
                 "last_message": r["last_msg"].isoformat(),
             }
             for r in rows

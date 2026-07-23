@@ -108,6 +108,7 @@ async def main():
             InitializationOptions(
                 server_name="schema-registry",
                 server_version="1.0.0",
+                capabilities={"tools": {}},
             ),
         )
 
