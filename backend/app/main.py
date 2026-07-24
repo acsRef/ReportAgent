@@ -33,6 +33,7 @@ from app.agent.confirmed_execution_graph import (
     RequirementIncompleteError,
     SessionNotFoundError,
 )
+from app.api.templates import router as templates_router
 from app.db import get_connection, close_connection
 from app.infra.db.postgres import init_pool, close_pool
 from app.infra.checkpoint.session import session_manager
@@ -103,6 +104,8 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+app.include_router(templates_router)
 
 app.add_middleware(
     CORSMiddleware,
