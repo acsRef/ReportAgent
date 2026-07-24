@@ -311,41 +311,10 @@ export default function WorkbenchPage() {
               暂无会话
             </Typography.Text>
           ) : (
-            <List
-              size="small"
-              dataSource={sessions}
-              renderItem={(s: ApiSessionSummary) => {
-                const isActive = activeSessionId === s.session_id
-                return (
-                  <List.Item
-                    onClick={() => handleSelectSession(s.session_id)}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 6,
-                      cursor: 'pointer',
-                      background: isActive ? 'var(--teal-pale)' : 'transparent',
-                      border: isActive ? '1px solid var(--teal)' : '1px solid transparent',
-                      marginBottom: 4,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: 'var(--ink-2)',
-                        fontWeight: isActive ? 600 : 400,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {s.first_message || s.session_id.slice(0, 8)}
-                    </div>
-                    <div style={{ fontSize: 10, color: 'var(--muted)' }}>
-                      {s.msg_count} 条 · {s.phase}
-                    </div>
-                  </List.Item>
-                )
-              }}
+            <SessionListBuckets
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onSelect={(sid) => handleSelectSession(sid)}
             />
           )}
 
@@ -542,6 +511,115 @@ export default function WorkbenchPage() {
           </div>
         </aside>
       </div>
+    </div>
+  )
+}
+
+/**
+ * `SessionListBuckets` groups the left-rail session list by recency:
+ *   - 今天 (today)
+ *   - 过去 7 天
+ *   - 更早 (collapsed by default)
+ *
+ * The prototype's left rail does the same grouping (today / 7d / 30d);
+ * we keep three buckets to keep the 268px column uncluttered.
+ */
+function SessionListBuckets({
+  sessions,
+  activeSessionId,
+  onSelect,
+}: {
+  sessions: ApiSessionSummary[]
+  activeSessionId: string | null
+  onSelect: (sid: string) => void
+}) {
+  const [showOlder, setShowOlder] = useState(false)
+  const now = Date.now()
+  const day = 24 * 60 * 60 * 1000
+
+  const today: ApiSessionSummary[] = []
+  const pastWeek: ApiSessionSummary[] = []
+  const older: ApiSessionSummary[] = []
+  for (const s of sessions) {
+    const t = s.updated_at ? Date.parse(s.updated_at) : NaN
+    const age = isFinite(t) ? (now - t) / day : Infinity
+    if (age < 1) today.push(s)
+    else if (age < 7) pastWeek.push(s)
+    else older.push(s)
+  }
+
+  const renderItem = (s: ApiSessionSummary) => {
+    const isActive = activeSessionId === s.session_id
+    return (
+      <List.Item
+        onClick={() => onSelect(s.session_id)}
+        style={{
+          padding: '8px 10px',
+          borderRadius: 6,
+          cursor: 'pointer',
+          background: isActive ? 'var(--teal-pale)' : 'transparent',
+          border: isActive ? '1px solid var(--teal)' : '1px solid transparent',
+          marginBottom: 4,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 12,
+            color: 'var(--ink-2)',
+            fontWeight: isActive ? 600 : 400,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {s.first_message || s.session_id.slice(0, 8)}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--muted)' }}>
+          {s.msg_count} 条 · {s.phase}
+        </div>
+      </List.Item>
+    )
+  }
+
+  const headerStyle: React.CSSProperties = {
+    fontSize: 10,
+    letterSpacing: 1.4,
+    color: 'var(--muted)',
+    textTransform: 'uppercase',
+    fontWeight: 700,
+    marginTop: 8,
+    marginBottom: 4,
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  }
+
+  return (
+    <div style={{ overflow: 'auto' }}>
+      {today.length > 0 && (
+        <>
+          <div style={headerStyle}><span>今天</span><span style={{ color: 'var(--faint)' }}>{today.length}</span></div>
+          <List size="small" dataSource={today} renderItem={renderItem} />
+        </>
+      )}
+      {pastWeek.length > 0 && (
+        <>
+          <div style={headerStyle}><span>过去 7 天</span><span style={{ color: 'var(--faint)' }}>{pastWeek.length}</span></div>
+          <List size="small" dataSource={pastWeek} renderItem={renderItem} />
+        </>
+      )}
+      {older.length > 0 && (
+        <>
+          <div
+            style={{ ...headerStyle, cursor: 'pointer' }}
+            onClick={() => setShowOlder((s) => !s)}
+          >
+            <span>{showOlder ? '▾ 更早' : '▸ 更早'}</span>
+            <span style={{ color: 'var(--faint)' }}>{older.length}</span>
+          </div>
+          {showOlder && <List size="small" dataSource={older} renderItem={renderItem} />}
+        </>
+      )}
     </div>
   )
 }
