@@ -11,7 +11,7 @@
  * session also resets the report version list") lives in the reducer
  * and would be hard to reason about across multiple stores.
  */
-import { create } from 'zustand'
+import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import {
   analysisReducer,
@@ -30,8 +30,10 @@ interface AnalysisStore extends AnalysisState {
   reset: () => void
 }
 
-export const useAnalysisStore = create<AnalysisStore>()(
-  immer((set) => ({
+type AnalysisStoreApi = UseBoundStore<StoreApi<AnalysisStore>>
+
+export const useAnalysisStore: AnalysisStoreApi = create<AnalysisStore>()(
+  immer((set, get) => ({
     ...initialAnalysisState,
     dispatch: (action) =>
       set((draft) => {
@@ -47,7 +49,7 @@ export const useAnalysisStore = create<AnalysisStore>()(
         draft.timeline = next.timeline
         draft.error = next.error
       }),
-    isBusy: () => isBusyPhase(useAnalysisStore.getState().phase),
+    isBusy: (): boolean => isBusyPhase(get().phase),
     reset: () => set(() => ({ ...initialAnalysisState })),
   })),
 )

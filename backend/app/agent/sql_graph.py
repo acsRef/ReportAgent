@@ -75,6 +75,12 @@ class SQLAgentState(TypedDict):
     retry_counters: dict
     query_result: Optional[QueryResult]
     chosen_tool: Optional[str]
+    # Structured fields the user PATCHed via /requirement. When set,
+    # _plan MUST treat these as authoritative and ignore inferences
+    # from the free-form `user_query`. Populated by
+    # confirmed_execution_graph._confirmed_sql_agent; ignored by the
+    # legacy interrupt-based flow.
+    confirmed_requirement: Optional[str]
 
 
 _PLAN_TABLE_HINTS = """常用表速查:
@@ -221,10 +227,24 @@ def _plan(state: SQLAgentState) -> dict:
             f"请围绕这个工具方向写 SQL,例如 group_compare 优先 GROUP BY,trend_analysis 优先按时间排序。\n"
         )
 
+    confirmed_requirement = state.get("confirmed_requirement")
+    confirmed_block = ""
+    if confirmed_requirement:
+        # Authoritative — the user already filled and PATCHed these via
+        # the requirement card. The free-form user_query is for flavor
+        # only; the structured fields below are the source of truth.
+        # Keep the wording mild so the LLM's JSON output isn't
+        # disrupted by the auxiliary instruction.
+        confirmed_block = (
+            f"\n\nConfirmed requirement (use these as authoritative):\n"
+            f"{confirmed_requirement}\n"
+        )
+
     prompt = f"""你是一个SQL规划器。任务：根据用户问题、可用表结构，一次性产出查询计划与澄清决策。
 
 用户问题: {state["user_query"]}
 {tool_hint}
+{confirmed_block}
 可用表结构:
 {schema_text}
 

@@ -141,12 +141,20 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
     """Run the SQL subgraph. Note: we deliberately reuse `build_sql_graph`
     WITHOUT its `_intent_analyze` entry node — the requirement is already
     confirmed, so we just plan → generate → execute.
+
+    The structured fields from the PATCHed RequirementCard are serialized
+    into `confirmed_requirement` and passed to `_plan` so the LLM does
+    not re-infer from the (potentially vague) `user_query`.
     """
     sql_graph = build_sql_graph()
     schema = state.get("schema_context")
     from app.models.contracts import SchemaContext as SchemaCtx
     schema_dict = schema.model_dump() if schema else None
     schema_input = SchemaCtx(**schema_dict) if schema_dict else None
+
+    # Build the authoritative requirement string the LLM will use.
+    card = state.get("requirement_card")
+    confirmed_requirement = _format_confirmed_requirement(card)
 
     ss = await sql_graph.ainvoke({
         "schema_context": schema_input,
@@ -160,12 +168,42 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
         "retry_counters": {"plan": 0, "sql_generation": 0},
         "trace_id": state.get("trace_id", ""),
         "chosen_tool": None,  # legacy field; ignored in new flow
+        "confirmed_requirement": confirmed_requirement,
     })
     qr = ss.get("query_result")
     return {
         "query_result": qr.model_dump() if qr else None,
         "execution_status": ss.get("execution_status", "FAILED"),
     }
+
+
+def _format_confirmed_requirement(card) -> str | None:
+    """Serialize the PATCHed RequirementCard into the structured string
+    the SQL plan prompt consumes. Returns None when no card is loaded
+    (the plan falls back to inferring from `user_query`).
+    """
+    if card is None:
+        return None
+    parts: list[str] = []
+    if card.time_range:
+        parts.append(f"time_range = {card.time_range}")
+    if card.scope:
+        parts.append(f"scope = [{', '.join(card.scope)}]")
+    if card.target_metrics:
+        parts.append(f"metrics = [{', '.join(card.target_metrics)}]")
+    if card.dimensions:
+        parts.append(f"dimensions = [{', '.join(card.dimensions)}]")
+    if card.analysis_methods:
+        parts.append(f"analysis_methods = [{', '.join(card.analysis_methods)}]")
+    if card.assumptions:
+        accepted = [a for a in card.assumptions if a.accepted is True]
+        if accepted:
+            parts.append(
+                "user-accepted assumptions = [" + "; ".join(a.text for a in accepted) + "]"
+            )
+    if not parts:
+        return None
+    return "\n".join(parts)
 
 
 @traced_node("confirmed_report_agent")
@@ -207,6 +245,15 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
         return {"execution_status": "FAILED"}
     draft_id = await _draft_id_from_state(state)
     base_version = state.get("base_report_version")
+    # Build a query_snapshot from query_result so /reports/{v} can
+    # expose the actual SQL + rows for the version-history view.
+    qr = state.get("query_result") or {}
+    query_snapshot = {
+        "sql": qr.get("sql") if isinstance(qr, dict) else None,
+        "columns": qr.get("columns") if isinstance(qr, dict) else None,
+        "rows": qr.get("rows") if isinstance(qr, dict) else None,
+        "row_count": qr.get("row_count") if isinstance(qr, dict) else None,
+    } if qr else None
     if base_version is None:
         row = await report_version_service.persist_confirmed_run(
             session_id=state["session_id"],
@@ -214,7 +261,7 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
             requirement_draft_id=draft_id,
             title="报告",
             report_payload=state["report_payload"],
-            query_snapshot=None,
+            query_snapshot=query_snapshot,
             trace_id=state.get("trace_id"),
         )
     else:
@@ -226,7 +273,7 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
             adjustment_text=state.get("adjustment_text") or "",
             title="报告（调整）",
             report_payload=state["report_payload"],
-            query_snapshot=None,
+            query_snapshot=query_snapshot,
             trace_id=state.get("trace_id"),
         )
 

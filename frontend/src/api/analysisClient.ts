@@ -109,7 +109,7 @@ export function openChat(
         type: 'error',
         data: {
           code: 'NETWORK_ERROR',
-          message: String(err)[:300],
+          message: String(err).slice(0, 300),
           recoverable: false,
           failed_action: request.mode ?? 'new',
         },

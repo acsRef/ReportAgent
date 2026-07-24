@@ -15,67 +15,65 @@ import HistoryPage from './pages/HistoryPage'
 export default function App() {
   return (
     <ConfigProvider theme={antdTheme} locale={zhCN}>
-      <AntdApp component={false}>
+      <AntdApp>
         <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
 
-          <Route
-            path="/report/:sessionId/:version"
-            element={
-              <AuthGuard>
-                <SecureReportPage />
-              </AuthGuard>
-            }
-          />
+            <Route
+              path="/report/:sessionId/:version"
+              element={
+                <AuthGuard>
+                  <SecureReportPage />
+                </AuthGuard>
+              }
+            />
 
-          <Route
-            path="/"
-            element={
-              <AuthGuard>
-                <WorkbenchPage />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/templates"
-            element={
-              <AuthGuard>
-                <TemplateLibraryPage />
-              </AuthGuard>
-            }
-          />
-          {/* Legacy routes — kept for Phase 8 evaluation. Phase 6 redirects
-              /history to root. The old ChatPage + TemplateCenter remain
-              wired behind these paths so manual QA can still run them. */}
-          <Route
-            path="/history"
-            element={
-              <AuthGuard>
-                <HistoryPage />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/legacy/chat"
-            element={
-              <AuthGuard>
-                <ChatPage />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/legacy/templates"
-            element={
-              <AuthGuard>
-                <TemplateCenter />
-              </AuthGuard>
-            }
-          />
+            <Route
+              path="/"
+              element={
+                <AuthGuard>
+                  <WorkbenchPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/templates"
+              element={
+                <AuthGuard>
+                  <TemplateLibraryPage />
+                </AuthGuard>
+              }
+            />
+            {/* Legacy routes — kept for Phase 8 evaluation. */}
+            <Route
+              path="/history"
+              element={
+                <AuthGuard>
+                  <HistoryPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/legacy/chat"
+              element={
+                <AuthGuard>
+                  <ChatPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/legacy/templates"
+              element={
+                <AuthGuard>
+                  <TemplateCenter />
+                </AuthGuard>
+              }
+            />
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </BrowserRouter>
       </AntdApp>
     </ConfigProvider>
   )

@@ -40,6 +40,11 @@ export interface SessionSummary {
     created_at: string
     favorite: boolean
   }>
+  /** Convenience: first user message in the conversation. Backend
+   * populates this from `app.conversations` content; older sessions
+   * may return `undefined`. */
+  first_message?: string
+  last_message?: string
 }
 
 export interface SessionSnapshot {

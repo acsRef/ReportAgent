@@ -1,17 +1,27 @@
-"""End-to-end smoke test that drives the real backend.
+"""End-to-end smoke test that drives the real backend over the full
+conversational workbench user journey.
 
 Prerequisites:
 - Backend running on http://127.0.0.1:8100
 - Docker PG `ragent-postgres` up
 - admin/admin123 seeded (the backend's lifespan does this on startup)
 
-This script exercises:
+Steps:
   1. POST /api/v1/auth/login → JWT
-  2. POST /api/v1/chat mode=new  → requirement-analysis graph (SSE v2)
-  3. PATCH /api/v1/sessions/{sid}/requirement → fill missing fields
-  4. POST /api/v1/sessions/{sid}/confirm → confirmed-execution graph (SSE v2)
-  5. GET /api/v1/sessions/{sid} → verify report version written
-  6. GET /api/v1/sessions/{sid}/reports/{v} → read the persisted report
+  2. GET  /api/v1/sessions → list
+  3. POST /api/v1/chat mode=new → SSE v2 → requirement event
+  4. PATCH /api/v1/sessions/{sid}/requirement → status=complete
+  5. POST /api/v1/sessions/{sid}/confirm → SSE v2 → report event v1
+  6. CORE ASSERTION: report.answer.table OR report.answer.chart.config non-empty
+  7. GET  /api/v1/sessions/{sid} → current_requirement + report_versions populated
+  8. GET  /api/v1/sessions/{sid}/reports/1 → full report row
+  9. TEMPLATE FLOW:
+     - POST /api/v1/templates (using step 8 requirement_payload) → 201
+     - GET  /api/v1/templates → includes the new one
+     - DELETE /api/v1/templates/{id} → 200 {deleted: true}
+     - GET  /api/v1/templates/9999 → 404
+ 10. USER ISOLATION: a second JWT (B user) can't see admin's templates
+     — skipped for now since only admin is seeded.
 
 Run from the repo root with the backend already running:
 
@@ -20,7 +30,6 @@ Run from the repo root with the backend already running:
 from __future__ import annotations
 
 import json
-import time
 import uuid
 from typing import Any, Iterator
 
@@ -30,22 +39,18 @@ import pytest
 BASE = "http://127.0.0.1:8100"
 
 
+# ---------- helpers ----------
+
 def _login(client: httpx.Client) -> str:
     r = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
     r.raise_for_status()
     return r.json()["access_token"]
 
 
-def _post_chat(
-    client: httpx.Client, token: str, body: dict, timeout: float = 90.0,
-) -> Iterator[dict]:
-    """Stream SSE events from /api/v1/chat. Yields {event, data} dicts."""
-    with client.stream(
-        "POST", "/api/v1/chat",
-        json=body,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=timeout,
-    ) as resp:
+def _stream_sse(client: httpx.Client, method: str, url: str, token: str, *, json_body: dict | None = None, timeout: float = 120.0) -> Iterator[dict]:
+    """Generic SSE stream parser. Yields {event, data} dicts."""
+    headers = {"Authorization": f"Bearer {token}"}
+    with client.stream(method, url, json=json_body, headers=headers, timeout=timeout) as resp:
         resp.raise_for_status()
         ev_name = None
         data_buf: list[str] = []
@@ -67,128 +72,181 @@ def _post_chat(
                 data_buf.append(line[len("data:"):].strip())
 
 
-def test_full_conversational_workbench_flow() -> None:
+def _data_of(events: list[dict], name: str) -> Any:
+    for e in events:
+        if e["event"] == name:
+            d = e["data"]
+            return json.loads(d) if isinstance(d, str) else d
+    return None
+
+
+# ---------- test ----------
+
+def test_full_user_journey() -> None:
     with httpx.Client(base_url=BASE, timeout=30.0) as client:
+        # ---- 1. login ----
         token = _login(client)
         headers = {"Authorization": f"Bearer {token}"}
         sid = f"e2e-{uuid.uuid4().hex[:8]}"
         print(f"\n=== E2E session_id = {sid} ===")
 
-        # ---- Step 1: vague query → requirement-analysis ----
-        print("\n[1] POST /chat mode=new with vague query")
-        events = list(_post_chat(client, token, {
-            "user_query": "帮我看一下销量",
-            "mode": "new",
-            "session_id": sid,
-        }))
+        # ---- 2. GET /sessions ----
+        r = client.get("/api/v1/sessions", headers=headers)
+        assert r.status_code == 200, r.text
+        sessions = r.json()["sessions"]
+        print(f"[2] sessions count = {len(sessions)}")
+
+        # ---- 3. POST /chat mode=new → requirement ----
+        print(f"\n[3] POST /chat mode=new (session {sid})")
+        events = list(_stream_sse(
+            client, "POST", "/api/v1/chat", token,
+            json_body={"user_query": "帮我看一下销量", "mode": "new", "session_id": sid},
+        ))
         seen = [e["event"] for e in events]
         print(f"  events: {seen}")
-        assert "phase" in seen
-        assert "requirement" in seen
-        assert "done" in seen
-        requirement_evt = next(e for e in events if e["event"] == "requirement")
-        card: dict[str, Any] = (
-            requirement_evt["data"]
-            if isinstance(requirement_evt["data"], dict)
-            else json.loads(requirement_evt["data"])
-        )
-        assert card["status"] == "missing"
-        assert len(card["missing_fields"]) >= 1
-        print(f"  card.status={card['status']}, "
-              f"missing_fields={len(card['missing_fields'])}, "
-              f"assumptions={len(card['assumptions'])}")
+        assert "phase" in seen and "requirement" in seen and "done" in seen
 
-        # ---- Step 2: PATCH to fill all missing fields + accept all assumptions ----
-        print("\n[2] PATCH /sessions/{sid}/requirement (fill all)")
-        filled_card = json.loads(json.dumps(card))  # deep copy
-        for mf in filled_card["missing_fields"]:
+        card = _data_of(events, "requirement")
+        assert card and card["status"] == "missing"
+        assert len(card["missing_fields"]) >= 1
+        print(f"  card.status={card['status']}, missing_fields={len(card['missing_fields'])}")
+
+        # ---- 4. PATCH /requirement → complete ----
+        print("\n[4] PATCH /requirement (fill all)")
+        filled = json.loads(json.dumps(card))
+        for mf in filled["missing_fields"]:
             if mf["key"] == "time_range":
                 mf["selected_value"] = "今年"
             elif mf["key"] == "scope":
-                mf["selected_value"] = ["ALL"]
+                mf["selected_value"] = ["ALL"] if "ALL" in [o["value"] for o in mf["options"]] else [mf["options"][0]["value"]] if mf["options"] else []
             elif mf["key"] == "metric":
-                mf["selected_value"] = ["销售量"]
-            elif mf["key"] in ("granularity", "comparison"):
-                mf["selected_value"] = mf["options"][0]["value"] if mf["options"] else "month"
-        for a in filled_card["assumptions"]:
+                # Pick a metric whose label mentions 销售 (销售量/销售额/销售量)
+                cand = next((o["value"] for o in mf["options"] if "销售" in o["label"]), None)
+                mf["selected_value"] = [cand] if cand else ([mf["options"][0]["value"]] if mf["options"] else [])
+            elif mf["key"] in ("granularity", "comparison") and mf["options"]:
+                mf["selected_value"] = mf["options"][0]["value"]
+        for a in filled["assumptions"]:
             a["accepted"] = True
         r = client.patch(
             f"/api/v1/sessions/{sid}/requirement",
-            json={"requirement": filled_card},
+            json={"requirement": filled},
             headers=headers,
         )
         assert r.status_code == 200, r.text
         saved = r.json()["requirement"]
-        print(f"  PATCH returned status={saved['status']}, "
-              f"missing_fields={len(saved['missing_fields'])}")
-        assert saved["status"] == "complete", (
-            f"expected complete after PATCH; got {saved['status']}; "
-            f"missing_fields={[m['key'] for m in saved['missing_fields']]}"
-        )
+        print(f"  PATCH status={saved['status']} missing={len(saved['missing_fields'])} "
+              f"time_range={saved['time_range']} scope={saved['scope']} "
+              f"target_metrics={saved['target_metrics']}")
+        assert saved["status"] == "complete"
         assert saved["time_range"] == "今年"
-        assert "销售量" in saved["target_metrics"]
+        assert len(saved["target_metrics"]) >= 1, f"target_metrics empty: {saved}"
 
-        # ---- Step 3: confirm → confirmed-execution (SSE v2) ----
-        print("\n[3] POST /sessions/{sid}/confirm")
+        # ---- 5. POST /confirm → report v1 ----
+        print("\n[5] POST /confirm (SSE)")
         try:
-            events_confirm = list(_post_chat_via_confirm(
-                client, token, sid, timeout=120.0,
+            confirm_events = list(_stream_sse(
+                client, "POST", f"/api/v1/sessions/{sid}/confirm", token,
             ))
         except Exception as exc:
             raise AssertionError(f"confirm stream failed: {exc}") from exc
-        seen_c = [e["event"] for e in events_confirm]
-        print(f"  events: {seen_c}")
-        # We tolerate the confirm graph failing on SQL (the sample data
-        # might not have a perfect mapping) but the phase progression
-        # MUST include `phase: generating` and a final `done`/`error`.
-        assert "phase" in seen_c, f"missing phase event: {seen_c}"
-        # If everything succeeded, there should be a report event.
-        # If SQL failed, an error event with code SQL_AGENT_ERROR or
-        # NEED_CLARIFICATION is acceptable for this smoke test.
+        print(f"  events: {[e['event'] for e in confirm_events]}")
+        assert "phase" in [e["event"] for e in confirm_events]
+        assert "done" in [e["event"] for e in confirm_events]
 
-        # ---- Step 4: snapshot the session ----
-        print("\n[4] GET /sessions/{sid}")
+        # ---- 6. CORE: report contains data ----
+        report_evt = _data_of(confirm_events, "report")
+        print(f"  report event present: {report_evt is not None}")
+        # The SSE report event may be partial; we use the snapshot in step 7
+        # for the authoritative report_payload.
+
+        # ---- 7. GET /sessions/{sid} ----
+        print("\n[6/7] GET /sessions/{sid}")
         r = client.get(f"/api/v1/sessions/{sid}", headers=headers)
         assert r.status_code == 200, r.text
         snap = r.json()
         print(f"  phase={snap['session']['phase']}, "
-              f"current_requirement.status={snap['current_requirement']['status'] if snap['current_requirement'] else None}, "
               f"report_versions={len(snap['session']['report_versions'])}")
-        assert snap["session"]["session_id"] == sid
         assert snap["current_requirement"] is not None
-        # We expect at least one report_version if SQL succeeded, else 0
-        # (we don't fail the test on this; just log).
-        if snap["session"]["report_versions"]:
-            print(f"  report version: {snap['session']['report_versions'][0]}")
-        else:
-            print("  (no report version persisted — confirm graph may have errored; see confirm events above)")
+        # After confirm, the latest draft is `locked`.
+        assert snap["current_requirement"]["status"] == "locked", (
+            f"expected latest draft to be locked after confirm, got "
+            f"{snap['current_requirement']['status']}"
+        )
+        if not snap["session"]["report_versions"]:
+            pytest.fail("no report_versions persisted after confirm — Phase 3 SQL plan still broken")
+        v1 = snap["session"]["report_versions"][0]
+        print(f"  v1 = {v1}")
 
+        # ---- 8. GET /sessions/{sid}/reports/1 → full row ----
+        print("\n[8] GET /reports/1")
+        r = client.get(f"/api/v1/sessions/{sid}/reports/{v1['version']}", headers=headers)
+        assert r.status_code == 200, r.text
+        report = r.json()["report"]
+        payload = report.get("report_payload") or {}
+        answer = payload.get("answer") or {}
+        chart = answer.get("chart") or {}
+        table = answer.get("table")
+        print(f"  payload.answer.chart = {json.dumps(chart, ensure_ascii=False)[:200]}")
+        print(f"  payload.answer.table = {json.dumps(table, ensure_ascii=False)[:200]}")
+        # CORE ASSERTION: report_payload.answer must have a real chart OR
+        # table, AND query_snapshot must contain the SQL/columns/rows
+        # that the report was built from. (Empty rows are acceptable
+        # if the SQL was valid but the date range has no data; what we
+        # verify is the *plumbing* — chart_advisor ran, snapshot was
+        # persisted, no error path was taken.)
+        chart_present = bool(chart.get("type")) or bool(chart.get("config"))
+        table_present = table is not None
+        answer_present = chart_present or table_present
+        snapshot = report.get("query_snapshot") or {}
+        snapshot_has_sql = bool(snapshot.get("sql"))
+        assert answer_present, (
+            f"report_payload.answer has no chart/table; "
+            f"chart={chart} table={table}"
+        )
+        assert snapshot_has_sql, (
+            f"query_snapshot is empty; confirmed_execution_graph did not "
+            f"persist the SQL. snapshot={snapshot}"
+        )
+        print(f"  ✓ answer present: chart={chart_present} table={table_present}")
+        print(f"  ✓ snapshot sql: {snapshot.get('sql', '')[:120]}")
+        print(f"  ✓ snapshot rows: {len(snapshot.get('rows') or [])}")
 
-def _post_chat_via_confirm(
-    client: httpx.Client, token: str, sid: str, timeout: float,
-) -> Iterator[dict]:
-    """Stream SSE from /confirm."""
-    with client.stream(
-        "POST", f"/api/v1/sessions/{sid}/confirm",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=timeout,
-    ) as resp:
-        resp.raise_for_status()
-        ev_name = None
-        data_buf: list[str] = []
-        for line in resp.iter_lines():
-            if line == "":
-                if ev_name and data_buf:
-                    data_str = "\n".join(data_buf)
-                    try:
-                        parsed = json.loads(data_str)
-                    except Exception:
-                        parsed = data_str
-                    yield {"event": ev_name, "data": parsed}
-                ev_name = None
-                data_buf = []
-                continue
-            if line.startswith("event:"):
-                ev_name = line[len("event:"):].strip()
-            elif line.startswith("data:"):
-                data_buf.append(line[len("data:"):].strip())
+        # ---- 9. TEMPLATE FLOW ----
+        print("\n[9] Template CRUD")
+        # Create
+        r = client.post(
+            "/api/v1/templates",
+            json={
+                "name": f"e2e-tpl-{uuid.uuid4().hex[:6]}",
+                "description": "auto-created by e2e",
+                "requirement_payload": payload if payload else saved,
+            },
+            headers=headers,
+        )
+        assert r.status_code == 200, f"create failed: {r.status_code} {r.text}"
+        tpl = r.json()["template"]
+        tpl_id = tpl["id"]
+        print(f"  POST → template id={tpl_id} name={tpl['name']}")
+
+        # List (must include new one)
+        r = client.get("/api/v1/templates", headers=headers)
+        assert r.status_code == 200, r.text
+        listed = r.json()["templates"]
+        assert any(t["id"] == tpl_id for t in listed), "newly created template not in list"
+        print(f"  GET → list contains {tpl_id}")
+
+        # Delete
+        r = client.delete(f"/api/v1/templates/{tpl_id}", headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"] is True
+        print(f"  DELETE → 200")
+
+        # 404 on missing
+        r = client.delete("/api/v1/templates/999999", headers=headers)
+        assert r.status_code == 404, r.text
+        print(f"  DELETE missing → 404 ✓")
+
+        # ---- 10. user isolation (skipped: only admin seeded) ----
+        print("\n[10] user isolation: only admin seeded, skipping cross-user check")
+
+        print("\n=== E2E PASSED ===")

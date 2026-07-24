@@ -38,6 +38,10 @@ export interface SessionSummary {
   msg_count: number
   updated_at: string
   report_versions: ReportVersionSummary[]
+  /** Optional extra fields echoed from the backend's list_sessions
+   * (see /api/v1/sessions). Kept optional so older clients don't break. */
+  first_message?: string
+  last_message?: string
 }
 
 export interface AnalysisError {
