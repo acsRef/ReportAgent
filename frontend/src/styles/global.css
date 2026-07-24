@@ -82,13 +82,17 @@ a:hover {
 
 .workbench-body {
   display: grid;
-  grid-template-columns: 268px 1fr 300px;
+  /* Center gets a 540px floor so the composer + requirement card never
+   * get squeezed; right rail caps at 320px (a bit wider for the
+   * "analysis hint" cards). The prototype uses 268 / minmax(580,1fr) /
+   * 300 with the same intent. */
+  grid-template-columns: 268px minmax(540px, 1fr) 320px;
   min-height: 0;
 }
 
 @media (max-width: 1180px) {
   .workbench-body {
-    grid-template-columns: 268px 1fr;
+    grid-template-columns: 248px minmax(0, 1fr);
   }
   .workbench-rail--right {
     display: none;
