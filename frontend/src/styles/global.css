@@ -68,6 +68,18 @@ a:hover {
   background: var(--canvas);
 }
 
+/* Subtle paper-grid texture, lifted from the approved prototype
+ * (docs/intelligent-analysis-workbench.html .center). Drawn as two
+ * thin horizontal/vertical linear-gradients over the warm canvas. */
+.workbench-canvas {
+  background-color: var(--canvas);
+  background-image:
+    linear-gradient(rgba(16, 36, 62, 0.024) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 36, 62, 0.024) 1px, transparent 1px);
+  background-size: 28px 28px;
+  background-position: 0 0;
+}
+
 .workbench-body {
   display: grid;
   grid-template-columns: 268px 1fr 300px;

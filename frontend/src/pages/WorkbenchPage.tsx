@@ -72,11 +72,11 @@ export default function WorkbenchPage() {
           // `phase` / `status` literals; we coerce here.
           const mapped = res.sessions.map((s) => ({
             session_id: s.session_id,
-            title: s.title,
+            title: s.title ?? '',
             phase: ((s.phase ?? 'idle') as any),
-            msg_count: s.msg_count,
-            updated_at: s.updated_at,
-            report_versions: s.report_versions.map((v) => ({
+            msg_count: s.msg_count ?? 0,
+            updated_at: s.updated_at ?? '',
+            report_versions: (s.report_versions ?? []).map((v) => ({
               version: v.version,
               title: v.title,
               status: v.status as any,
@@ -283,7 +283,8 @@ export default function WorkbenchPage() {
             type="primary"
             icon={<PlusOutlined />}
             onClick={handleNewAnalysis}
-            style={{ fontWeight: 500 }}
+            block
+            style={{ fontWeight: 600, height: 36 }}
           >
             新建分析
           </Button>
@@ -360,10 +361,10 @@ export default function WorkbenchPage() {
 
         {/* Center */}
         <main
+          className="workbench-canvas"
           style={{
             padding: 'var(--sp-xl)',
             overflow: 'auto',
-            background: 'var(--canvas)',
             display: 'flex',
             flexDirection: 'column',
             gap: 18,
