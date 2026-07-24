@@ -189,9 +189,48 @@ The tracer accumulates spans during a request. Keep `await tracer.flush()` in th
 - [frontend/src/adapter/reportAdapter.ts](frontend/src/adapter/reportAdapter.ts) converts the backend response into flat `ReportBlock[]` values. [frontend/src/components/report/registry.ts](frontend/src/components/report/registry.ts) maps block types to renderers, and `ReportRenderer` delegates rendering.
 - Vite proxies `/api` to `http://localhost:8100`; production routing or proxying is not configured in this repository.
 
+## Conversational Workbench (shipped on `feat/conversational-workbench`)
+
+Phases 0–7 of [docs/plans/2026-07-24-conversational-workbench.md](docs/plans/2026-07-24-conversational-workbench.md) are now implemented. The architecture above describes the legacy flow; the workbench flow below is the **active** path.
+
+- **API shape:** `POST /api/v1/chat` accepts `mode: new | supplement | adjust | legacy`. New companions:
+  - `PATCH /api/v1/sessions/{sid}/requirement` — server-side recompute of `RequirementCard`
+  - `POST /api/v1/sessions/{sid}/confirm` — SSE v2 stream; runs the confirmed-execution graph
+  - `POST /api/v1/sessions/{sid}/retry` — resume after `last_failed_action`
+  - `GET /api/v1/sessions/{sid}` — full snapshot (session + messages + requirement + latest report)
+  - `GET /api/v1/sessions/{sid}/reports/{version}` — pure PG read; no LLM
+  - `POST|GET|PATCH|DELETE /api/v1/templates` — PG-backed template CRUD
+- **Two-graph split:** [backend/app/agent/requirement_analysis_graph.py](backend/app/agent/requirement_analysis_graph.py) exposes only schema tools (`search_tables`, `get_table_ddl`, `list_tables`); SQL/Report tools are unreachable. [backend/app/agent/confirmed_execution_graph.py](backend/app/agent/confirmed_execution_graph.py) gates on `draft.user_id == jwt.user_id AND draft.status == 'complete' AND missing_fields == [] AND all assumptions accepted`. The legacy `parent_graph` with `interrupt()` + `chosen_tool` is reached only via `mode=legacy`.
+- **SSE v2 events:** `phase` (`{phase, reason?}`), `requirement` (full `RequirementCard`), `report` (`{version, parent_version, title, answer, trace}`), `error` (`{code, message, recoverable, failed_action}`), `done` (`{final_phase}`). `card` / `clarify` / `token` only appear on `mode=legacy`.
+- **Persistence:** `agent.requirement_draft`, `agent.report_version` (append-only, `parent_version`), `app.report_template`, and 4 new columns on `agent.session` (`current_phase`, `last_failed_action`, `latest_requirement_draft_id`, `latest_report_version`). All writes go through one `asyncpg` transaction per service call. DDL: [backend/scripts/init_pg.sql](backend/scripts/init_pg.sql); design: [docs/persistence.md](docs/persistence.md).
+- **Shared contract:** `RequirementCard` Pydantic at [backend/app/models/requirement.py](backend/app/models/requirement.py) + TS mirror at [frontend/src/types/requirement.ts](frontend/src/types/requirement.ts); field parity enforced by `backend/tests/contracts/test_requirement_card_mirror.py`.
+- **Frontend state:** `analysisReducer` is the single source of truth for the workbench UI. `useAnalysisStore` ([frontend/src/stores/analysisStore.ts](frontend/src/stores/analysisStore.ts)) dispatches via immer; React components never write `phase` directly. `useTemplateStore` ([frontend/src/stores/templateStore.ts](frontend/src/stores/templateStore.ts)) owns PG-backed templates and one-shot migration from the legacy `ragent_templates` localStorage key.
+- **User-id bug fixes:** the three pre-workbench call sites that confused `session_id` for `user_id` are corrected in [backend/app/main.py](backend/app/main.py) (line 159–161) and [backend/app/agent/parent_graph.py](backend/app/agent/parent_graph.py) (lines 139 and 434). `agent.session.user_id` and `memory.semantic_entry.user_id` were soft-migrated from VARCHAR to INT in `init_pg.sql`.
+- **Visual baseline:** design tokens at [frontend/src/styles/tokens.css](frontend/src/styles/tokens.css) and [frontend/src/theme/antdTheme.ts](frontend/src/theme/antdTheme.ts). Pages: [frontend/src/pages/WorkbenchPage.tsx](frontend/src/pages/WorkbenchPage.tsx), [TemplateLibraryPage.tsx](frontend/src/pages/TemplateLibraryPage.tsx), [SecureReportPage.tsx](frontend/src/pages/SecureReportPage.tsx), [LoginPage.tsx](frontend/src/pages/LoginPage.tsx). All AntD component tokens overridden; AntD default `#1677ff` is replaced by the teal family. The legacy `ChatPage` / `RunningView` / `ReportView` / `HistoryPage` / `TemplateCenter` / `Navbar` are still reachable under `/legacy/*` for one release; Phase 8 plans to remove them in a follow-up commit.
+- **Guardrails for new work:** Pydantic v2 with full type annotations; all PG reads/writes scoped by `(user_id, session_id)` from JWT; reducers stay pure and immutable; `main.py` keeps to HTTP/SSE orchestration only; static diff review (contracts, state transitions, auth, transactions, error recovery, visual tokens) required per batch.
+
+### Status (this branch)
+
+| Concern | State |
+| --- | --- |
+| pytest backend | 29/29 passing (smoke 8, contracts 7, persistence 8, graphs 6) |
+| vitest frontend | 31/31 passing (reducer 16, client 7, store 4, adapter 3) |
+| tsc -b | passes |
+| oxlint | 0 errors |
+| `mode=legacy` endpoint | retained on `/api/v1/chat?mode=legacy` for backward compatibility |
+
 ## Reference Documents
 
 - [README.md](README.md) — setup, endpoints, current UI, and architecture overview.
 - [AGENTS.md](AGENTS.md) — concise operational reference; keep it consistent with this file.
-- [docs/development-plan.md](docs/development-plan.md) — architecture decisions and roadmap.
+- [docs/development-plan.md](docs/development-plan.md) — earlier architecture decisions and roadmap.
 - [docs/memory-ranking-plan.md](docs/memory-ranking-plan.md) — memory ranking rationale.
+- [docs/persistence.md](docs/persistence.md) — authoritative DDL for `agent.requirement_draft`, `agent.report_version`, `app.report_template`, and extended `agent.session`.
+- [docs/state-machine.md](docs/state-machine.md) — HTTP `phase` ↔ LangGraph state mapping; legal entry/exit/error paths.
+- [docs/api-reference.md](docs/api-reference.md), [docs/sse-v2.md](docs/sse-v2.md) — API surface and SSE v2 event protocol.
+- [docs/contracts/](docs/contracts/) — backend/frontend contract mirrors (start with [docs/contracts/requirement-card.md](docs/contracts/requirement-card.md)).
+- [docs/ui-style-guide.md](docs/ui-style-guide.md), [docs/code-style-conventions.md](docs/code-style-conventions.md) — visual and code conventions.
+- [docs/plans/2026-07-24-conversational-workbench.md](docs/plans/2026-07-24-conversational-workbench.md) — **active 8-phase rework plan**; supersedes older plans where they conflict.
+- [docs/plans/2026-07-24-intelligent-analysis-workbench-design.md](docs/plans/2026-07-24-intelligent-analysis-workbench-design.md) — design rationale for the workbench.
+- [docs/plans/2026-07-22-frontend-ui-refactor.md](docs/plans/2026-07-22-frontend-ui-refactor.md) — earlier frontend refactor plan; design-token work overlaps with the active plan.
+- [docs/plans/2026-07-24-intelligent-analysis-workbench-html.md](docs/plans/2026-07-24-intelligent-analysis-workbench-html.md) — implementation plan for the approved HTML prototype.
