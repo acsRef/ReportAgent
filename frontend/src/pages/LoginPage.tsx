@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Form, Input, Typography, message } from 'antd'
+import { App, Button, Form, Input, Typography } from 'antd'
 import { useAuthStore } from '../stores/authStore'
 import { loginAPI } from '../api/api'
 import '../styles/global.css'
@@ -18,6 +18,7 @@ export default function LoginPage() {
   const setAuth = useAuthStore((s) => s.setAuth)
   const [submitting, setSubmitting] = useState(false)
   const [form] = Form.useForm()
+  const { message } = App.useApp()
 
   async function onFinish(values: { username: string; password: string }) {
     setSubmitting(true)
