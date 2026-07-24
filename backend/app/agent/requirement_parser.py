@@ -75,8 +75,10 @@ def _schema_text(ctx: SchemaContext | None) -> str:
 def _call_llm_for_parse(user_query: str, schema: SchemaContext | None) -> dict:
     """Call the LLM and parse the JSON response. Returns {} on parse failure."""
     prompt = _PARSE_PROMPT.format(user_query=user_query, schema_text=_schema_text(schema))
-    raw = call_llm(prompt, max_tokens=600)
+    raw = call_llm(prompt, max_tokens=1500)  # reasoning model may write a long <think> block first
+    logger.warning("parse_requirement LLM raw for user_query=%r:\n%s", user_query, raw[:2000])
     parsed = safe_json_parse(raw)
+    logger.warning("parse_requirement parsed: %s", parsed)
     return parsed if isinstance(parsed, dict) else {}
 
 

@@ -69,8 +69,18 @@ def call_llm(prompt: str | list, **kwargs) -> str:
     start = time.monotonic()
     resp = llm.invoke(prompt)
     elapsed_ms = int((time.monotonic() - start) * 1000)
-    text = resp.content or ""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # Reasoning models (DeepSeek, MiniMax-M2.7-highspeed) often put
+    # the final JSON answer inside a <think> block. We keep the FULL
+    # response (think + answer) and let  extract the
+    # JSON object via its first-{""}-last-}"} scan. Stripping <think>
+    # would throw away the only JSON the model produced.
+    text = (resp.content or "").strip()
+    if not text:
+        import logging
+        logging.getLogger(__name__).warning(
+            "call_llm: empty content from model. raw response type=%s repr=%r",
+            type(resp).__name__, str(resp)[:2000],
+        )
 
     # Record LLM call to observability.llm_call
     try:

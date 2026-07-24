@@ -64,17 +64,29 @@ def safe_json_parse(text: str) -> dict | list | None:
     except json.JSONDecodeError:
         pass
 
-    # Fallback: find first { or [ and last } or ]
-    for start_char, end_char in [("{", "}"), ("[", "]")]:
-        start = cleaned.find(start_char)
-        if start == -1:
-            continue
-        end = cleaned.rfind(end_char)
-        if end > start:
-            candidate = cleaned[start:end + 1]
-            try:
-                return json.loads(candidate)
-            except json.JSONDecodeError:
-                pass
-
-    return None
+    # Reasoning models (DeepSeek, MiniMax-M2.7) often produce BOTH a
+    # JSON inside their <think> block AND a final JSON after </think>.
+    # cleaned.find("{") + cleaned.rfind("}") may match the wrong
+    # pair. Prefer raw_decode() which auto-detects the first complete
+    # JSON value and advances past it. Iterate because the response may
+    # contain several adjacent objects.
+    decoder = json.JSONDecoder()
+    idx = 0
+    last_dict: dict | None = None
+    last_any: dict | list | None = None
+    while idx < len(cleaned):
+        # Skip whitespace and non-JSON-start chars
+        while idx < len(cleaned) and cleaned[idx] not in ("{", "["):
+            idx += 1
+        if idx >= len(cleaned):
+            break
+        try:
+            obj, end = decoder.raw_decode(cleaned, idx)
+            last_any = obj
+            if isinstance(obj, dict):
+                last_dict = obj
+            idx = end
+        except json.JSONDecodeError:
+            idx += 1
+    # Prefer dict (RequirementCard shape). Fall back to whatever was found.
+    return last_dict if last_dict is not None else last_any
