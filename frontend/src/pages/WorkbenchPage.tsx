@@ -20,7 +20,6 @@ import {
   Empty,
   Input,
   Layout,
-  List,
   Spin,
   Tag,
   Typography,
@@ -422,11 +421,10 @@ export default function WorkbenchPage() {
               >
                 报告版本
               </Typography.Text>
-              <List
-                size="small"
-                dataSource={reportVersions}
-                renderItem={(r) => (
-                  <List.Item
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {reportVersions.map((r) => (
+                  <div
+                    key={r.version}
                     onClick={() => dispatch({ type: 'report/selected', version: r.version })}
                     style={{
                       cursor: 'pointer',
@@ -441,9 +439,9 @@ export default function WorkbenchPage() {
                     <span style={{ marginLeft: 12, fontSize: 11, color: 'var(--muted)' }}>
                       {r.status}
                     </span>
-                  </List.Item>
-                )}
-              />
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -456,7 +454,9 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {/* Empty state */}
+          {/* Empty state — distinguish "no session selected" from
+              "selected session is empty (e.g. user typed but never
+              confirmed an analysis)" */}
           {!requirement && reportVersions.length === 0 && phase === 'idle' && (
             <div
               style={{
@@ -466,13 +466,27 @@ export default function WorkbenchPage() {
                 padding: 'var(--sp-2xl)',
               }}
             >
-              <Empty
-                description={
-                  <Typography.Text style={{ color: 'var(--muted)' }}>
-                    在上方输入框提出问题，agent 会自动生成需求卡
+              {activeSessionId && sessions.find((s) => s.session_id === activeSessionId)?.first_message ? (
+                <>
+                  <Typography.Text style={{ color: 'var(--muted)', fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: 700, display: 'block', marginBottom: 8 }}>
+                    该会话暂无分析记录
                   </Typography.Text>
-                }
-              />
+                  <Typography.Paragraph style={{ color: 'var(--ink-2)', fontSize: 13, marginBottom: 12 }}>
+                    {sessions.find((s) => s.session_id === activeSessionId)?.first_message}
+                  </Typography.Paragraph>
+                  <Button type="primary" onClick={handleNewAnalysis}>
+                    在此会话上开始分析
+                  </Button>
+                </>
+              ) : (
+                <Empty
+                  description={
+                    <Typography.Text style={{ color: 'var(--muted)' }}>
+                      在上方输入框提出问题，agent 会自动生成需求卡
+                    </Typography.Text>
+                  }
+                />
+              )}
             </div>
           )}
         </main>
@@ -551,7 +565,9 @@ function SessionListBuckets({
   const renderItem = (s: ApiSessionSummary) => {
     const isActive = activeSessionId === s.session_id
     return (
-      <List.Item
+      <div
+        className="session-row"
+        data-session-id={s.session_id}
         onClick={() => onSelect(s.session_id)}
         style={{
           padding: '8px 10px',
@@ -577,7 +593,7 @@ function SessionListBuckets({
         <div style={{ fontSize: 10, color: 'var(--muted)' }}>
           {s.msg_count} 条 · {s.phase}
         </div>
-      </List.Item>
+      </div>
     )
   }
 
@@ -599,13 +615,17 @@ function SessionListBuckets({
       {today.length > 0 && (
         <>
           <div style={headerStyle}><span>今天</span><span style={{ color: 'var(--faint)' }}>{today.length}</span></div>
-          <List size="small" dataSource={today} renderItem={renderItem} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {today.map((s) => <div key={s.session_id}>{renderItem(s)}</div>)}
+          </div>
         </>
       )}
       {pastWeek.length > 0 && (
         <>
           <div style={headerStyle}><span>过去 7 天</span><span style={{ color: 'var(--faint)' }}>{pastWeek.length}</span></div>
-          <List size="small" dataSource={pastWeek} renderItem={renderItem} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {pastWeek.map((s) => <div key={s.session_id}>{renderItem(s)}</div>)}
+          </div>
         </>
       )}
       {older.length > 0 && (
@@ -617,7 +637,11 @@ function SessionListBuckets({
             <span>{showOlder ? '▾ 更早' : '▸ 更早'}</span>
             <span style={{ color: 'var(--faint)' }}>{older.length}</span>
           </div>
-          {showOlder && <List size="small" dataSource={older} renderItem={renderItem} />}
+          {showOlder && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {older.map((s) => <div key={s.session_id}>{renderItem(s)}</div>)}
+            </div>
+          )}
         </>
       )}
     </div>
