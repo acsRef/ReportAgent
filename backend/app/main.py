@@ -26,6 +26,13 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agent.parent_graph import AgentState, build_parent_graph
 from app.agent.sql_graph import ChatCard
+from app.agent.requirement_analysis_graph import build_requirement_analysis_graph
+from app.agent.confirmed_execution_graph import (
+    build_confirmed_execution_graph,
+    ConfirmedExecutionState,
+    RequirementIncompleteError,
+    SessionNotFoundError,
+)
 from app.db import get_connection, close_connection
 from app.infra.db.postgres import init_pool, close_pool
 from app.infra.checkpoint.session import session_manager
@@ -35,6 +42,13 @@ from app.infra.auth.jwt import create_token
 from app.infra.auth.deps import get_current_user
 from app.infra.conversation.repository import save_message, get_messages, list_sessions
 from app.models.contracts import LoginRequest, RegisterRequest
+from app.models.requirement import RequirementCard
+from app.services import (
+    requirement_service,
+    report_version_service,
+    snapshot_service,
+)
+from app.infra.db import report_version_repository
 
 VECTOR_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
@@ -66,6 +80,8 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     chosen_tool: str | None = None
     metadata: dict | None = None
+    mode: str = "new"
+    base_report_version: int | None = None
 
 
 @asynccontextmanager
@@ -146,6 +162,17 @@ async def get_conversation(session_id: str, user: dict = Depends(get_current_use
 
 @app.post("/api/v1/chat")
 async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_current_user)):
+    """Conversational Workbench v2 entry.
+
+    mode=new        → requirement-analysis (parse + persist draft, no SQL)
+    mode=supplement → requirement-analysis (with prior card context)
+    mode=adjust     → confirmed-execution (load latest draft, generate v2/v3)
+    mode=legacy     → original 2-stage interrupt + chosen_tool flow
+    """
+    # Legacy flow keeps the old behaviour for backward compatibility
+    if request.mode == "legacy":
+        return await _chat_legacy(request, req, user)
+
     session_id = request.session_id or str(uuid.uuid4())
 
     existing = await session_manager.get_session(session_id)
@@ -156,9 +183,214 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
     is_new = existing is None
 
     if is_new:
-        await session_manager.create_session(
-            session_id, user_id=request.session_id or "anonymous"
+        await session_manager.create_session(session_id, user_id=user["id"])
+
+    await save_message(session_id, user["id"], "user", request.user_query, "text")
+
+    if request.mode in ("new", "supplement"):
+        return await _chat_requirement_analysis(
+            request, req, user, session_id=session_id,
         )
+    # mode=adjust (and any future 'execute' alias) → confirmed-execution
+    return await _chat_confirmed_execution(
+        request, req, user, session_id=session_id,
+    )
+
+
+async def _chat_requirement_analysis(
+    request: ChatRequest,
+    req: Request,
+    user: dict,
+    *,
+    session_id: str,
+):
+    """SSE stream for requirement-analysis mode."""
+    trace_id = str(uuid.uuid4())
+    graph = build_requirement_analysis_graph()
+    config = {"configurable": {"thread_id": session_id}}
+
+    async def event_generator() -> AsyncGenerator[dict, None]:
+        try:
+            initial: dict = {
+                "user_query": request.user_query,
+                "user_id": user["id"],
+                "session_id": session_id,
+                "trace_id": trace_id,
+                "schema_context": None,
+                "requirement_card": None,
+                "draft_id": None,
+                "security_score": 0,
+                "security_level": "LOW",
+                "security_warning": "",
+                "error": None,
+                "execution_status": "RUNNING",
+            }
+            yield {
+                "event": "phase",
+                "data": json.dumps({"phase": "parsing"}, ensure_ascii=False),
+            }
+            result = await graph.ainvoke(initial, config)
+
+            if result.get("security_level") == "HIGH":
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "code": "SECURITY_REJECTED",
+                        "message": "请求被安全规则拦截",
+                        "recoverable": False,
+                        "failed_action": request.mode,
+                    }, ensure_ascii=False),
+                }
+                return
+
+            card = result.get("requirement_card")
+            phase = (
+                "awaiting_missing"
+                if (card and card.missing_fields)
+                else "awaiting_confirm"
+            )
+            yield {
+                "event": "phase",
+                "data": json.dumps({"phase": phase}, ensure_ascii=False),
+            }
+            if card is not None:
+                yield {
+                    "event": "requirement",
+                    "data": json.dumps(
+                        card.model_dump(mode="json"),
+                        ensure_ascii=False,
+                    ),
+                }
+        except Exception as exc:
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "code": "INTERNAL",
+                    "message": str(exc)[:300],
+                    "recoverable": False,
+                    "failed_action": request.mode,
+                }, ensure_ascii=False),
+            }
+        finally:
+            tracer = get_tracer(trace_id)
+            await tracer.flush()
+            yield {
+                "event": "done",
+                "data": json.dumps({"final_phase": phase if "phase" in dir() else "error"}, ensure_ascii=False),
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+async def _chat_confirmed_execution(
+    request: ChatRequest,
+    req: Request,
+    user: dict,
+    *,
+    session_id: str,
+):
+    """SSE stream for confirmed-execution (mode=adjust)."""
+    trace_id = str(uuid.uuid4())
+    graph = build_confirmed_execution_graph()
+    config = {"configurable": {"thread_id": session_id}}
+
+    async def event_generator() -> AsyncGenerator[dict, None]:
+        try:
+            yield {
+                "event": "phase",
+                "data": json.dumps({"phase": "adjusting"}, ensure_ascii=False),
+            }
+            initial: ConfirmedExecutionState = {
+                "user_query": request.user_query,
+                "user_id": user["id"],
+                "session_id": session_id,
+                "trace_id": trace_id,
+                "requirement_card": None,
+                "base_report_version": request.base_report_version,
+                "adjustment_text": request.user_query,
+                "schema_context": None,
+                "query_result": None,
+                "report_payload": None,
+                "execution_status": "RUNNING",
+                "error": None,
+            }
+            result = await graph.ainvoke(initial, config)
+            report_payload = result.get("report_payload") or {}
+            yield {
+                "event": "report",
+                "data": json.dumps(report_payload, ensure_ascii=False, default=str),
+            }
+        except RequirementIncompleteError as exc:
+            await session_manager.update_phase(
+                session_id, "error", failed_action=request.mode,
+            )
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "code": "REQUIREMENT_INCOMPLETE",
+                    "message": str(exc)[:300],
+                    "recoverable": True,
+                    "failed_action": request.mode,
+                }, ensure_ascii=False),
+            }
+        except SessionNotFoundError as exc:
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "code": "SESSION_NOT_FOUND",
+                    "message": str(exc)[:300],
+                    "recoverable": False,
+                    "failed_action": request.mode,
+                }, ensure_ascii=False),
+            }
+        except Exception as exc:
+            await session_manager.update_phase(
+                session_id, "error", failed_action=request.mode,
+            )
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "code": "INTERNAL",
+                    "message": str(exc)[:300],
+                    "recoverable": False,
+                    "failed_action": request.mode,
+                }, ensure_ascii=False),
+            }
+        finally:
+            tracer = get_tracer(trace_id)
+            await tracer.flush()
+            yield {
+                "event": "done",
+                "data": json.dumps({"final_phase": "report_ready"}, ensure_ascii=False),
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+async def _chat_legacy(
+    request: ChatRequest,
+    req: Request,
+    user: dict,
+):
+    """Original 2-stage interrupt + chosen_tool flow. Kept on
+    /api/v1/chat?mode=legacy for backward compatibility. Phase 8 of the
+    workbench plan decides whether to retire this; for now it is
+    unchanged from the prior implementation.
+    """
+    global _agent
+    if _agent is None:
+        _agent = build_parent_graph()
+    session_id = request.session_id or str(uuid.uuid4())
+
+    existing = await session_manager.get_session(session_id)
+    if existing and existing.get("last_checkpoint_at"):
+        cp_time = existing["last_checkpoint_at"]
+        if isinstance(cp_time, datetime.datetime) and cp_time < _server_start_time:
+            existing = None
+    is_new = existing is None
+
+    if is_new:
+        await session_manager.create_session(session_id, user_id=user["id"])
 
     await save_message(session_id, user["id"], "user", request.user_query, "text")
 
@@ -179,6 +411,7 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
                 "current_query": request.user_query,
                 "clarification_history": [],
                 "session_id": session_id,
+                "user_id": user["id"],
                 "intent": "",
                 "memory_context": "",
                 "schema_context": None,
@@ -397,3 +630,190 @@ def _build_response(state: dict) -> dict:
         },
         "trace": [],
     }
+
+
+# ============================================================================
+# Phase 4 endpoints (Conversational Workbench v2)
+# ============================================================================
+
+
+@app.patch("/api/v1/sessions/{session_id}/requirement")
+async def patch_requirement(
+    session_id: str,
+    payload: dict,
+    user: dict = Depends(get_current_user),
+):
+    """Server-side recompute + persist a PATCH from the frontend.
+
+    Body: { "requirement": RequirementCard }
+    Returns: { "requirement": RequirementCard }
+    Errors: 422 INVALID_REQUIREMENT, 409 REQUIREMENT_LOCKED, 404 SESSION_NOT_FOUND.
+    """
+    sess = await session_manager.get_session(session_id)
+    if sess is None or sess.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
+    try:
+        incoming = RequirementCard.model_validate(payload.get("requirement", {}))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"INVALID_REQUIREMENT: {exc}")
+    try:
+        saved = await requirement_service.patch_requirement(
+            session_id=session_id,
+            user_id=user["id"],
+            incoming=incoming,
+        )
+    except requirement_service.RequirementLockedError as exc:
+        raise HTTPException(status_code=409, detail=f"REQUIREMENT_LOCKED: {exc}")
+    return {"requirement": saved.model_dump(mode="json")}
+
+
+@app.post("/api/v1/sessions/{session_id}/confirm")
+async def confirm_session(
+    session_id: str,
+    req: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Run confirmed-execution on the latest draft. Returns SSE v2 stream."""
+    sess = await session_manager.get_session(session_id)
+    if sess is None or sess.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
+
+    trace_id = str(uuid.uuid4())
+    graph = build_confirmed_execution_graph()
+    config = {"configurable": {"thread_id": session_id}}
+
+    async def event_generator() -> AsyncGenerator[dict, None]:
+        try:
+            yield {
+                "event": "phase",
+                "data": json.dumps({"phase": "generating"}, ensure_ascii=False),
+            }
+            initial: ConfirmedExecutionState = {
+                "user_query": "",
+                "user_id": user["id"],
+                "session_id": session_id,
+                "trace_id": trace_id,
+                "requirement_card": None,
+                "base_report_version": None,
+                "adjustment_text": None,
+                "schema_context": None,
+                "query_result": None,
+                "report_payload": None,
+                "execution_status": "RUNNING",
+                "error": None,
+            }
+            result = await graph.ainvoke(initial, config)
+            report_payload = result.get("report_payload") or {}
+            yield {
+                "event": "report",
+                "data": json.dumps(report_payload, ensure_ascii=False, default=str),
+            }
+        except RequirementIncompleteError as exc:
+            await session_manager.update_phase(
+                session_id, "error", failed_action="confirm",
+            )
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "code": "REQUIREMENT_INCOMPLETE",
+                    "message": str(exc)[:300],
+                    "recoverable": True,
+                    "failed_action": "confirm",
+                }, ensure_ascii=False),
+            }
+        except SessionNotFoundError as exc:
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "code": "SESSION_NOT_FOUND",
+                    "message": str(exc)[:300],
+                    "recoverable": False,
+                    "failed_action": "confirm",
+                }, ensure_ascii=False),
+            }
+        except Exception as exc:
+            await session_manager.update_phase(
+                session_id, "error", failed_action="confirm",
+            )
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "code": "INTERNAL",
+                    "message": str(exc)[:300],
+                    "recoverable": False,
+                    "failed_action": "confirm",
+                }, ensure_ascii=False),
+            }
+        finally:
+            tracer = get_tracer(trace_id)
+            await tracer.flush()
+            yield {
+                "event": "done",
+                "data": json.dumps({"final_phase": "report_ready"}, ensure_ascii=False),
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+@app.post("/api/v1/sessions/{session_id}/retry")
+async def retry_session(
+    session_id: str,
+    req: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Resume the failed action recorded in `agent.session.last_failed_action`.
+
+    For now this delegates to /chat (mode=adjust if the failure was on
+    an adjustment, or a fresh requirement-analysis otherwise). The full
+    implementation is Phase 8's responsibility.
+    """
+    sess = await session_manager.get_session(session_id)
+    if sess is None or sess.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
+    # Clear the failure marker and route to confirm as a safe default.
+    await session_manager.update_phase(session_id, "parsing")
+    return await confirm_session(session_id, req, user)
+
+
+@app.get("/api/v1/sessions/{session_id}")
+async def get_session(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Full session snapshot: session + messages + current_requirement +
+    latest_report + last_failed_action."""
+    snap = await snapshot_service.get_session_snapshot(
+        session_id=session_id, user_id=user["id"],
+    )
+    if snap is None:
+        raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
+    return snap
+
+
+@app.get("/api/v1/sessions/{session_id}/reports/{version}")
+async def get_report_version(
+    session_id: str,
+    version: int,
+    user: dict = Depends(get_current_user),
+):
+    """Read a specific report version. No LLM / no graph."""
+    from app.infra.db.postgres import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await report_version_repository.get_version(
+            conn,
+            session_id=session_id,
+            user_id=user["id"],
+            version=version,
+        )
+    if row is None:
+        raise HTTPException(status_code=404, detail="VERSION_NOT_FOUND")
+    # Normalize JSONB → python objects for JSON response
+    import json as _json
+    if isinstance(row.get("report_payload"), str):
+        row["report_payload"] = _json.loads(row["report_payload"])
+    if isinstance(row.get("query_snapshot"), str):
+        row["query_snapshot"] = _json.loads(row["query_snapshot"])
+    if row.get("created_at"):
+        row["created_at"] = row["created_at"].isoformat()
+    return {"report": row}

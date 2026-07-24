@@ -54,8 +54,13 @@ class RequirementCard(BaseModel):
 
     @model_validator(mode="after")
     def validate_status_consistency(self) -> RequirementCard:
+        # A 'missing' card must EITHER have explicit missing fields OR
+        # have at least one unresolved assumption (the user must accept
+        # the assumption before /confirm is allowed).
         if self.status == "missing" and not self.missing_fields:
-            raise ValueError("missing requirement must contain missing fields")
+            has_unresolved = any(a.accepted is None for a in self.assumptions)
+            if not has_unresolved:
+                raise ValueError("missing requirement must contain missing fields")
         if self.status in {"complete", "locked"} and self.missing_fields:
             raise ValueError("complete requirement cannot contain missing fields")
         if self.status in {"complete", "locked"} and any(

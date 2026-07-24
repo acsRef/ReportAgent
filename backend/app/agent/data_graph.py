@@ -57,7 +57,7 @@ def _build_context(state: DataAgentState) -> dict:
 
     ctx = SchemaContext(
         version="1.0",
-        source="duckdb",
+        source="postgres",
         tables=schema_tables,
         confidence=min(len(tables) * 0.3, 1.0),
         status="SUCCESS" if schema_tables else "FAILED",

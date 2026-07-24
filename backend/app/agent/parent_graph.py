@@ -21,6 +21,7 @@ from app.models.contracts import (
     ReportSpec,
     SchemaContext,
 )
+from app.models.requirement import RequirementCard
 from app.agent.security_guard import SecurityGuard
 from app.tools.registry import registry
 from app.tools.__init__ import register_all_tools
@@ -34,6 +35,7 @@ class AgentState(TypedDict):
     current_query: str
     clarification_history: list
     session_id: str
+    user_id: int  # JWT user id; injected from /api/v1/chat deps in main.py
     intent: str
     memory_context: str
 
@@ -72,6 +74,11 @@ class AgentState(TypedDict):
     intent_needs_options_group: bool = False
     intent_confidence: float = 0.0
     intent_reasoning: str = ""
+
+    # Phase 1 / Phase 3 wiring: requirement-analysis graph populates this
+    # from the parsed RequirementCard and downstream nodes (e.g.
+    # confirmed-execution) read it. Legacy flow leaves it None.
+    requirement_card: Optional[RequirementCard]
 
 
 # --- Security Guard ---
@@ -133,10 +140,10 @@ async def _classify_intent(state: AgentState) -> dict:
         intent = "报表"
 
     # Recall memories for context
-    session_id = state.get("session_id", "")
+    user_id = state.get("user_id", 0) or 0
     try:
         mm = MemoryManager()
-        memory_context = await mm.recall(query=q, user_id=session_id, top_k_queries=2, top_k_preferences=3)
+        memory_context = await mm.recall(query=q, user_id=user_id, top_k_queries=2, top_k_preferences=3)
     except Exception:
         memory_context = ""
 
@@ -431,7 +438,7 @@ async def _run_report_agent(state: AgentState) -> dict:
         try:
             mm = MemoryManager()
             await mm.remember_preference(
-                user_id=state.get("session_id", "anonymous"),
+                user_id=state.get("user_id", 0) or 0,
                 content=insight,
                 source="report_agent",
                 memory_type="insight",

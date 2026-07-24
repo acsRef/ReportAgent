@@ -1,9 +1,39 @@
 -- ReportAgent PostgreSQL Schema Initialization
 -- Run: psql -U ragent -d ragent -f init_pg.sql
+-- This file is idempotent; safe to re-run.
 
+-- ============================================================
+-- Schemas
+-- ============================================================
 CREATE SCHEMA IF NOT EXISTS agent;
 CREATE SCHEMA IF NOT EXISTS memory;
 CREATE SCHEMA IF NOT EXISTS observability;
+CREATE SCHEMA IF NOT EXISTS app;
+
+-- ============================================================
+-- app schema (auth + conversation)  -- must precede agent.session
+-- because agent.session.user_id is INT REFERENCES app.users(id).
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS app.users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(64) UNIQUE NOT NULL,
+    password_hash VARCHAR(256) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS app.conversations (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(64) NOT NULL,
+    user_id INT NOT NULL REFERENCES app.users(id),
+    role VARCHAR(16) NOT NULL,
+    content TEXT,
+    message_type VARCHAR(32) DEFAULT 'text',
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_user_session ON app.conversations (user_id, session_id, created_at);
 
 -- ============================================================
 -- agent schema
@@ -12,13 +42,33 @@ CREATE SCHEMA IF NOT EXISTS observability;
 CREATE TABLE IF NOT EXISTS agent.session (
     id SERIAL PRIMARY KEY,
     thread_id VARCHAR(64) UNIQUE NOT NULL,
-    user_id VARCHAR(64),
+    user_id INT,  -- nullable: anonymous before login; INT to FK app.users
     title VARCHAR(256),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     last_checkpoint_at TIMESTAMP,  -- nullable: LangGraph checkpoint may not exist yet
     status VARCHAR(32) DEFAULT 'active'
 );
+
+-- Soft-migrate: if a legacy VARCHAR(64) user_id column exists from an older
+-- init, null out garbage values then ALTER it to INT. Garbage here is any
+-- value that is not a pure integer (e.g. legacy code wrote session_id strings
+-- into user_id, which the Phase 2 fix in main.py prevents going forward).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'agent'
+          AND table_name = 'session'
+          AND column_name = 'user_id'
+          AND data_type = 'character varying'
+    ) THEN
+        UPDATE agent.session SET user_id = NULL WHERE user_id !~ '^[0-9]+$';
+        ALTER TABLE agent.session
+            ALTER COLUMN user_id TYPE INT USING NULLIF(user_id, '')::INT;
+    END IF;
+END $$;
 
 -- ============================================================
 -- memory schema
@@ -46,7 +96,7 @@ CREATE INDEX IF NOT EXISTS idx_query_template_embedding
 
 CREATE TABLE IF NOT EXISTS memory.semantic_entry (
     id SERIAL PRIMARY KEY,
-    user_id VARCHAR(128) NOT NULL,
+    user_id INT NOT NULL,
     content TEXT NOT NULL,
     entry_type VARCHAR(32) DEFAULT 'semantic',
     memory_type VARCHAR(32) DEFAULT 'insight',
@@ -57,6 +107,25 @@ CREATE TABLE IF NOT EXISTS memory.semantic_entry (
     last_access_time TIMESTAMP DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Soft-migrate semantic_entry.user_id from VARCHAR(128) to INT.
+-- Garbage rows (non-numeric user_id) are deleted; the column is NOT NULL,
+-- so a DELETE is cleaner than a NULL cast here.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'memory'
+          AND table_name = 'semantic_entry'
+          AND column_name = 'user_id'
+          AND data_type = 'character varying'
+    ) THEN
+        DELETE FROM memory.semantic_entry WHERE user_id !~ '^[0-9]+$';
+        ALTER TABLE memory.semantic_entry
+            ALTER COLUMN user_id TYPE INT USING NULLIF(user_id, '')::INT;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_semantic_entry_user ON memory.semantic_entry (user_id);
 
@@ -111,27 +180,85 @@ CREATE TABLE IF NOT EXISTS observability.llm_call (
 CREATE INDEX IF NOT EXISTS idx_llm_call_span_id ON observability.llm_call (span_id);
 
 -- ============================================================
--- app schema (auth + conversation)
+-- Phase 2 / Phase 4 of the conversational workbench plan:
+-- requirement_draft / report_version / report_template
+-- Source of truth: docs/persistence.md
 -- ============================================================
 
-CREATE SCHEMA IF NOT EXISTS app;
-
-CREATE TABLE IF NOT EXISTS app.users (
-    id SERIAL PRIMARY KEY,
-    username VARCHAR(64) UNIQUE NOT NULL,
-    password_hash VARCHAR(256) NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS app.conversations (
-    id SERIAL PRIMARY KEY,
+-- agent.requirement_draft
+CREATE TABLE IF NOT EXISTS agent.requirement_draft (
+    id BIGSERIAL PRIMARY KEY,
     session_id VARCHAR(64) NOT NULL,
     user_id INT NOT NULL REFERENCES app.users(id),
-    role VARCHAR(16) NOT NULL,
-    content TEXT,
-    message_type VARCHAR(32) DEFAULT 'text',
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT NOW()
+    version INT NOT NULL,
+    user_query TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    payload JSONB NOT NULL,
+    confirmed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(session_id, version)
 );
 
-CREATE INDEX IF NOT EXISTS idx_conv_user_session ON app.conversations (user_id, session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_requirement_draft_session
+    ON agent.requirement_draft(session_id, version DESC);
+
+-- agent.report_version
+CREATE TABLE IF NOT EXISTS agent.report_version (
+    id BIGSERIAL PRIMARY KEY,
+    session_id VARCHAR(64) NOT NULL,
+    user_id INT NOT NULL REFERENCES app.users(id),
+    version INT NOT NULL,
+    parent_version INT,
+    requirement_draft_id BIGINT REFERENCES agent.requirement_draft(id),
+    adjustment_text TEXT,
+    title TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    report_payload JSONB NOT NULL,
+    query_snapshot JSONB,
+    trace_id VARCHAR(64),
+    favorite BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(session_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_version_session
+    ON agent.report_version(session_id, version DESC);
+
+CREATE INDEX IF NOT EXISTS idx_report_version_user_session
+    ON agent.report_version(user_id, session_id);
+
+-- app.report_template
+CREATE TABLE IF NOT EXISTS app.report_template (
+    id BIGSERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES app.users(id),
+    name VARCHAR(128) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    requirement_payload JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(user_id, name)
+);
+
+-- agent.session extensions for Phase 4 (current_phase, pointers)
+ALTER TABLE agent.session
+    ADD COLUMN IF NOT EXISTS latest_requirement_draft_id BIGINT,
+    ADD COLUMN IF NOT EXISTS latest_report_version INT,
+    ADD COLUMN IF NOT EXISTS current_phase VARCHAR(32) NOT NULL DEFAULT 'idle',
+    ADD COLUMN IF NOT EXISTS last_failed_action VARCHAR(32);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'fk_session_latest_requirement'
+          AND table_schema = 'agent'
+          AND table_name = 'session'
+    ) THEN
+        ALTER TABLE agent.session
+            ADD CONSTRAINT fk_session_latest_requirement
+            FOREIGN KEY (latest_requirement_draft_id)
+            REFERENCES agent.requirement_draft(id);
+    END IF;
+END $$;
+

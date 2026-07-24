@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from app.models.requirement import RequirementCard
 
 
 class ColumnSchema(BaseModel):
@@ -97,8 +100,72 @@ class ConversationMessage(BaseModel):
     created_at: str
 
 
+# ---------------------------------------------------------------------------
+# Conversational Workbench v2 — added in Phase 1
+# ---------------------------------------------------------------------------
+
+ChatMode = Literal["new", "supplement", "adjust", "legacy"]
+
+
+class ChatRequest(BaseModel):
+    """Body for `POST /api/v1/chat`.
+
+    `mode` defaults to `new`. `legacy` keeps the old 2-stage intent card
+    flow alive for clients that haven't migrated; see Phase 8 of the
+    workbench plan for the retirement rule.
+    """
+
+    user_query: str
+    session_id: str | None = None
+    mode: ChatMode = "new"
+    base_report_version: int | None = None
+    metadata: dict | None = None
+
+
+class PatchRequirementRequest(BaseModel):
+    """Body for `PATCH /api/v1/sessions/{sid}/requirement`."""
+
+    requirement: RequirementCard
+
+
+class ReportVersionSummary(BaseModel):
+    """Summary row from `agent.report_version` — used in `SessionSummary`."""
+
+    version: int
+    title: str
+    status: Literal["generating", "done", "error"] = "done"
+    created_at: datetime
+    favorite: bool = False
+
+
 class SessionSummary(BaseModel):
+    """Response of `GET /api/v1/sessions`."""
+
     session_id: str
-    msg_count: int
-    first_message: str
-    last_message: str
+    title: str = ""
+    phase: Literal[
+        "idle", "parsing", "awaiting_missing", "awaiting_confirm",
+        "generating", "adjusting", "report_ready", "error",
+    ] = "idle"
+    msg_count: int = 0
+    updated_at: datetime
+    report_versions: list[ReportVersionSummary] = Field(default_factory=list)
+
+
+class SessionSnapshot(BaseModel):
+    """Response of `GET /api/v1/sessions/{sid}`."""
+
+    session: SessionSummary
+    messages: list[ConversationMessage] = Field(default_factory=list)
+    current_requirement: RequirementCard | None = None
+    latest_report: Optional[dict] = None
+    last_failed_action: Literal["new", "supplement", "confirm", "adjust", "retry"] | None = None
+
+
+class TemplateRequest(BaseModel):
+    """Body for `POST /api/v1/templates`."""
+
+    name: str
+    description: str = ""
+    requirement_payload: dict
+
