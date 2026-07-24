@@ -1,0 +1,93 @@
+@import "./tokens.css";
+
+/* ----- Reset / baseline ----- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ----- Display headings ----- */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  color: var(--ink);
+  margin: 0;
+}
+
+a {
+  color: var(--teal-deep);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ----- Scrollbar (subtle) ----- */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ----- Workbench layout shell ----- */
+
+.workbench-shell {
+  display: grid;
+  grid-template-rows: 58px 1fr;
+  height: 100vh;
+  background: var(--canvas);
+}
+
+.workbench-body {
+  display: grid;
+  grid-template-columns: 268px 1fr 300px;
+  min-height: 0;
+}
+
+@media (max-width: 1180px) {
+  .workbench-body {
+    grid-template-columns: 268px 1fr;
+  }
+  .workbench-rail--right {
+    display: none;
+  }
+}
+
+@media (max-width: 880px) {
+  .workbench-body {
+    grid-template-columns: 1fr;
+  }
+  .workbench-rail--left {
+    display: none;
+  }
+}

@@ -33,7 +33,7 @@ export function parseAnalysisSSEEvent(event: SSEEvent): AnalysisStreamEvent | nu
   const payload = parseObject(event.data)
   if (!payload) return null
 
-  switch (event.event) {
+  switch (event.event as string) {
     case 'phase': {
       const phase = readPhase(payload.phase)
       if (!phase) return null
@@ -46,12 +46,12 @@ export function parseAnalysisSSEEvent(event: SSEEvent): AnalysisStreamEvent | nu
 
     case 'requirement':
       return isRequirementCard(payload)
-        ? { type: 'requirement', requirement: payload }
+        ? { type: 'requirement', requirement: payload as RequirementCard }
         : null
 
     case 'report':
       return isReportVersion(payload)
-        ? { type: 'report', report: payload }
+        ? { type: 'report', report: payload as ReportVersion }
         : null
 
     case 'error': {
