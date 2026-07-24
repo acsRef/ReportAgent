@@ -108,11 +108,12 @@ async def _sql_gate(state: ConfirmedExecutionState) -> dict:
     card = state.get("requirement_card")
     if card is None:
         raise RequirementIncompleteError("no card loaded")
+    draft_id = await _draft_id_from_state(state)
     try:
         await requirement_service.lock_for_execution(
             session_id=state["session_id"],
             user_id=state["user_id"],
-            draft_id=_draft_id_from_state(state),
+            draft_id=draft_id,
         )
     except Exception as exc:
         raise RequirementIncompleteError(
@@ -204,12 +205,13 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
     """
     if state.get("report_payload") is None:
         return {"execution_status": "FAILED"}
+    draft_id = await _draft_id_from_state(state)
     base_version = state.get("base_report_version")
     if base_version is None:
         row = await report_version_service.persist_confirmed_run(
             session_id=state["session_id"],
             user_id=state["user_id"],
-            requirement_draft_id=_draft_id_from_state(state),
+            requirement_draft_id=draft_id,
             title="报告",
             report_payload=state["report_payload"],
             query_snapshot=None,
@@ -220,7 +222,7 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
             session_id=state["session_id"],
             user_id=state["user_id"],
             base_report_version=base_version,
-            requirement_draft_id=_draft_id_from_state(state),
+            requirement_draft_id=draft_id,
             adjustment_text=state.get("adjustment_text") or "",
             title="报告（调整）",
             report_payload=state["report_payload"],
@@ -254,11 +256,12 @@ def _draft_id_from_state(state: ConfirmedExecutionState) -> int:
     """Re-fetch the latest draft id for the current session/user. We keep
     the state lean (it carries the card, not the id) so this is a
     best-effort read. Callers should have just loaded it.
+
+    Returns a coroutine — call with `await` inside an async node.
     """
-    import asyncio
     from app.infra.db.postgres import get_pool
 
-    async def _read():
+    async def _read() -> int:
         pool = get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -269,7 +272,7 @@ def _draft_id_from_state(state: ConfirmedExecutionState) -> int:
             )
             return row["id"] if row else 0
 
-    return asyncio.run(_read())
+    return _read()
 
 
 # --- Graph build ----------------------------------------------------------

@@ -16,6 +16,8 @@ RequirementFieldKey = Literal[
 ]
 RequirementFieldKind = Literal["single", "multiple"]
 
+SelectedValue = str | list[str]
+
 
 class RequirementOption(BaseModel):
     label: str
@@ -27,6 +29,13 @@ class RequirementMissingField(BaseModel):
     label: str
     kind: RequirementFieldKind = "single"
     options: list[RequirementOption] = Field(default_factory=list)
+    # The user's selection for this field. For `kind=single`, this is a
+    # single string (or None if unselected). For `kind=multiple`, a
+    # list of strings (possibly empty). The service layer translates
+    # selections into the card's structured fields (time_range, scope,
+    # etc.) and removes this MissingField from the persisted card
+    # when filled.
+    selected_value: SelectedValue | None = None
 
 
 class RequirementAssumption(BaseModel):

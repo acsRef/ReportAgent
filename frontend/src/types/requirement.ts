@@ -9,6 +9,8 @@ export type RequirementFieldKey =
 
 export type RequirementFieldKind = 'single' | 'multiple'
 
+export type SelectedValue = string | string[]
+
 export interface RequirementOption {
   label: string
   value: string
@@ -19,6 +21,11 @@ export interface RequirementMissingField {
   label: string
   kind: RequirementFieldKind
   options: RequirementOption[]
+  /** For `kind=single`, a single string (or null). For `kind=multiple`, a
+   * string array (possibly empty). The server drops the field from
+   * `missing_fields` and applies the value to the card's structured
+   * fields (time_range / scope / target_metrics / ...) on PATCH. */
+  selected_value: SelectedValue | null
 }
 
 export interface RequirementAssumption {

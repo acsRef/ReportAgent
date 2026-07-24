@@ -42,7 +42,7 @@ from app.infra.auth.repository import ensure_default_user, verify_user
 from app.infra.auth.jwt import create_token
 from app.infra.auth.deps import get_current_user
 from app.infra.conversation.repository import save_message, get_messages, list_sessions
-from app.models.contracts import LoginRequest, RegisterRequest
+from app.models.contracts import LoginRequest, RegisterRequest, PatchRequirementRequest
 from app.models.requirement import RequirementCard
 from app.services import (
     requirement_service,
@@ -643,7 +643,7 @@ def _build_response(state: dict) -> dict:
 @app.patch("/api/v1/sessions/{session_id}/requirement")
 async def patch_requirement(
     session_id: str,
-    payload: dict,
+    payload: "PatchRequirementRequest",
     user: dict = Depends(get_current_user),
 ):
     """Server-side recompute + persist a PATCH from the frontend.
@@ -656,14 +656,10 @@ async def patch_requirement(
     if sess is None or sess.get("user_id") != user["id"]:
         raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
     try:
-        incoming = RequirementCard.model_validate(payload.get("requirement", {}))
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"INVALID_REQUIREMENT: {exc}")
-    try:
         saved = await requirement_service.patch_requirement(
             session_id=session_id,
             user_id=user["id"],
-            incoming=incoming,
+            incoming=payload.requirement,
         )
     except requirement_service.RequirementLockedError as exc:
         raise HTTPException(status_code=409, detail=f"REQUIREMENT_LOCKED: {exc}")

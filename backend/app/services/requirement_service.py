@@ -29,12 +29,54 @@ async def patch_requirement(
 
     Server-side rules:
     1. If the latest draft is `locked`, reject with RequirementLockedError.
-    2. Recompute status: if `missing_fields` is non-empty, status='missing';
-       if all assumptions resolved and missing_fields empty, status='complete'.
-    3. Write a new version row.
-    4. Update `agent.session.latest_requirement_draft_id`.
-    5. Persist a conversation pointer (`message_type='requirement_patch'`).
+    2. For each `missing_field` that carries a `selected_value`, apply it
+       to the card's structured fields and drop it from missing_fields.
+    3. Recompute status: if any missing_fields remain OR any assumption
+       is still unresolved, status='missing'; else 'complete'.
+    4. Write a new version row.
+    5. Update `agent.session.latest_requirement_draft_id` + current_phase.
+    6. Persist a conversation pointer (`message_type='requirement_patch'`).
     """
+    # Step 1: apply selected_value → structured fields, drop filled ones.
+    card_dict = incoming.model_dump(mode="json")
+    remaining_missing: list[dict] = []
+    for mf in card_dict.get("missing_fields", []):
+        sel = mf.get("selected_value")
+        key = mf.get("key")
+        if sel is None or sel == "" or sel == []:
+            remaining_missing.append(mf)
+            continue
+        if key == "time_range":
+            card_dict["time_range"] = sel if isinstance(sel, str) else sel[0]
+        elif key == "scope":
+            card_dict["scope"] = sel if isinstance(sel, list) else [sel]
+        elif key == "metric":
+            metrics = sel if isinstance(sel, list) else [sel]
+            card_dict["target_metrics"] = metrics
+        elif key == "granularity":
+            # granularity only affects SQL, not card body; record into
+            # analysis_methods or dimensions as a hint.
+            card_dict["dimensions"] = list(
+                set(card_dict.get("dimensions", []) + [f"粒度:{sel}"]),
+            )
+        elif key == "comparison":
+            card_dict["dimensions"] = list(
+                set(card_dict.get("dimensions", []) + [f"对比:{sel}"]),
+            )
+        # else: drop from missing_fields (filled)
+    card_dict["missing_fields"] = remaining_missing
+
+    # Step 2: recompute status.
+    unresolved = [a for a in card_dict.get("assumptions", []) if a.get("accepted") is None]
+    if remaining_missing or unresolved:
+        new_status = "missing"
+    else:
+        new_status = "complete"
+    card_dict["status"] = new_status
+
+    # Re-validate (Pydantic will raise on inconsistent states).
+    new_card = RequirementCard.model_validate(card_dict)
+
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -46,22 +88,12 @@ async def patch_requirement(
                     f"requirement for session {session_id} is locked"
                 )
 
-            # Recompute status from the incoming card's structure.
-            new_status = (
-                "missing" if incoming.missing_fields else "complete"
-            )
-            # Defensive: if the client claims 'locked' via PATCH, demote it.
-            incoming = incoming.model_copy(update={"status": new_status})
-            # Pydantic will now re-validate (complete requires resolved
-            # assumptions); if that fails, the ValidationError propagates
-            # and the transaction is rolled back.
-
             new_id = await requirement_repository.create_draft(
                 conn,
                 session_id=session_id,
                 user_id=user_id,
-                user_query="",  # PATCH does not change the original query
-                card=incoming,
+                user_query="",
+                card=new_card,
             )
 
             await conn.execute(
@@ -72,21 +104,20 @@ async def patch_requirement(
                      WHERE thread_id = $1""",
                 session_id,
                 new_id,
-                "awaiting_missing" if incoming.missing_fields else "awaiting_confirm",
+                "awaiting_missing" if new_card.missing_fields else "awaiting_confirm",
             )
 
-            # Conversation pointer row (lightweight; full card is in JSONB)
             await conn.execute(
                 """INSERT INTO app.conversations
                        (session_id, user_id, role, content, message_type, metadata)
                    VALUES ($1, $2, 'system', NULL, 'requirement_patch',
                            $3::jsonb)""",
                 session_id, user_id,
-                json.dumps({"draft_id": new_id, "version": incoming.version},
+                json.dumps({"draft_id": new_id, "version": new_card.version},
                            ensure_ascii=False),
             )
 
-    return incoming
+    return new_card
 
 
 async def lock_for_execution(
