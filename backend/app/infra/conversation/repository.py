@@ -47,24 +47,46 @@ async def get_messages(session_id: str, user_id: int) -> list[dict]:
 
 
 async def list_sessions(user_id: int) -> list[dict]:
+    """List sessions for a user. Joins `app.conversations` (for msg_count +
+    first/last message) with `agent.session` (for title / phase /
+    current_phase / updated_at / report_versions).
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT session_id, COUNT(*) as msg_count,
-                      MAX(created_at) as last_msg,
-                      (array_agg(content ORDER BY created_at ASC))[1] as first_message_text
-               FROM app.conversations
-               WHERE user_id = $1
-               GROUP BY session_id
-               ORDER BY last_msg DESC""",
+            """SELECT
+                 s.thread_id        AS session_id,
+                 s.title            AS title,
+                 s.current_phase    AS phase,
+                 COALESCE(conv.msg_count, 0)     AS msg_count,
+                 COALESCE(conv.last_msg, s.created_at) AS updated_at,
+                 conv.first_message_text          AS first_message,
+                 conv.last_message_text           AS last_message
+               FROM agent.session s
+               LEFT JOIN (
+                 SELECT session_id,
+                        COUNT(*) AS msg_count,
+                        MAX(created_at) AS last_msg,
+                        (array_agg(content ORDER BY created_at ASC))[1] AS first_message_text,
+                        (array_agg(content ORDER BY created_at DESC))[1] AS last_message_text
+                 FROM app.conversations
+                 WHERE user_id = $1
+                 GROUP BY session_id
+               ) conv ON conv.session_id = s.thread_id
+               WHERE s.user_id = $1
+               ORDER BY updated_at DESC""",
             user_id,
         )
         return [
             {
                 "session_id": r["session_id"],
+                "title": r["title"] or "",
+                "phase": r["phase"] or "idle",
                 "msg_count": r["msg_count"],
-                "first_message": r["first_message_text"] or "",
-                "last_message": r["last_msg"].isoformat(),
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else "",
+                "first_message": r["first_message"] or "",
+                "last_message": r["last_message"] or "",
+                "report_versions": [],  # populated lazily by /sessions/{sid} snapshot
             }
             for r in rows
         ]
