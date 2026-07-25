@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Atelier · 工作室组件库</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="atelier.css">
+  <link rel="stylesheet" href="gallery.css">
+</head>
+<body class="atelier-page">
+  <a class="atelier-skip-link" href="#main-content">跳到主内容</a>
+  <header class="atelier-topbar">
+    <div class="atelier-topbar__brand">
+      <span class="atelier-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 17V8m5 9V4m5 13v-6m5 6V7" stroke="white" stroke-width="2.1" stroke-linecap="round"/><path d="M3 20h18" stroke="white" stroke-width="1.5" opacity=".55"/></svg>
+      </span>
+      <span class="atelier-brand__copy">
+        <span class="atelier-brand__name">Atelier</span>
+        <span class="atelier-brand__sub">Studio component library</span>
+      </span>
+    </div>
+    <nav class="atelier-topbar__nav" aria-label="Primary">
+      <button class="nav-btn is-active" type="button">组件总览</button>
+      <button class="nav-btn" type="button">使用指引</button>
+      <button class="nav-btn" type="button">下载源码</button>
+    </nav>
+    <div class="atelier-topbar__meta">
+      <span class="atelier-live" aria-hidden="true"></span>
+      <span>无需构建依赖 · 可直接复制 HTML</span>
+    </div>
+  </header>
+
+  <div class="atelier-shell">
+    <aside class="atelier-rail">
+      <h2 class="atelier-rail__title">组件分类</h2>
+      <nav aria-label="Sections">
+        <a class="atelier-rail__link is-active" href="#atom">基础原子</a>
+        <a class="atelier-rail__link" href="#form">表单</a>
+        <a class="atelier-rail__link" href="#status">状态与布局</a>
+        <a class="atelier-rail__link" href="#feedback">重型反馈</a>
+        <a class="atelier-rail__link" href="#data">数据展示</a>
+        <a class="atelier-rail__link" href="#nav-tree">导航 / 树</a>
+        <a class="atelier-rail__link" href="#a11y">可访问性</a>
+      </nav>
+      <p class="atelier-rail__hint">点击右侧示例可交互；所有状态用 CSS Module 风格命名</p>
+    </aside>
+
+    <main class="atelier-main" id="main-content" tabindex="-1">
+      <header class="atelier-hero">
+        <p class="atelier-hero__kicker">Atelier · studio component library</p>
+        <h1 class="atelier-hero__title">把原型视觉抽象成可复用控件</h1>
+        <p class="atelier-hero__copy">
+          独立的 HTML + CSS + JS 控件库；任何框架可直接复制使用。
+          风格依据 <a href="docs/intelligent-analysis-workbench.html">原型</a> 与
+          <a href="docs/ui-style-guide.md">UI 风格指南</a>：海军蓝结构 + 青绿色强调 + 编辑部式排版。
+        </p>
+        <div class="atelier-hero__stats">
+          <span class="atelier-pill is-teal">45 个组件</span>
+          <span class="atelier-pill is-amber">无运行时依赖</span>
+          <span class="atelier-pill is-default">≤ 80KB Gzip 目标</span>
+          <span class="atelier-pill is-red">可访问性优先</span>
+        </div>
+      </header>
+
+      <section id="atom" class="atelier-section">
+        <header class="atelier-section__head">
+          <span class="atelier-section__index">01 / ATOM</span>
+          <h2 class="atelier-section__title">基础原子</h2>
+          <p class="atelier-section__note">按钮、标签、头像、提示、徽标、分割</p>
+        </header>
+        <div class="atelier-grid" data-grid="3">
+          <article class="atelier-card" data-atom="button"></article>
+          <article class="atelier-card" data-atom="icon-button"></article>
+          <article class="atelier-card" data-atom="tag"></article>
+          <article class="atelier-card" data-atom="avatar"></article>
+          <article class="atelier-card" data-atom="chip"></article>
+          <article class="atelier-card" data-atom="tooltip"></article>
+          <article class="atelier-card" data-atom="badge"></article>
+          <article class="atelier-card" data-atom="divider"></article>
+        </div>
+      </section>
+
+      <section id="form" class="atelier-section">
+        <header class="atelier-section__head">
+          <span class="atelier-section__index">02 / FORM</span>
+          <h2 class="atelier-section__title">表单控件</h2>
+          <p class="atelier-section__note">基础输入 · 复杂选择 · 业务特殊控件</p>
+        </header>
+        <div class="atelier-grid" data-grid="2">
+          <article class="atelier-card" data-atom="text-field"></article>
+          <article class="atelier-card" data-atom="text-area"></article>
+          <article class="atelier-card" data-atom="checkbox"></article>
+          <article class="atelier-card" data-atom="radio-group"></article>
+          <article class="atelier-card" data-atom="segmented"></article>
+          <article class="atelier-card" data-atom="select"></article>
+          <article class="atelier-card" data-atom="slider"></article>
+          <article class="atelier-card" data-atom="tag-input"></article>
+          <article class="atelier-card" data-atom="stepper"></article>
+          <article class="atelier-card" data-atom="rate"></article>
+          <article class="atelier-card" data-atom="color"></article>
+          <article class="atelier-card" data-atom="date-time"></article>
+          <article class="atelier-card" data-atom="switch"></article>
+          <article class="atelier-card" data-atom="upload"></article>
+          <article class="atelier-card" data-atom="cascader"></article>
+          <article class="atelier-card" data-atom="transfer"></article>
+          <article class="atelier-card" data-atom="tree-select"></article>
+          <article class="atelier-card" data-atom="autocomplete"></article>
+          <article class="atelier-card" data-atom="multi-select"></article>
+        </div>
+      </section>
+
+      <section id="status" class="atelier-section">
+        <header class="atelier-section__head">
+          <span class="atelier-section__index">03 / STATUS & LAYOUT</span>
+          <h2 class="atelier-section__title">状态与布局</h2>
+          <p class="atelier-section__note">加载、骨架、空态、进度、卡片、面板、Stack、Grid、Section</p>
+        </header>
+        <div class="atelier-grid" data-grid="2">
+          <article class="atelier-card" data-atom="spinner"></article>
+          <article class="atelier-card" data-atom="skeleton"></article>
+          <article class="atelier-card" data-atom="empty"></article>
+          <article class="atelier-card" data-atom="progress"></article>
+          <article class="atelier-card" data-atom="card"></article>
+          <article class="atelier-card" data-atom="panel"></article>
+          <article class="atelier-card" data-atom="paper"></article>
+          <article class="atelier-card" data-atom="stack"></article>
+          <article class="atelier-card" data-atom="grid"></article>
+          <article class="atelier-card" data-atom="section"></article>
+        </div>
+      </section>
+
+      <section id="feedback" class="atelier-section">
+        <header class="atelier-section__head">
+          <span class="atelier-section__index">04 / FEEDBACK</span>
+          <h2 class="atelier-section__title">重型反馈（可交互）</h2>
+          <p class="atelier-section__note">Toast / Notification / Modal / Drawer / Popconfirm / Dropdown / ContextMenu</p>
+        </header>
+        <div class="atelier-grid" data-grid="2">
+          <article class="atelier-card" data-atom="toast"></article>
+          <article class="atelier-card" data-atom="notification"></article>
+          <article class="atelier-card" data-atom="modal"></article>
+          <article class="atelier-card" data-atom="drawer"></article>
+          <article class="atelier-card" data-atom="popconfirm"></article>
+          <article class="atelier-card" data-atom="dropdown"></article>
+          <article class="atelier-card" data-atom="contextmenu"></article>
+        </div>
+      </section>
+
+      <section id="data" class="atelier-section">
+        <header class="atelier-section__head">
+          <span class="atelier-section__index">05 / DATA</span>
+          <h2 class="atelier-section__title">数据展示</h2>
+          <p class="atelier-section__note">KPI / ChartBlock（10 种图表）/ Table（4 种报告模式） / ReportPaper</p>
+        </header>
+        <div class="atelier-grid" data-grid="1">
+          <article class="atelier-card" data-atom="kpi"></article>
+          <article class="atelier-card" data-atom="kpi-spark"></article>
+          <article class="atelier-card" data-atom="chart-bars"></article>
+          <article class="atelier-card" data-atom="chart-bars-horizontal"></article>
+          <article class="atelier-card" data-atom="chart-line"></article>
+          <article class="atelier-card" data-atom="chart-area"></article>
+          <article class="atelier-card" data-atom="chart-stack"></article>
+          <article class="atelier-card" data-atom="chart-dual"></article>
+          <article class="atelier-card" data-atom="chart-pie"></article>
+          <article class="atelier-card" data-atom="chart-donut"></article>
+          <article class="atelier-card" data-atom="chart-rose"></article>
+          <article class="atelier-card" data-atom="chart-gauge"></article>
+          <article class="atelier-card" data-atom="chart-radar"></article>
+          <article class="atelier-card" data-atom="chart-funnel"></article>
+          <article class="atelier-card" data-atom="chart-scatter"></article>
+          <article class="atelier-card" data-atom="chart-waterfall"></article>
+          <article class="atelier-card" data-atom="chart-bullet"></article>
+          <article class="atelier-card" data-atom="chart-combo"></article>
+          <article class="atelier-card" data-atom="table-flat"></article>
+          <article class="atelier-card" data-atom="table-tree"></article>
+          <article class="atelier-card" data-atom="table-indent"></article>
+          <article class="atelier-card" data-atom="table-cross"></article>
+          <article class="atelier-card" data-atom="table-empty"></article>
+          <article class="atelier-card" data-atom="table-loading"></article>
+          <article class="atelier-card" data-atom="report-paper"></article>
+          <article class="atelier-card" data-atom="report-paper-full"></article>
+        </div>
+      </section>
+
+      <section id="nav-tree" class="atelier-section">
+        <header class="atelier-section__head">
+          <span class="atelier-section__index">06 / NAVIGATION & TREE</span>
+          <h2 class="atelier-section__title">导航 / 步骤 / 树</h2>
+          <p class="atelier-section__note">Tabs · Steps · Breadcrumb · DescriptionList · Treeview · Pagination · ProgressCircle · Empty 变体 · Skeleton 变体 · BackToTop</p>
+        </header>
+        <div class="atelier-grid" data-grid="2">
+          <article class="atelier-card" data-atom="tabs"></article>
+          <article class="atelier-card" data-atom="steps"></article>
+          <article class="atelier-card" data-atom="breadcrumb"></article>
+          <article class="atelier-card" data-atom="desclist"></article>
+          <article class="atelier-card" data-atom="treeview"></article>
+          <article class="atelier-card" data-atom="pagination"></article>
+          <article class="atelier-card" data-atom="progress-circle"></article>
+          <article class="atelier-card" data-atom="empty-variants"></article>
+          <article class="atelier-card" data-atom="skeleton-variants"></article>
+          <article class="atelier-card" data-atom="back-to-top"></article>
+        </div>
+      </section>
+
+      <section id="a11y" class="atelier-section">
+        <header class="atelier-section__head">
+          <span class="atelier-section__index">07 / A11Y</span>
+          <h2 class="atelier-section__title">可访问性 · 键盘 · 焦点</h2>
+          <p class="atelier-section__note">Focus ring · 跳转链接 · sr-only · Modal focus trap · Dropdown 方向键 · ⌘K 命令面板</p>
+        </header>
+        <div class="atelier-grid" data-grid="2">
+          <article class="atelier-card" data-atom="focus-ring"></article>
+          <article class="atelier-card" data-atom="command-bar"></article>
+          <article class="atelier-card" data-atom="tab-keyboard"></article>
+          <article class="atelier-card" data-atom="dialog-focus-trap"></article>
+          <article class="atelier-card" data-atom="dropdown-keyboard"></article>
+          <article class="atelier-card" data-atom="sr-only"></article>
+        </div>
+      </section>
+
+      <section id="composite" class="atelier-section">
+        <header class="atelier-section__head">
+          <span class="atelier-section__index">06 / COMPOSITE</span>
+          <h2 class="atelier-section__title">输入复合</h2>
+          <p class="atelier-section__note">RequirementCard / SuggestionChip / ConversationBubble</p>
+        </header>
+        <div class="atelier-grid" data-grid="1">
+          <article class="atelier-card" data-atom="requirement"></article>
+          <article class="atelier-card" data-atom="suggestion"></article>
+          <article class="atelier-card" data-atom="conversation"></article>
+        </div>
+      </section>
+
+      <footer class="atelier-footer">
+        <span>Atelier 0.1.0 · tokens 单一来源 · a11y 优先</span>
+        <span>当前以原生 HTML/CSS/JS 实现，可按需翻译为 React/Vue/Svelte 组件</span>
+      </footer>
+    </main>
+  </div>
+
+  <div class="atelier-toast-root" id="toastRoot" aria-live="polite" aria-atomic="false"></div>
+  <div class="atelier-notif-root" id="notifRoot" aria-live="polite" aria-atomic="false"></div>
+  <div class="atelier-modal-root" id="modalRoot"></div>
+  <div class="atelier-drawer-root" id="drawerRoot"></div>
+  <div class="atelier-popover-root" id="popoverRoot"></div>
+
+  <script src="atelier.js"></script>
+  <script src="gallery.js"></script>
+</body>
+</html>

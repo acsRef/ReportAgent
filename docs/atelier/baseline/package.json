@@ -1,0 +1,15 @@
+{
+  "name": "atelier-baseline",
+  "private": true,
+  "type": "module",
+  "description": "Optional dev dependencies to run the atelier pixel baseline and regression script. Not installed by the main project.",
+  "scripts": {
+    "baseline:capture": "node docs/atelier/baseline/baseline.js capture",
+    "baseline:check": "node docs/atelier/baseline/baseline.js check"
+  },
+  "devDependencies": {
+    "pixelmatch": "^5.3.0",
+    "playwright": "^1.47.0",
+    "pngjs": "^7.0.0"
+  }
+}

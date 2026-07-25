@@ -1,0 +1,114 @@
+/* Atelier design tokens — single source of truth.
+   Mirror of frontend/src/styles/tokens.css so HTML demo matches the React app. */
+
+:root {
+  /* Surface and structure */
+  --ink: #10243e;
+  --ink-2: #293d53;
+  --muted: #68798a;
+  --faint: #95a19e;
+  --paper: #fffefb;
+  --canvas: #f3f3ee;
+  --rail: #eaede9;
+  --line: #dde2de;
+  --line-2: #cdd5d0;
+
+  /* Accent and status */
+  --teal: #087f73;
+  --teal-deep: #06665e;
+  --teal-soft: #dff2ed;
+  --teal-pale: #f2faf7;
+  --amber: #b36c0d;
+  --amber-soft: #fff0d6;
+  --red: #b94a48;
+  --red-soft: #fae7e4;
+  --green: #23836f;
+  --green-soft: #e4f1eb;
+
+  /* Typography */
+  --font-display: "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;
+  --font-ui: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, monospace;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+
+  /* Radius */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+
+  /* Shadow */
+  --shadow-card: 0 18px 55px rgba(22, 42, 59, 0.09);
+  --shadow-soft: 0 8px 26px rgba(22, 42, 59, 0.07);
+  --shadow-topbar: 0 8px 30px rgba(16, 36, 62, 0.18);
+  --shadow-focus: 0 0 0 3px rgba(8, 127, 115, 0.18);
+
+  /* Layout */
+  --topbar-h: 58px;
+  --left-rail-w: 248px;
+  --right-rail-w: 300px;
+  --content-max: 1180px;
+
+  /* Motion */
+  --t-fast: 120ms ease;
+  --t-base: 200ms ease;
+  --t-slow: 320ms ease;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  margin: 0;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+p { margin: 0; }
+
+a {
+  color: var(--teal-deep);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--t-fast);
+}
+a:hover { border-bottom-color: var(--teal); }
+
+button, input, textarea, select {
+  font: inherit;
+  color: inherit;
+}
+
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 3px solid rgba(8, 127, 115, 0.32);
+  outline-offset: 2px;
+}
+
+::selection { background: var(--teal-soft); color: var(--ink); }
+
+.atelier-page {
+  min-height: 100vh;
+  background: var(--canvas);
+}

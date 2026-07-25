@@ -1,0 +1,28 @@
+/* Gallery page styles — host layout for the component demo */
+
+.atelier-page {
+  background:
+    linear-gradient(rgba(16, 36, 62, 0.024) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 36, 62, 0.024) 1px, transparent 1px),
+    var(--canvas);
+  background-size: 28px 28px;
+}
+
+.atelier-card__body--column { flex-direction: column; align-items: stretch; }
+.atelier-card__body--row { flex-direction: row; align-items: center; }
+.atelier-card__code {
+  display: block;
+  font: 500 10px/1.5 var(--font-mono);
+  background: #f4f5f1;
+  color: #4d5a6a;
+  padding: 6px 8px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  margin-top: 6px;
+}
+
+.atelier-demo-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.atelier-demo-col { display: flex; flex-direction: column; gap: 8px; }
+
+.atelier-divider-with-label { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; }
+.atelier-divider-with-label::after { content: ""; flex: 1; height: 1px; background: var(--line); }
