@@ -20,7 +20,7 @@ export interface ConfirmStreamCtx {
   toast: ToastApi
   dispatch: Dispatcher
   setConfirming: (v: boolean) => void
-  onReport: () => void | Promise<void>
+  onReport: (version?: number) => void | Promise<void>
 }
 
 export async function postConfirmStream(
@@ -74,7 +74,9 @@ export async function postConfirmStream(
         ctx.dispatch({ type: 'phase/received', phase: evt.data.phase as AnalysisPhase })
       } else if (evt.eventName === 'report') {
         sawReport = true
-        await ctx.onReport()
+        await ctx.onReport(
+          typeof evt.data?.version === 'number' ? evt.data.version : undefined,
+        )
         ctx.dispatch({ type: 'phase/received', phase: 'report_ready' })
       } else if (evt.eventName === 'error') {
         ctx.toast.error(evt.data?.message ?? '执行失败')

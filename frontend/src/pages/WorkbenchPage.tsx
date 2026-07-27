@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Text, Paragraph } from '../components/atelier/Typography'
+import { Text } from '../components/atelier/Typography'
 import { LogoutOutlined, PlusOutlined } from '@ant-design/icons'
 import Button from '../components/atelier/Button'
 import Spinner from '../components/atelier/Spinner'
@@ -12,6 +12,9 @@ import Composer from '../components/workbench/Composer'
 import { UserBubble, AgentBubble } from '../components/workbench/MessageBubbles'
 import WorkbenchEmpty from '../components/workbench/WorkbenchEmpty'
 import ParsingCard from '../components/workbench/ParsingCard'
+import ProgressCard from '../components/workbench/ProgressCard'
+import ErrorCard from '../components/workbench/ErrorCard'
+import RightRail from '../components/workbench/RightRail'
 import {
   agentCopy,
   canvasKicker,
@@ -74,6 +77,32 @@ export default function WorkbenchPage() {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight })
     }
   }, [phase, reportVersions.length])
+
+  const [stageIndex, setStageIndex] = useState(0)
+  const confirmAbortRef = useRef<AbortController | null>(null)
+
+  // Prototype pacing: stage 0 (需求已确认) completes the moment the confirm
+  // stream opens — the requirement lock is its entry condition. Stages 1-3
+  // advance on a 650ms timer; the real report/error event ends the run.
+  useEffect(() => {
+    if (phase !== 'generating' && phase !== 'adjusting') return
+    setStageIndex(1)
+    let index = 1
+    const timer = setInterval(() => {
+      index = Math.min(3, index + 1)
+      setStageIndex(index)
+      if (index >= 3) clearInterval(timer)
+    }, 650)
+    return () => clearInterval(timer)
+  }, [phase])
+
+  function handleStop() {
+    confirmAbortRef.current?.abort()
+    confirmAbortRef.current = null
+    setConfirming(false)
+    toast.info('已停止生成，当前需求已保留')
+    dispatch({ type: 'phase/received', phase: 'awaiting_confirm' })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -175,14 +204,21 @@ export default function WorkbenchPage() {
       dispatch({ type: 'requirement/received', requirement: saved })
       if (saved.status === 'complete') {
         setConfirming(true)
+        const controller = new AbortController()
+        confirmAbortRef.current = controller
         await postConfirmStream(
           activeSessionId,
           {
             toast,
             dispatch,
             setConfirming,
-            onReport: () => refreshVersionsAndSelectLatest(activeSessionId, dispatch),
+            onReport: (version) => {
+              void refreshVersionsAndSelectLatest(activeSessionId, dispatch)
+              toast.success(`报告 v${version ?? ''} 已生成并保留在当前会话`)
+            },
           },
+          'confirm',
+          controller.signal,
         )
       } else {
         toast.info('PATCH 已保存，但仍有缺失字段未填')
@@ -201,6 +237,8 @@ export default function WorkbenchPage() {
       return
     }
     setConfirming(true)
+    const controller = new AbortController()
+    confirmAbortRef.current = controller
     try {
       await postConfirmStream(
         activeSessionId,
@@ -208,9 +246,13 @@ export default function WorkbenchPage() {
           toast,
           dispatch,
           setConfirming,
-          onReport: () => refreshVersionsAndSelectLatest(activeSessionId, dispatch),
+          onReport: (version) => {
+            void refreshVersionsAndSelectLatest(activeSessionId, dispatch)
+            toast.success(`报告 v${version ?? ''} 已生成并保留在当前会话`)
+          },
         },
         'retry',
+        controller.signal,
       )
     } finally {
       setConfirming(false)
@@ -361,31 +403,15 @@ export default function WorkbenchPage() {
           {phase !== 'idle' && agentCopy(phase) && <AgentBubble markdown={agentCopy(phase)} />}
           {phase === 'parsing' && <ParsingCard />}
 
-          {canRetryFailedAction({ phase, error }) && (
-            <div
-              style={{
-                background: 'var(--red-soft)',
-                border: '1px solid var(--red)',
-                borderRadius: 'var(--r-m)',
-                padding: 'var(--sp-l)',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 12,
-              }}
-            >
-              <div>
-                <Text strong type="danger">
-                  {error?.message ?? '执行失败'}
-                </Text>
-                <Text style={{ display: 'block', color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>
-                  需求卡已锁定为 complete，可直接重试确认执行（服务端会自动恢复陈旧锁）。
-                </Text>
-              </div>
-              <Button variant="primary" loading={confirming} onClick={handleRetry}>
-                重试
-              </Button>
-            </div>
+          {phase === 'error' && canRetryFailedAction({ phase, error }) && (
+            <ErrorCard message={error?.message} onRetry={handleRetry} retrying={confirming} />
+          )}
+          {(phase === 'generating' || phase === 'adjusting') && (
+            <ProgressCard
+              adjusting={phase === 'adjusting'}
+              stageIndex={stageIndex}
+              onStop={handleStop}
+            />
           )}
 
           {requirement && (
@@ -469,38 +495,14 @@ export default function WorkbenchPage() {
           />
         </main>
 
-        <aside
-          className="workbench-rail workbench-rail--right"
-          style={{
-            background: 'var(--paper)',
-            borderLeft: '1px solid var(--line)',
-            padding: 'var(--sp-l)',
-            overflow: 'auto',
+        <RightRail
+          phase={phase}
+          requirement={requirement}
+          onSuggest={(text) => {
+            setComposer(text)
+            composerRef.current?.focus()
           }}
-        >
-          <Text
-            style={{
-              fontSize: 10,
-              letterSpacing: 1.4,
-              color: 'var(--muted)',
-              textTransform: 'uppercase',
-              fontWeight: 700,
-            }}
-          >
-            分析助手
-          </Text>
-          <Paragraph
-            style={{ color: 'var(--ink-2)', fontSize: 12, marginTop: 12 }}
-          >
-            1. 提出问题 → 生成需求卡<br />
-            2. 填写每个字段 + 接受/拒绝假设<br />
-            3. 点击「确认执行」→ 报告版本出现在中央<br />
-            4. 点版本号切换查看历史报告
-          </Paragraph>
-          <div style={{ marginTop: 16, fontSize: 11, color: 'var(--faint)' }}>
-            会话已锁定到左栏选中的那条；切换会话会拉取 PG 快照。
-          </div>
-        </aside>
+        />
       </div>
     </div>
   )
