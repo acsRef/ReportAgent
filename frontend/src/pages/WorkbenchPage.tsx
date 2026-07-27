@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Text } from '../components/atelier/Typography'
-import { LogoutOutlined, PlusOutlined } from '@ant-design/icons'
-import Button from '../components/atelier/Button'
-import Spinner from '../components/atelier/Spinner'
+import { LogoutOutlined } from '@ant-design/icons'
 import Avatar from '../components/atelier/Avatar'
 import TopBar from '../components/atelier/TopBar'
 import Dropdown from '../components/atelier/Dropdown'
@@ -15,6 +12,7 @@ import ParsingCard from '../components/workbench/ParsingCard'
 import ProgressCard from '../components/workbench/ProgressCard'
 import ErrorCard from '../components/workbench/ErrorCard'
 import RightRail from '../components/workbench/RightRail'
+import SessionRail from '../components/workbench/SessionRail'
 import {
   agentCopy,
   canvasKicker,
@@ -24,11 +22,7 @@ import {
 import { useAnalysisStore } from '../stores/analysisStore'
 import { canRetryFailedAction, isBusyPhase } from '../stores/analysisReducer'
 import { useAuthStore } from '../stores/authStore'
-import {
-  fetchSessions,
-  patchRequirement,
-  type SessionSummary as ApiSessionSummary,
-} from '../api/sessionsClient'
+import { fetchSessions, patchRequirement } from '../api/sessionsClient'
 import { openChat } from '../api/analysisClient'
 import { postConfirmStream, type ToastApi, type Dispatcher } from '../api/confirmStream'
 import RequirementCardView from '../components/workbench/RequirementCardView'
@@ -262,6 +256,16 @@ export default function WorkbenchPage() {
   return (
     <div className="workbench-shell">
       <TopBar brand="ReportAgent" subtitle="工作台">
+        <nav style={{ display: 'flex', height: '100%', gap: 24 }}>
+          <button type="button" className="wb-nav-btn active">工作台</button>
+          <button
+            type="button"
+            className="wb-nav-btn"
+            onClick={() => navigate('/templates')}
+          >
+            模板中心
+          </button>
+        </nav>
         <div style={{ flex: 1 }} />
         <span
           style={{
@@ -315,65 +319,19 @@ export default function WorkbenchPage() {
       </TopBar>
 
       <div className={focusMode ? 'workbench-body focus' : 'workbench-body'}>
-        <aside
-          className="workbench-rail workbench-rail--left"
-          style={{
-            background: 'var(--rail)',
-            borderRight: '1px solid var(--line)',
-            padding: 'var(--sp-l)',
-            overflow: 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 14,
+        <SessionRail
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          reportVersions={reportVersions}
+          selectedReportVersion={selectedReportVersion}
+          loading={sessionsLoading}
+          onSelect={(sid) => handleSelectSession(sid)}
+          onSelectVersion={(version) => dispatch({ type: 'report/selected', version })}
+          onNew={() => {
+            handleNewAnalysis()
+            composerRef.current?.focus()
           }}
-        >
-          <Button
-            variant="primary"
-            block
-            onClick={handleNewAnalysis}
-            style={{ fontWeight: 600, height: 36 }}
-          >
-            <PlusOutlined /> 新建分析
-          </Button>
-
-          <Text
-            style={{
-              fontSize: 10,
-              letterSpacing: 1.4,
-              color: 'var(--muted)',
-              textTransform: 'uppercase',
-              fontWeight: 700,
-              marginTop: 6,
-            }}
-          >
-            最近会话
-          </Text>
-
-          {sessionsLoading ? (
-            <div style={{ textAlign: 'center', padding: 8 }}>
-              <Spinner size="sm" />
-            </div>
-          ) : sessions.length === 0 ? (
-            <Text style={{ color: 'var(--faint)', fontSize: 12 }}>
-              暂无会话
-            </Text>
-          ) : (
-            <SessionListBuckets
-              sessions={sessions}
-              activeSessionId={activeSessionId}
-              onSelect={(sid) => handleSelectSession(sid)}
-            />
-          )}
-
-          <div style={{ flex: 1 }} />
-          <Button
-            variant="quiet"
-            onClick={() => navigate('/templates')}
-            style={{ color: 'var(--ink-2)', padding: 0, justifyContent: 'flex-start' }}
-          >
-            模板中心 →
-          </Button>
-        </aside>
+        />
 
         <main
           className="workbench-canvas"
@@ -425,52 +383,6 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {reportVersions.length > 0 && (
-            <div
-              style={{
-                background: 'var(--paper)',
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--r-m)',
-                padding: 'var(--sp-l)',
-              }}
-            >
-              <Text
-                style={{
-                  fontSize: 10,
-                  letterSpacing: 1.4,
-                  color: 'var(--muted)',
-                  textTransform: 'uppercase',
-                  fontWeight: 700,
-                  marginBottom: 8,
-                  display: 'block',
-                }}
-              >
-                报告版本
-              </Text>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {reportVersions.map((r) => (
-                  <div
-                    key={r.version}
-                    onClick={() => dispatch({ type: 'report/selected', version: r.version })}
-                    style={{
-                      cursor: 'pointer',
-                      padding: '6px 10px',
-                      borderRadius: 6,
-                      background: selectedReportVersion === r.version ? 'var(--teal-pale)' : 'transparent',
-                    }}
-                  >
-                    <span style={{ color: 'var(--ink-2)', fontSize: 13, fontWeight: 500 }}>
-                      v{r.version} · {r.title}
-                    </span>
-                    <span style={{ marginLeft: 12, fontSize: 11, color: 'var(--muted)' }}>
-                      {r.status}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {activeSessionId && selectedReportVersion != null && (
             <ReportPaper
               key={`${activeSessionId}-${selectedReportVersion}`}
@@ -504,116 +416,6 @@ export default function WorkbenchPage() {
           }}
         />
       </div>
-    </div>
-  )
-}
-
-function SessionListBuckets({
-  sessions,
-  activeSessionId,
-  onSelect,
-}: {
-  sessions: ApiSessionSummary[]
-  activeSessionId: string | null
-  onSelect: (sid: string) => void
-}) {
-  const [showOlder, setShowOlder] = useState(false)
-  const now = Date.now()
-  const day = 24 * 60 * 60 * 1000
-
-  const today: ApiSessionSummary[] = []
-  const pastWeek: ApiSessionSummary[] = []
-  const older: ApiSessionSummary[] = []
-  for (const s of sessions) {
-    const t = s.updated_at ? Date.parse(s.updated_at) : NaN
-    const age = isFinite(t) ? (now - t) / day : Infinity
-    if (age < 1) today.push(s)
-    else if (age < 7) pastWeek.push(s)
-    else older.push(s)
-  }
-
-  const renderItem = (s: ApiSessionSummary) => {
-    const isActive = activeSessionId === s.session_id
-    return (
-      <div
-        className="session-row"
-        data-session-id={s.session_id}
-        onClick={() => onSelect(s.session_id)}
-        style={{
-          padding: '8px 10px',
-          borderRadius: 6,
-          cursor: 'pointer',
-          background: isActive ? 'var(--teal-pale)' : 'transparent',
-          border: isActive ? '1px solid var(--teal)' : '1px solid transparent',
-          marginBottom: 4,
-        }}
-      >
-        <div
-          style={{
-            fontSize: 12,
-            color: 'var(--ink-2)',
-            fontWeight: isActive ? 600 : 400,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {s.first_message || s.session_id.slice(0, 8)}
-        </div>
-        <div style={{ fontSize: 10, color: 'var(--muted)' }}>
-          {s.msg_count} 条 · {s.phase}
-        </div>
-      </div>
-    )
-  }
-
-  const headerStyle: React.CSSProperties = {
-    fontSize: 10,
-    letterSpacing: 1.4,
-    color: 'var(--muted)',
-    textTransform: 'uppercase',
-    fontWeight: 700,
-    marginTop: 8,
-    marginBottom: 4,
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  }
-
-  return (
-    <div style={{ overflow: 'auto' }}>
-      {today.length > 0 && (
-        <>
-          <div style={headerStyle}><span>今天</span><span style={{ color: 'var(--faint)' }}>{today.length}</span></div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {today.map((s) => <div key={s.session_id}>{renderItem(s)}</div>)}
-          </div>
-        </>
-      )}
-      {pastWeek.length > 0 && (
-        <>
-          <div style={headerStyle}><span>过去 7 天</span><span style={{ color: 'var(--faint)' }}>{pastWeek.length}</span></div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {pastWeek.map((s) => <div key={s.session_id}>{renderItem(s)}</div>)}
-          </div>
-        </>
-      )}
-      {older.length > 0 && (
-        <>
-          <div
-            style={{ ...headerStyle, cursor: 'pointer' }}
-            onClick={() => setShowOlder((s) => !s)}
-          >
-            <span>{showOlder ? '▾ 更早' : '▸ 更早'}</span>
-            <span style={{ color: 'var(--faint)' }}>{older.length}</span>
-          </div>
-          {showOlder && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {older.map((s) => <div key={s.session_id}>{renderItem(s)}</div>)}
-            </div>
-          )}
-        </>
-      )}
     </div>
   )
 }
