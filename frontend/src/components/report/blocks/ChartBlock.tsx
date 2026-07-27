@@ -6,9 +6,19 @@ import { prepareChart, uniqueCategories, type PreparedChart } from './chartPrepa
 
 interface Props {
   block: ReportBlock
+  /** Render bare (inside a report-shell panel) instead of the Card wrap. */
+  bare?: boolean
+  height?: number
 }
 
-const CHART_COLORS = ['var(--teal-deep)', 'var(--teal)', '#D97706', '#059669', '#DC2626', '#7C3AED']
+const CHART_COLORS = [
+  'var(--chart-1)',
+  'var(--chart-2)',
+  'var(--chart-3)',
+  'var(--chart-4)',
+  'var(--chart-5)',
+  'var(--chart-6)',
+]
 
 const TYPE_LABELS: Record<PreparedChart['chartType'], string> = {
   bar: '柱状图',
@@ -16,9 +26,23 @@ const TYPE_LABELS: Record<PreparedChart['chartType'], string> = {
   pie: '饼图',
 }
 
-export default function ChartBlock({ block }: Props) {
+export default function ChartBlock({ block, bare, height = 280 }: Props) {
   const prepared = prepareChart(block.data as Record<string, unknown>)
   const option = buildOption(prepared)
+
+  const chart = (
+    /* width:100% is load-bearing: the Card body is a flex container,
+       and without it the chart div shrinks to 0px wide → ECharts
+       "Can't get DOM width or height". */
+    <ReactECharts
+      option={option}
+      style={{ height, width: '100%' }}
+      opts={{ renderer: 'svg' }}
+      notMerge
+    />
+  )
+
+  if (bare) return chart
 
   return (
     <Card
@@ -32,15 +56,7 @@ export default function ChartBlock({ block }: Props) {
       bodyStyle={{ padding: '8px 0 0', display: 'block' }}
       style={{ borderRadius: 10 }}
     >
-      {/* width:100% is load-bearing: the Card body is a flex container,
-          and without it the chart div shrinks to 0px wide → ECharts
-          "Can't get DOM width or height". */}
-      <ReactECharts
-        option={option}
-        style={{ height: 280, width: '100%' }}
-        opts={{ renderer: 'svg' }}
-        notMerge
-      />
+      {chart}
     </Card>
   )
 }

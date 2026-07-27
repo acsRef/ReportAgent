@@ -388,6 +388,9 @@ export default function WorkbenchPage() {
               key={`${activeSessionId}-${selectedReportVersion}`}
               sessionId={activeSessionId}
               version={selectedReportVersion}
+              requirement={requirement}
+              onAdjust={(text) => handleSend(text)}
+              onFocusComposer={() => composerRef.current?.focus()}
             />
           )}
 

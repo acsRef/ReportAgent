@@ -125,6 +125,14 @@
   --example-hover: #9cc8bf;
   --nav-idle: #9eb0bf;
   --nav-active: #4bd0b6;
+
+  /* Chart series palette (moved out of ChartBlock) */
+  --chart-1: #06665e;
+  --chart-2: #087f73;
+  --chart-3: #d97706;
+  --chart-4: #059669;
+  --chart-5: #dc2626;
+  --chart-6: #7c3aed;
   --live: #41d1b4;
   --live-halo: rgba(65, 209, 180, 0.12);
   --brand-sub: #94aabc;
