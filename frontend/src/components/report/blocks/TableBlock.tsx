@@ -1,110 +1,140 @@
 import { useState } from 'react'
 import { Text } from '../../atelier/Typography'
-import type { ReportBlock, TableMode } from '../../../types/report'
-import { renderFlatTable, renderTreeTable, renderIndentTable, renderCrossTable } from '../tableModes'
+import type { ReportBlock } from '../../../types/report'
 
 interface Props {
   block: ReportBlock
 }
 
-const MODE_NAMES: Record<TableMode, string> = {
-  flat: '平铺重复式',
-  tree: '合并树形式',
-  indent: '缩进层级式',
-  cross: '交叉透视',
-}
+const VISIBLE_ROWS = 3
 
-const MODE_LABELS: Record<TableMode, string> = {
-  flat: '每行完整列出所有列，无合并、无缩进',
-  tree: '父级信息通过 rowspan 纵向合并，只出现一次',
-  indent: '无合并、无重复，靠缩进表示层级归属',
-  cross: '行列交叉表，单元格为交叉值',
-}
-
+/**
+ * Flat evidence table per docs/intelligent-analysis-workbench.html:
+ * ONE plain table (no modes, no hierarchy column), numeric columns
+ * right-aligned with tabular figures, first 3 rows visible and the
+ * rest behind a single 展开更多明细 / 收起明细 toggle.
+ */
 export default function TableBlock({ block }: Props) {
   const data = block.data as Record<string, unknown>
   const columns = (data.columns as Array<{ key: string; title: string }>) || []
   const rows = (data.rows as Record<string, unknown>[]) || []
-  const [mode, setMode] = useState<TableMode>(block.mode || 'flat')
+  const [expanded, setExpanded] = useState(false)
 
   if (columns.length === 0) return null
 
-  const hoverStyle = (e: React.MouseEvent<HTMLElement>, on: boolean) => {
-    ;(e.currentTarget as HTMLElement).style.background = on ? '#EFF6FF' : ''
-  }
-  const cellBg = (idx: number) => idx % 2 === 0 ? 'var(--paper)' : 'var(--canvas)'
-
-  const renderTable = () => {
-    const p = { columns, rows, hoverStyle, cellBg }
-    switch (mode) {
-      case 'tree': return renderTreeTable(p)
-      case 'indent': return renderIndentTable(p)
-      case 'cross': return renderCrossTable(p)
-      default: return renderFlatTable(p)
-    }
-  }
+  const numericKeys = new Set(
+    columns
+      .filter(({ key }) =>
+        rows.length > 0 &&
+        rows.every((row) => {
+          const value = row[key]
+          return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
+        }),
+      )
+      .map(({ key }) => key),
+  )
+  const shown = expanded ? rows.length : Math.min(VISIBLE_ROWS, rows.length)
 
   return (
-    <div style={{
-      background: 'var(--paper)',
-      borderRadius: 10,
-      border: '1px solid var(--line)',
-      boxShadow: 'var(--shadow-card)',
-      overflow: 'hidden',
-    }}>
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '16px 20px 12px',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 3, height: 16, background: 'var(--teal)', borderRadius: 2 }} />
-          <Text strong style={{ fontSize: 15, color: 'var(--ink)' }}>
-            {block.title || '数据明细'}
-          </Text>
-          <Text style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 400 }}>
-            {MODE_LABELS[mode]}
-          </Text>
-        </div>
-
-        <div style={{ display: 'flex', gap: 2 }}>
-          {(Object.keys(MODE_NAMES) as TableMode[]).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              style={{
-                padding: '4px 12px',
-                borderRadius: '4px 4px 0 0',
-                fontSize: 11,
-                cursor: 'pointer',
-                border: 'none',
-                background: mode === m ? 'var(--paper)' : 'transparent',
-                color: mode === m ? 'var(--teal-deep)' : 'var(--muted)',
-                fontWeight: mode === m ? 500 : 400,
-                borderBottom: mode === m ? '2px solid var(--teal-deep)' : '2px solid transparent',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={(e) => {
-                if (mode !== m) (e.currentTarget as HTMLElement).style.color = 'var(--teal-deep)'}}
-              onMouseLeave={(e) => {
-                if (mode !== m) (e.currentTarget as HTMLElement).style.color = 'var(--muted)'}}
-            >
-              {MODE_NAMES[m]}
-            </button>
-          ))}
-        </div>
+    <div
+      style={{
+        background: 'var(--paper)',
+        borderRadius: 10,
+        border: '1px solid var(--line)',
+        boxShadow: 'var(--shadow-card)',
+        overflow: 'hidden',
+      }}
+    >
+      <div style={{ padding: '16px 20px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ width: 3, height: 16, background: 'var(--teal)', borderRadius: 2 }} />
+        <Text strong style={{ fontSize: 15, color: 'var(--ink)' }}>
+          {block.title || '数据明细'}
+        </Text>
       </div>
 
-      <div style={{ overflowX: 'auto', padding: '0 0 12px' }}>
-        {renderTable()}
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr>
+              {columns.map((column) => {
+                const isNum = numericKeys.has(column.key)
+                return (
+                  <th
+                    key={column.key}
+                    className={isNum ? 'num' : undefined}
+                    style={{
+                      padding: '8px 9px',
+                      background: 'var(--canvas)',
+                      color: 'var(--muted)',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      textAlign: isNum ? 'right' : 'left',
+                      borderBottom: '1px solid var(--line-2)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {column.title}
+                  </th>
+                )
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex} style={rowIndex >= shown ? { display: 'none' } : undefined}>
+                {columns.map((column) => {
+                  const isNum = numericKeys.has(column.key)
+                  return (
+                    <td
+                      key={column.key}
+                      className={isNum ? 'num' : undefined}
+                      style={{
+                        padding: '9px',
+                        borderBottom: '1px solid var(--line)',
+                        color: 'var(--ink-2)',
+                        textAlign: isNum ? 'right' : 'left',
+                        fontVariantNumeric: isNum ? 'tabular-nums' : undefined,
+                      }}
+                    >
+                      {String(row[column.key] ?? '')}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
-      {rows.length > 50 && (
-        <div style={{ padding: '10px 20px', textAlign: 'center', borderTop: '1px solid var(--line)' }}>
-          <Text style={{ color: 'var(--muted)', fontSize: 11 }}>
-            仅显示前 50 条数据，共 {rows.length} 条
-          </Text>
-        </div>
-      )}
+      <div
+        style={{
+          background: 'var(--canvas)',
+          borderTop: '1px solid var(--line)',
+          padding: '8px 20px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <Text style={{ fontSize: 12, color: 'var(--muted)' }}>
+          显示 {shown} / {rows.length} 条
+        </Text>
+        {rows.length > VISIBLE_ROWS && (
+          <button
+            onClick={() => setExpanded((current) => !current)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--teal-deep)',
+              fontSize: 12,
+              cursor: 'pointer',
+              padding: 0,
+            }}
+          >
+            {expanded ? '收起明细 ↑' : '展开更多明细 ↓'}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

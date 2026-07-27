@@ -11,7 +11,6 @@ export type ReportBlockType =
   | 'grid'
   | 'report-header'
 
-export type TableMode = 'flat' | 'tree' | 'indent' | 'cross'
 export type ChatCardType = 'options_group' | 'confirm_card' | 'preview_card' | 'intent_card'
 export type IntentPhase = 'idle' | 'analyzing' | 'clarifying' | 'running' | 'report' | 'error'
 export type IntentTool =
@@ -25,7 +24,6 @@ export interface ReportBlock {
   id: string
   type: ReportBlockType
   title?: string
-  mode?: TableMode
   data: Record<string, unknown>
 }
 
