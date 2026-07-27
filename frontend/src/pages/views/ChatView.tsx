@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { SendOutlined, UserOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { v4 as uuid } from 'uuid'
 
 import { Text } from '../../components/atelier/Typography'
@@ -10,7 +9,7 @@ import { useSessionStore } from '../../stores/session'
 import { adaptReport } from '../../adapter/reportAdapter'
 import EmptyState from '../../components/chat/EmptyState'
 import ChatCards from '../../components/chat/ChatCards'
-import { IconChevronRight, IconLogo, IconReport, IconStop } from '../../components/ui/Icons'
+import { IconCheckCircle, IconChevronRight, IconLogo, IconReport, IconSend, IconStop, IconUser } from '../../components/ui/Icons'
 import type { ConversationMessage, ReportEntry, ChatCard } from '../../types/report'
 import { isChatCard } from '../../types/report'
 
@@ -217,7 +216,7 @@ export default function ChatView() {
                 flexShrink: 0, color: '#1677FF', fontSize: 14,
                 border: '1px solid #E5E7EB',
               }}>
-                <UserOutlined />
+                <IconUser />
               </div>
               <div style={{
                 ...styles.messageBubble,
@@ -277,7 +276,7 @@ export default function ChatView() {
                   <Text style={{ fontSize: 14, color: 'var(--teal)' }}>{msg.content}</Text>
                 ) : !msg.content && !msg.cards?.length ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <CheckCircleOutlined style={{ color: 'var(--green)', fontSize: 14 }} />
+                    <IconCheckCircle style={{ color: 'var(--green)', width: 14, height: 14 }} />
                     <Text style={{ fontSize: 12, color: 'var(--green)' }}>报告生成完成</Text>
                     <Button
                       variant="primary"
@@ -432,7 +431,7 @@ function InputArea({ inputRef, value, onChange, onSend, onCancel, disabled }: In
             fontSize: 14,
           }}
         >
-          {disabled ? <><IconStop /> 停止</> : <SendOutlined />}
+          {disabled ? <><IconStop /> 停止</> : <IconSend />}
         </Button>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, padding: '0 4px' }}>

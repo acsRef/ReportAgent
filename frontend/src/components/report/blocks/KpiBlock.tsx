@@ -1,4 +1,4 @@
-import { ArrowUpOutlined, ArrowDownOutlined, MinusOutlined } from '@ant-design/icons'
+import { IconArrowUp, IconArrowDown, IconMinus } from '../../ui/Icons'
 import { Text } from '../../../components/atelier/Typography'
 import Card from '../../../components/atelier/Card'
 import type { ReportBlock } from '../../../types/report'
@@ -67,7 +67,7 @@ function KpiCard({ item }: { item: Record<string, unknown> }) {
             padding: '2px 8px',
             borderRadius: 12,
           }}>
-            {isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
+            {isUp ? <IconArrowUp /> : isDown ? <IconArrowDown /> : <IconMinus />}
             {trendRaw.replace(/[↑↓]/g, '')}
           </span>
         )}

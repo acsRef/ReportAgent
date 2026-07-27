@@ -1,17 +1,17 @@
 import {
-  FundViewOutlined,
-  RiseOutlined,
-  TeamOutlined,
-  ShoppingCartOutlined,
-} from '@ant-design/icons'
+  IconFund,
+  IconRise,
+  IconTeam,
+  IconCart,
+} from '../ui/Icons'
 import { Text, Title } from '../atelier/Typography'
 import Card from '../atelier/Card'
 
 const EXAMPLES = [
-  { icon: <FundViewOutlined style={{ fontSize: 24, color: 'var(--teal-deep)' }} />, label: '区域销售分析', query: '2024年各区域的销售总额' },
-  { icon: <RiseOutlined style={{ fontSize: 24, color: '#059669' }} />, label: '销售趋势分析', query: '最近6个月各月销售趋势' },
-  { icon: <TeamOutlined style={{ fontSize: 24, color: '#D97706' }} />, label: '客户维度分析', query: '各等级客户的购买力对比' },
-  { icon: <ShoppingCartOutlined style={{ fontSize: 24, color: '#DC2626' }} />, label: '退货分析', query: '2024年各品类退货率分析' },
+  { icon: <IconFund style={{ width: 24, height: 24, color: 'var(--teal-deep)' }} />, label: '区域销售分析', query: '2024年各区域的销售总额' },
+  { icon: <IconRise style={{ width: 24, height: 24, color: '#059669' }} />, label: '销售趋势分析', query: '最近6个月各月销售趋势' },
+  { icon: <IconTeam style={{ width: 24, height: 24, color: '#D97706' }} />, label: '客户维度分析', query: '各等级客户的购买力对比' },
+  { icon: <IconCart style={{ width: 24, height: 24, color: '#DC2626' }} />, label: '退货分析', query: '2024年各品类退货率分析' },
 ]
 
 interface Props {

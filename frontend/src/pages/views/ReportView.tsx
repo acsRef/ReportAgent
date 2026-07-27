@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, ClockCircleOutlined, FileTextOutlined, LoadingOutlined } from '@ant-design/icons'
+import { IconArrowLeft, IconClock, IconFile, IconLoading } from '../../components/ui/Icons'
 import { useSessionStore } from '../../stores/session'
 import ReportRenderer from '../../components/report/ReportRenderer'
 import { Text } from '../../components/atelier/Typography'
@@ -32,7 +32,7 @@ export default function ReportView() {
                       size="sm"
                       style={{ color: 'var(--muted)', fontSize: 12, marginLeft: -6 }}
                     >
-                      <ArrowLeftOutlined /> 返回对话
+                      <IconArrowLeft /> 返回对话
                     </Button>
                   </div>
                   <h1 style={{
@@ -46,11 +46,11 @@ export default function ReportView() {
                   </h1>
                   <div style={{ marginTop: 8, display: 'flex', gap: 20, color: 'var(--muted)', fontSize: 12 }}>
                     <span>
-                      <ClockCircleOutlined style={{ marginRight: 6, color: 'var(--faint)' }} />
+                      <IconClock style={{ marginRight: 6, color: 'var(--faint)' }} />
                       {new Date(currentReport.timestamp).toLocaleString('zh-CN')}
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <FileTextOutlined style={{ color: 'var(--faint)' }} />
+                      <IconFile style={{ color: 'var(--faint)' }} />
                       <span style={{
                         maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap', display: 'inline-block',
@@ -73,7 +73,7 @@ export default function ReportView() {
                     gap: 6,
                     border: '1px solid var(--teal-pale)',
                   }}>
-                    <LoadingOutlined style={{ fontSize: 12 }} />
+                    <IconLoading style={{ width: 12, height: 12 }} />
                     生成中...
                   </div>
                 )}
@@ -87,7 +87,7 @@ export default function ReportView() {
             ) : busy ? (
               <Card style={{ borderRadius: 12 }}>
                 <div style={{ textAlign: 'center', padding: '40px 24px' }}>
-                  <LoadingOutlined style={{ fontSize: 36, color: 'var(--teal)' }} />
+                  <IconLoading style={{ width: 36, height: 36, color: 'var(--teal)' }} />
                   <Text style={{ display: 'block', fontSize: 15, color: 'var(--ink-2)', marginTop: 16, fontWeight: 500 }}>
                     正在执行数据分析...
                   </Text>

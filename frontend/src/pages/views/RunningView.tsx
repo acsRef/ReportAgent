@@ -1,4 +1,4 @@
-import { LoadingOutlined, CheckCircleFilled, MinusCircleOutlined } from '@ant-design/icons'
+import { IconLoading, IconCheckCircle, IconMinusCircle } from '../../components/ui/Icons'
 import { useSessionStore } from '../../stores/session'
 import { Text } from '../../components/atelier/Typography'
 import Spinner from '../../components/atelier/Spinner'
@@ -7,9 +7,9 @@ export default function RunningView() {
   const { timeline } = useSessionStore()
 
   const STATUS_ICONS: Record<string, React.ReactNode> = {
-    success: <CheckCircleFilled style={{ color: '#059669', fontSize: 14 }} />,
-    running: <LoadingOutlined style={{ color: '#D97706', fontSize: 14 }} />,
-    pending: <MinusCircleOutlined style={{ color: 'var(--faint)', fontSize: 14 }} />,
+    success: <IconCheckCircle style={{ color: '#059669', width: 14, height: 14 }} />,
+    running: <IconLoading style={{ color: '#D97706', width: 14, height: 14 }} />,
+    pending: <IconMinusCircle style={{ color: 'var(--faint)', width: 14, height: 14 }} />,
   }
 
   const currentRunning = timeline.find(t => t.status === 'running')

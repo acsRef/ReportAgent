@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircleFilled } from '@ant-design/icons'
+import { IconCheckCircle } from '../ui/Icons'
 import { Text } from '../atelier/Typography'
 import { useSessionStore } from '../../stores/session'
 import type { ChatCard, ChatCardType, ConfirmCard, IntentCard, IntentOption, OptionsGroup, PreviewCard } from '../../types/report'
@@ -72,7 +72,7 @@ function ConfirmCardView({ data, busy, onModify, onStartGenerate }: {
       </Text>
       {data.items.map((item, index) => (
         <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, color: 'var(--ink)' }}>
-          <CheckCircleFilled style={{ color: '#059669', fontSize: 12 }} />
+          <IconCheckCircle style={{ color: '#059669', width: 12, height: 12 }} />
           <span>{item.text}</span>
         </div>
       ))}

@@ -1,4 +1,4 @@
-import { LoadingOutlined, CloseCircleFilled } from '@ant-design/icons'
+import { IconLoading, IconCloseCircle } from '../ui/Icons'
 import { Text } from '../atelier/Typography'
 import type { TimelineEntry } from '../../types/report'
 
@@ -57,7 +57,7 @@ export default function AgentTimeline({ events, isStreaming }: Props) {
           <div style={{ textAlign: 'center', paddingTop: 40 }}>
             {isStreaming ? (
               <>
-                <LoadingOutlined style={{ fontSize: 20, color: 'var(--teal)' }} />
+                <IconLoading style={{ width: 20, height: 20, color: 'var(--teal)' }} />
                 <Text style={{ display: 'block', marginTop: 8, color: 'var(--muted)', fontSize: 12 }}>
                   等待 Agent 启动...
                 </Text>
@@ -71,9 +71,9 @@ export default function AgentTimeline({ events, isStreaming }: Props) {
             const isLast = idx === events.length - 1
             const color = STATUS_COLORS[event.status] || STATUS_COLORS.pending
             const icon = event.status === 'running'
-              ? <LoadingOutlined style={{ color, fontSize: 12 }} />
+              ? <IconLoading style={{ color, width: 12, height: 12 }} />
               : event.status === 'error'
-                ? <CloseCircleFilled style={{ color, fontSize: 12 }} />
+                ? <IconCloseCircle style={{ color, width: 12, height: 12 }} />
                 : null
 
             return (

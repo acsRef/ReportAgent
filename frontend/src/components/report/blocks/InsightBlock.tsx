@@ -1,5 +1,5 @@
 import { Text } from '../../atelier/Typography'
-import { BulbOutlined } from '@ant-design/icons'
+import { IconBulb } from '../../ui/Icons'
 import type { ReportBlock } from '../../../types/report'
 
 interface Props {
@@ -36,7 +36,7 @@ export default function InsightBlock({ block }: Props) {
           background: 'var(--teal-deep)', display: 'flex', alignItems: 'center',
           justifyContent: 'center', color: 'var(--paper)', fontSize: 13,
         }}>
-          <BulbOutlined />
+          <IconBulb />
         </div>
         AI 智能业务洞察
       </div>

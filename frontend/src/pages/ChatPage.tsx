@@ -1,9 +1,5 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Form } from 'antd'
-import {
-  ReloadOutlined, SaveOutlined, DownloadOutlined, PlusOutlined,
-} from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
 import { Text } from '../components/atelier/Typography'
@@ -16,7 +12,7 @@ import { useSessionStore } from '../stores/session'
 import { exportReportHTML } from '../utils/export'
 import AgentTimeline from '../components/chat/AgentTimeline'
 import {
-  IconReport, IconTemplate,
+  IconReport, IconTemplate, IconReload, IconSave, IconDownload, IconPlus,
 } from '../components/ui/Icons'
 import ChatView from './views/ChatView'
 import RunningView from './views/RunningView'
@@ -31,20 +27,29 @@ export default function ChatPage() {
   } = useSessionStore()
   const navigate = useNavigate()
   const [tmplModalOpen, setTmplModalOpen] = useState(false)
-  const [tmplForm] = Form.useForm()
+  const [tmplName, setTmplName] = useState('')
+  const [tmplDescription, setTmplDescription] = useState('')
+  const [tmplErrors, setTmplErrors] = useState<{ name?: string }>({})
 
   const handleSaveAsTemplate = () => {
     if (!currentReport || currentReport.blocks.length === 0) {
       toast.warning('当前没有可保存的报告')
       return
     }
-    tmplForm.validateFields().then((values) => {
-      saveAsTemplate(values.name, values.description ?? '')
-      toast.success('已保存到模板中心')
-      setTmplModalOpen(false)
-      tmplForm.resetFields()
-    })
+    const next: { name?: string } = {}
+    if (!tmplName.trim()) next.name = '请输入模板名称'
+    setTmplErrors(next)
+    if (next.name) return
+    saveAsTemplate(tmplName, tmplDescription)
+    toast.success('已保存到模板中心')
+    setTmplModalOpen(false)
+    setTmplName('')
+    setTmplDescription('')
+    setTmplErrors({})
   }
+
+  const labelStyle = { color: 'var(--ink-2)', fontWeight: 600, fontSize: 13 }
+  const errorStyle = { color: 'var(--red)', fontSize: 12, marginTop: 4, display: 'block' }
 
   const handleUseTemplate = (tmplId: string) => {
     const t = templates.find((x) => x.id === tmplId)
@@ -76,7 +81,7 @@ export default function ChatPage() {
             disabled={busy}
             style={{ fontSize: 14, gap: 8, justifyContent: 'center' }}
           >
-            <PlusOutlined style={{ fontSize: 14 }} /> 新建分析
+            <IconPlus style={{ width: 14, height: 14 }} /> 新建分析
           </Button>
         </div>
 
@@ -217,7 +222,7 @@ export default function ChatPage() {
               onClick={() => setTmplModalOpen(true)}
               disabled={!currentReport || currentReport.blocks.length === 0}
             >
-              <SaveOutlined /> 保存为模板
+              <IconSave /> 保存为模板
             </Button>
             <Button
               size="sm"
@@ -226,10 +231,10 @@ export default function ChatPage() {
               onClick={() => currentReport && exportReportHTML(currentReport)}
               disabled={!currentReport}
             >
-              <DownloadOutlined /> 导出
+              <IconDownload /> 导出
             </Button>
             <Button size="sm" variant="default" style={{ fontSize: 13, gap: 4 }} disabled>
-              <ReloadOutlined /> 刷新参数并重新生成
+              <IconReload /> 刷新参数并重新生成
             </Button>
           </div>
         )}
@@ -251,14 +256,38 @@ export default function ChatPage() {
         okText="保存"
         cancelText="取消"
       >
-        <Form form={tmplForm} layout="vertical">
-          <Form.Item name="name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }]}>
-            <TextField placeholder="例如:华东月度销售趋势" />
-          </Form.Item>
-          <Form.Item name="description" label="描述(可选)">
-            <TextArea rows={2} placeholder="模板用途说明" style={{ width: '100%' }} />
-          </Form.Item>
-        </Form>
+        <form onSubmit={(event) => { event.preventDefault(); handleSaveAsTemplate() }} style={{ display: 'grid', gap: 16 }}>
+          <div>
+            <label htmlFor="tmpl-save-name" style={labelStyle}>
+              模板名称
+            </label>
+            <TextField
+              id="tmpl-save-name"
+              value={tmplName}
+              onChange={(event) => setTmplName(event.target.value)}
+              placeholder="例如:华东月度销售趋势"
+              style={{ width: '100%' }}
+            />
+            {tmplErrors.name && (
+              <span role="alert" style={errorStyle}>
+                {tmplErrors.name}
+              </span>
+            )}
+          </div>
+          <div>
+            <label htmlFor="tmpl-save-description" style={labelStyle}>
+              描述(可选)
+            </label>
+            <TextArea
+              id="tmpl-save-description"
+              rows={2}
+              value={tmplDescription}
+              onChange={(event) => setTmplDescription(event.target.value)}
+              placeholder="模板用途说明"
+              style={{ width: '100%' }}
+            />
+          </div>
+        </form>
       </Modal>
     </div>
   )

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { HistoryOutlined, FileTextOutlined, ClockCircleOutlined, MessageOutlined } from '@ant-design/icons'
+import { IconHistory, IconFile, IconClock, IconMessage } from '../components/ui/Icons'
 import { useNavigate } from 'react-router-dom'
 import { useSessionStore } from '../stores/session'
 import Empty from '../components/atelier/Empty'
@@ -30,7 +30,7 @@ export default function HistoryPage() {
       <div style={{ maxWidth: 800, margin: '0 auto', width: '100%' }}>
         <div style={{ marginBottom: 24 }}>
           <Title level={4} style={{ margin: 0, color: 'var(--ink)' }}>
-            <HistoryOutlined style={{ marginRight: 8 }} />
+            <IconHistory style={{ marginRight: 8 }} />
             历史报告
           </Title>
           <Text type="secondary" style={{ fontSize: 13, color: 'var(--muted)' }}>
@@ -60,17 +60,17 @@ export default function HistoryPage() {
                   gap: 12,
                 }}
               >
-                <FileTextOutlined style={{ color: 'var(--teal)', fontSize: 18, marginTop: 2 }} />
+                <IconFile style={{ color: 'var(--teal)', width: 18, height: 18, marginTop: 2 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <Text strong style={{ fontSize: 14, display: 'block', color: 'var(--ink)' }}>
                     {item.first_message}
                   </Text>
                   <div style={{ marginTop: 6, display: 'flex', gap: 16, alignItems: 'center' }}>
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                      <MessageOutlined style={{ marginRight: 4 }} />{item.msg_count} 条消息
+                      <IconMessage style={{ marginRight: 4 }} />{item.msg_count} 条消息
                     </span>
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                      <ClockCircleOutlined style={{ marginRight: 4 }} />{new Date(item.last_message).toLocaleString('zh-CN')}
+                      <IconClock style={{ marginRight: 4 }} />{new Date(item.last_message).toLocaleString('zh-CN')}
                     </span>
                   </div>
                 </div>

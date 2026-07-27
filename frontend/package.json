@@ -12,8 +12,6 @@
     "test:run": "vitest --run"
   },
   "dependencies": {
-    "@ant-design/icons": "^6.3.2",
-    "antd": "^6.5.1",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
     "immer": "^10.1.1",
