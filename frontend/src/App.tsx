@@ -1,7 +1,4 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { App as AntdApp, ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
-import antdTheme from './theme/antdTheme'
 import AuthGuard from './components/AuthGuard'
 import { ToastProvider } from './components/atelier/Toast'
 import LoginPage from './pages/LoginPage'
@@ -15,10 +12,8 @@ import HistoryPage from './pages/HistoryPage'
 
 export default function App() {
   return (
-    <ConfigProvider theme={antdTheme} locale={zhCN}>
-      <AntdApp>
-        <ToastProvider>
-        <BrowserRouter>
+    <ToastProvider>
+      <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
 
@@ -75,9 +70,7 @@ export default function App() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </BrowserRouter>
-        </ToastProvider>
-      </AntdApp>
-    </ConfigProvider>
+      </BrowserRouter>
+    </ToastProvider>
   )
 }

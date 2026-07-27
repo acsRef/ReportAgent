@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogoutOutlined } from '@ant-design/icons'
+import { IconLogout } from '../components/ui/Icons'
 import Avatar from '../components/atelier/Avatar'
 import TopBar from '../components/atelier/TopBar'
 import Dropdown from '../components/atelier/Dropdown'
@@ -292,7 +292,7 @@ export default function WorkbenchPage() {
           items={[
             {
               key: 'logout',
-              icon: <LogoutOutlined />,
+              icon: <IconLogout />,
               label: '退出登录',
               onClick: handleLogout,
             },

@@ -1,15 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  Form,
-  Input,
-  Typography,
-} from 'antd'
-import {
-  ArrowLeftOutlined,
-  DeleteOutlined,
-  PlusOutlined,
-} from '@ant-design/icons'
 import { useTemplateStore } from '../stores/templateStore'
 import { useAnalysisStore } from '../stores/analysisStore'
 import type { TemplateRow } from '../api/templatesClient'
@@ -22,6 +12,9 @@ import Popconfirm from '../components/atelier/Popconfirm'
 import Spinner from '../components/atelier/Spinner'
 import Tag from '../components/atelier/Tag'
 import TextField from '../components/atelier/TextField'
+import TextArea from '../components/atelier/TextArea'
+import { Text, Title, Paragraph } from '../components/atelier/Typography'
+import { IconArrowLeft, IconTrash, IconPlus } from '../components/ui/Icons'
 import '../styles/global.css'
 
 function buildMinimalRequirement(): RC {
@@ -49,6 +42,14 @@ function buildMinimalRequirement(): RC {
   }
 }
 
+const sectionLabelStyle: React.CSSProperties = {
+  fontSize: 10,
+  letterSpacing: 1.4,
+  color: 'var(--muted)',
+  textTransform: 'uppercase',
+  fontWeight: 700,
+}
+
 export default function TemplateLibraryPage() {
   const navigate = useNavigate()
   const toast = useToast()
@@ -68,7 +69,9 @@ export default function TemplateLibraryPage() {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<TemplateRow | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
-  const [createForm] = Form.useForm<{ name: string; description?: string }>()
+  const [newName, setNewName] = useState('')
+  const [newDescription, setNewDescription] = useState('')
+  const [nameError, setNameError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
@@ -76,17 +79,33 @@ export default function TemplateLibraryPage() {
     detectLegacy()
   }, [refresh, detectLegacy])
 
+  function openCreate() {
+    setNewName('')
+    setNewDescription('')
+    setNameError(null)
+    setCreateOpen(true)
+  }
+
   async function handleCreateTemplate() {
+    const name = newName.trim()
+    if (!name) {
+      setNameError('请输入模板名称')
+      return
+    }
+    if (name.length > 128) {
+      setNameError('名称不能超过 128 字符')
+      return
+    }
+    setNameError(null)
+    const payload: RC = analysisRequirement ?? buildMinimalRequirement()
+    setCreating(true)
     try {
-      const values = await createForm.validateFields()
-      const payload: RC = analysisRequirement ?? buildMinimalRequirement()
-      setCreating(true)
-      await create(values.name, values.description ?? '', payload)
-      toast.success(`已创建模板「${values.name}」`)
+      await create(name, newDescription, payload)
+      toast.success(`已创建模板「${name}」`)
       setCreateOpen(false)
-      createForm.resetFields()
+      setNewName('')
+      setNewDescription('')
     } catch (err) {
-      if (err && (err as any).errorFields) return
       toast.error(`创建失败：${String(err).slice(0, 200)}`)
     } finally {
       setCreating(false)
@@ -115,7 +134,7 @@ export default function TemplateLibraryPage() {
   }
 
   function handleUseTemplate(t: TemplateRow) {
-    const payload = t.requirement_payload as any
+    const payload = t.requirement_payload as RC | undefined
     if (payload?.id) {
       dispatch({ type: 'requirement/received', requirement: payload })
       toast.success(`已载入模板「${t.name}」，回工作台确认执行`)
@@ -128,7 +147,7 @@ export default function TemplateLibraryPage() {
       <header
         style={{
           background: 'var(--ink)',
-          color: '#FFFFFF',
+          color: 'var(--on-ink)',
           padding: '0 22px',
           display: 'flex',
           alignItems: 'center',
@@ -139,20 +158,20 @@ export default function TemplateLibraryPage() {
         <Button
           variant="quiet"
           onClick={() => navigate('/')}
-          style={{ color: '#FFFFFF' }}
+          style={{ color: 'var(--on-ink)' }}
         >
-          <ArrowLeftOutlined /> 返回工作台
+          <IconArrowLeft /> 返回工作台
         </Button>
-        <Typography.Title
+        <Title
           level={4}
-          style={{ color: '#FFFFFF', margin: 0, fontFamily: 'var(--font-display)', fontSize: 16 }}
+          style={{ color: 'var(--on-ink)', margin: 0, fontFamily: 'var(--font-display)', fontSize: 16 }}
         >
           模板中心
-        </Typography.Title>
+        </Title>
         <div style={{ flex: 1 }} />
-        <Typography.Text style={{ color: 'rgba(255,255,255,.65)', fontSize: 11 }}>
+        <Text style={{ color: 'var(--on-ink-3)', fontSize: 11 }}>
           {templates.length} 个模板
-        </Typography.Text>
+        </Text>
       </header>
       <main
         style={{
@@ -174,17 +193,7 @@ export default function TemplateLibraryPage() {
             gap: 12,
           }}
         >
-          <Typography.Text
-            style={{
-              fontSize: 10,
-              letterSpacing: 1.4,
-              color: 'var(--muted)',
-              textTransform: 'uppercase',
-              fontWeight: 700,
-            }}
-          >
-            搜索
-          </Typography.Text>
+          <Text style={sectionLabelStyle}>搜索</Text>
           <TextField
             placeholder="按名称搜索"
             value={query}
@@ -237,26 +246,9 @@ export default function TemplateLibraryPage() {
               marginBottom: 12,
             }}
           >
-            <Typography.Text
-              style={{
-                fontSize: 10,
-                letterSpacing: 1.4,
-                color: 'var(--muted)',
-                textTransform: 'uppercase',
-                fontWeight: 700,
-              }}
-            >
-              模板列表
-            </Typography.Text>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => {
-                createForm.resetFields()
-                setCreateOpen(true)
-              }}
-            >
-              <PlusOutlined /> 新建模板
+            <Text style={sectionLabelStyle}>模板列表</Text>
+            <Button variant="primary" size="sm" onClick={openCreate}>
+              <IconPlus /> 新建模板
             </Button>
           </div>
           {loading ? (
@@ -268,11 +260,11 @@ export default function TemplateLibraryPage() {
           ) : filtered.length === 0 ? (
             <Empty
               description={
-                <Typography.Text style={{ color: 'var(--muted)' }}>
+                <Text style={{ color: 'var(--muted)' }}>
                   {templates.length === 0
                     ? '还没有模板。在工作台确认一张需求卡后会出现在这里。'
                     : '没有匹配项'}
-                </Typography.Text>
+                </Text>
               }
             />
           ) : (
@@ -321,18 +313,8 @@ export default function TemplateLibraryPage() {
         >
           {selected ? (
             <>
-              <Typography.Text
-                style={{
-                  fontSize: 10,
-                  letterSpacing: 1.4,
-                  color: 'var(--muted)',
-                  textTransform: 'uppercase',
-                  fontWeight: 700,
-                }}
-              >
-                预览
-              </Typography.Text>
-              <Typography.Title
+              <Text style={sectionLabelStyle}>预览</Text>
+              <Title
                 level={4}
                 style={{
                   fontFamily: 'var(--font-display)',
@@ -342,12 +324,10 @@ export default function TemplateLibraryPage() {
                 }}
               >
                 {selected.name}
-              </Typography.Title>
-              <Typography.Paragraph
-                style={{ color: 'var(--ink-2)', fontSize: 12, margin: 0 }}
-              >
+              </Title>
+              <Paragraph style={{ color: 'var(--ink-2)', fontSize: 12, margin: 0 }}>
                 {selected.description || '（无描述）'}
-              </Typography.Paragraph>
+              </Paragraph>
               <pre
                 style={{
                   background: 'var(--canvas)',
@@ -371,7 +351,7 @@ export default function TemplateLibraryPage() {
                   onClick={() => handleUseTemplate(selected)}
                   block
                 >
-                  <PlusOutlined /> 使用此模板
+                  <IconPlus /> 使用此模板
                 </Button>
                 <Popconfirm
                   title="确定删除？"
@@ -379,16 +359,16 @@ export default function TemplateLibraryPage() {
                   okText="删除"
                   cancelText="取消"
                 >
-                  <Button variant="danger"><DeleteOutlined /></Button>
+                  <Button variant="danger">
+                    <IconTrash />
+                  </Button>
                 </Popconfirm>
               </div>
             </>
           ) : (
             <Empty
               description={
-                <Typography.Text style={{ color: 'var(--muted)' }}>
-                  选择左侧模板以预览
-                </Typography.Text>
+                <Text style={{ color: 'var(--muted)' }}>选择左侧模板以预览</Text>
               }
             />
           )}
@@ -404,27 +384,35 @@ export default function TemplateLibraryPage() {
         okText="创建"
         cancelText="取消"
       >
-        <Form
-          form={createForm}
-          layout="vertical"
-          initialValues={{ description: '' }}
-        >
-          <Form.Item
-            label="模板名称"
-            name="name"
-            rules={[
-              { required: true, message: '请输入模板名称' },
-              { max: 128, message: '名称不能超过 128 字符' },
-            ]}
-          >
-            <Input placeholder="例如：华东月销售分析" autoFocus />
-          </Form.Item>
-          <Form.Item label="描述" name="description">
-            <Input.TextArea
-              placeholder="一句话说明这个模板适用什么场景"
-              autoSize={{ minRows: 2, maxRows: 4 }}
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div>
+            <label htmlFor="tpl-name" style={{ color: 'var(--ink-2)', fontWeight: 600, fontSize: 13 }}>
+              模板名称
+            </label>
+            <TextField
+              id="tpl-name"
+              placeholder="例如：华东月销售分析"
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
             />
-          </Form.Item>
+            {nameError && (
+              <span role="alert" style={{ color: 'var(--red)', fontSize: 12, marginTop: 4, display: 'block' }}>
+                {nameError}
+              </span>
+            )}
+          </div>
+          <div>
+            <label htmlFor="tpl-description" style={{ color: 'var(--ink-2)', fontWeight: 600, fontSize: 13 }}>
+              描述
+            </label>
+            <TextArea
+              id="tpl-description"
+              placeholder="一句话说明这个模板适用什么场景"
+              value={newDescription}
+              onChange={(e) => setNewDescription(e.target.value)}
+            />
+          </div>
           <div
             style={{
               background: 'var(--canvas)',
@@ -435,22 +423,22 @@ export default function TemplateLibraryPage() {
               color: 'var(--ink-2)',
             }}
           >
-            <Typography.Text style={{ color: 'var(--muted)', fontSize: 11 }}>
+            <Text style={{ color: 'var(--muted)', fontSize: 11 }}>
               requirement_payload 来源：
-            </Typography.Text>
+            </Text>
             <div style={{ marginTop: 4 }}>
               {analysisRequirement ? (
                 <Tag tone="teal">
                   当前工作台需求卡 v{analysisRequirement.version} · {analysisRequirement.status}
                 </Tag>
               ) : (
-                <Typography.Text style={{ color: 'var(--faint)' }}>
+                <Text style={{ color: 'var(--faint)' }}>
                   工作台暂无需求卡，将使用最小可用的占位卡
-                </Typography.Text>
+                </Text>
               )}
             </div>
           </div>
-        </Form>
+        </div>
       </Modal>
     </div>
   )

@@ -1,9 +1,9 @@
 /* ReportAgent Workbench — Design Tokens
  *
- * Source of truth: docs/ui-style-guide.md §2.
- * These CSS variables drive every component in the workbench. The AntD
- * theme in `theme/antdTheme.ts` consumes the same values; this file is
- * the single place to change a color.
+ * Source of truth: docs/ui-style-guide.md §2 and the approved prototype
+ * (docs/intelligent-analysis-workbench.html). These CSS variables drive
+ * every component in the workbench; this file is the single place to
+ * change a color.
  *
  * Do NOT introduce new color hex values outside this file (and the AntD
  * theme) — that breaks the design contract.

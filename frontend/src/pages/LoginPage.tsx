@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Form } from 'antd'
 import Button from '../components/atelier/Button'
 import TextField from '../components/atelier/TextField'
 import { Text, Title, Paragraph } from '../components/atelier/Typography'
@@ -10,24 +9,29 @@ import { loginAPI } from '../api/api'
 import '../styles/global.css'
 
 /**
- * Login page — editorial two-column layout. Left: brand / value prop on a
- * warm paper canvas. Right: a single centered form. Narrow viewport
- * collapses to a single column (handled by the workbench-shell grid).
- *
- * Uses the existing `loginAPI` from `api/api.ts` and the `authStore` so
- * that subsequent pages can read the JWT.
+ * Login page — editorial two-column layout. antd-free: local form state
+ * with the exact validation messages the tests pin (请输入用户名/请输入密码).
  */
 export default function LoginPage() {
   const navigate = useNavigate()
   const setAuth = useAuthStore((s) => s.setAuth)
+  const [username, setUsername] = useState('admin')
+  const [password, setPassword] = useState('admin123')
+  const [errors, setErrors] = useState<{ username?: string; password?: string }>({})
   const [submitting, setSubmitting] = useState(false)
-  const [form] = Form.useForm()
   const toast = useToast()
 
-  async function onFinish(values: { username: string; password: string }) {
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    const next: { username?: string; password?: string } = {}
+    if (!username.trim()) next.username = '请输入用户名'
+    if (!password.trim()) next.password = '请输入密码'
+    setErrors(next)
+    if (next.username || next.password) return
+
     setSubmitting(true)
     try {
-      const res = await loginAPI(values.username, values.password)
+      const res = await loginAPI(username.trim(), password)
       setAuth(res.access_token, res.user_id, res.username)
       toast.success('登录成功')
       navigate('/')
@@ -37,6 +41,9 @@ export default function LoginPage() {
       setSubmitting(false)
     }
   }
+
+  const labelStyle = { color: 'var(--ink-2)', fontWeight: 600, fontSize: 13 }
+  const errorStyle = { color: 'var(--red)', fontSize: 12, marginTop: 4, display: 'block' }
 
   return (
     <div
@@ -125,33 +132,46 @@ export default function LoginPage() {
           >
             登录
           </Title>
-          <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{ username: 'admin', password: 'admin123' }}>
-            <Form.Item
-              label={<span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>用户名</span>}
-              name="username"
-              rules={[{ required: true, message: '请输入用户名' }]}
-            >
-              <TextField placeholder="admin" autoComplete="username" />
-            </Form.Item>
-            <Form.Item
-              label={<span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>密码</span>}
-              name="password"
-              rules={[{ required: true, message: '请输入密码' }]}
-            >
-              <TextField type="password" placeholder="••••••••" autoComplete="current-password" />
-            </Form.Item>
-            <Form.Item>
-              <Button
-                variant="primary"
-                block
-                loading={submitting}
-                style={{ marginTop: 8 }}
-                type="submit"
-              >
-                进入工作台
-              </Button>
-            </Form.Item>
-          </Form>
+          <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 16 }}>
+            <div>
+              <label htmlFor="login-username" style={labelStyle}>
+                用户名
+              </label>
+              <TextField
+                id="login-username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="admin"
+                autoComplete="username"
+              />
+              {errors.username && (
+                <span role="alert" style={errorStyle}>
+                  {errors.username}
+                </span>
+              )}
+            </div>
+            <div>
+              <label htmlFor="login-password" style={labelStyle}>
+                密码
+              </label>
+              <TextField
+                id="login-password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="••••••••"
+                autoComplete="current-password"
+              />
+              {errors.password && (
+                <span role="alert" style={errorStyle}>
+                  {errors.password}
+                </span>
+              )}
+            </div>
+            <Button variant="primary" block loading={submitting} type="submit" style={{ marginTop: 8 }}>
+              进入工作台
+            </Button>
+          </form>
         </div>
       </section>
     </div>
