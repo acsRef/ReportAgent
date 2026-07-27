@@ -1,13 +1,12 @@
-import { Layout, Typography, Dropdown, Tag } from 'antd'
 import { UserOutlined, LogoutOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
-
 import { useAuthStore } from '../../stores/authStore'
 import {
   IconChat, IconHistory, IconLogo, IconTemplate,
 } from '../ui/Icons'
-
-const { Text } = Typography
+import { Text } from '../atelier/Typography'
+import Dropdown from '../atelier/Dropdown'
+import Tag from '../atelier/Tag'
 
 const NAV_ITEMS = [
   { key: '/', label: '对话与生成', icon: <IconChat /> },
@@ -26,21 +25,21 @@ export default function Navbar() {
   }
 
   return (
-    <Layout.Header
+    <header
       style={{
         height: 52,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '0 24px',
-        background: '#FFFFFF',
-        borderBottom: '1px solid #E5E7EB',
+        background: 'var(--paper)',
+        borderBottom: '1px solid var(--line)',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 32, height: '100%' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <IconLogo width={20} height={20} style={{ color: '#0F172A' }} />
-          <Text strong style={{ fontSize: 16, color: '#0F172A', lineHeight: 1.25 }}>
+          <IconLogo width={20} height={20} style={{ color: 'var(--ink)' }} />
+          <Text strong style={{ fontSize: 16, color: 'var(--ink)', lineHeight: 1.25 }}>
             ReportAgent
           </Text>
           <Tag
@@ -49,9 +48,9 @@ export default function Navbar() {
               lineHeight: '20px',
               padding: '0 8px',
               borderRadius: 6,
-              background: '#EFF6FF',
-              border: '1px solid #E5E7EB',
-              color: '#6B7280',
+              background: 'var(--teal-soft)',
+              border: '1px solid var(--line)',
+              color: 'var(--muted)',
               margin: 0,
             }}
           >
@@ -70,14 +69,14 @@ export default function Navbar() {
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   height: '100%', padding: 0,
-                  color: active ? '#0F172A' : '#6B7280',
+                  color: active ? 'var(--ink)' : 'var(--muted)',
                   background: 'transparent', border: 'none',
-                  borderBottom: active ? '2px solid #1677FF' : '2px solid transparent',
+                  borderBottom: active ? '2px solid var(--teal)' : '2px solid transparent',
                   cursor: 'pointer', fontSize: 14,
                   fontWeight: active ? 600 : 400,
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = '#0F172A' }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = active ? '#0F172A' : '#6B7280' }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--ink)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = active ? 'var(--ink)' : 'var(--muted)' }}
               >
                 {item.icon}{item.label}
               </button>
@@ -87,32 +86,30 @@ export default function Navbar() {
       </div>
 
       <Dropdown
-        menu={{
-          items: [
-            {
-              key: 'logout',
-              icon: <LogoutOutlined />,
-              label: '退出登录',
-              onClick: handleLogout,
-            },
-          ],
-        }}
-        placement="bottomRight"
+        items={[
+          {
+            key: 'logout',
+            icon: <LogoutOutlined />,
+            label: '退出登录',
+            onClick: handleLogout,
+          },
+        ]}
+        placement="bottom-end"
       >
         <div
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             cursor: 'pointer', padding: '4px 8px',
-            borderRadius: 6, color: '#6B7280', fontSize: 14,
+            borderRadius: 6, color: 'var(--muted)', fontSize: 14,
             border: '1px solid transparent',
             transition: 'color 0.15s, border-color 0.15s',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = '#0F172A'
-            e.currentTarget.style.borderColor = '#E5E7EB'
+            e.currentTarget.style.color = 'var(--ink)'
+            e.currentTarget.style.borderColor = 'var(--line)'
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = '#6B7280'
+            e.currentTarget.style.color = 'var(--muted)'
             e.currentTarget.style.borderColor = 'transparent'
           }}
         >
@@ -120,6 +117,6 @@ export default function Navbar() {
           <Text style={{ color: 'inherit', fontSize: 14 }}>{username || '用户'}</Text>
         </div>
       </Dropdown>
-    </Layout.Header>
+    </header>
   )
 }

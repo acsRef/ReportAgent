@@ -1,8 +1,6 @@
-import { Typography } from 'antd'
+import { Text } from '../../atelier/Typography'
 import { BulbOutlined } from '@ant-design/icons'
 import type { ReportBlock } from '../../../types/report'
-
-const { Text } = Typography
 
 interface Props {
   block: ReportBlock
@@ -18,25 +16,25 @@ export default function InsightBlock({ block }: Props) {
 
   return (
     <div style={{
-      background: 'linear-gradient(135deg, #EFF6FF, #F8FAFC)',
-      border: '1px solid #DBEAFE',
+      background: 'linear-gradient(135deg, var(--teal-soft), var(--canvas))',
+      border: '1px solid var(--teal-pale)',
       borderRadius: 10,
       padding: '20px 24px',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)',
+      boxShadow: 'var(--shadow-card)',
     }}>
       <div style={{
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        color: '#1E40AF',
+        color: 'var(--teal-deep)',
         fontWeight: 600,
         marginBottom: 12,
         fontSize: 14,
       }}>
         <div style={{
           width: 24, height: 24, borderRadius: 12,
-          background: '#1E40AF', display: 'flex', alignItems: 'center',
-          justifyContent: 'center', color: '#FFFFFF', fontSize: 13,
+          background: 'var(--teal-deep)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', color: 'var(--paper)', fontSize: 13,
         }}>
           <BulbOutlined />
         </div>
@@ -47,7 +45,7 @@ export default function InsightBlock({ block }: Props) {
         <ol style={{
           paddingLeft: 20,
           margin: 0,
-          color: '#1E293B',
+          color: 'var(--ink)',
           lineHeight: 1.8,
           fontSize: 13,
         }}>
@@ -57,9 +55,9 @@ export default function InsightBlock({ block }: Props) {
           })}
         </ol>
       ) : (
-        <div style={{ paddingLeft: 0, color: '#1E293B', lineHeight: 1.8, fontSize: 13 }}>
+        <div style={{ paddingLeft: 0, color: 'var(--ink)', lineHeight: 1.8, fontSize: 13 }}>
           {lines.map((line, i) => (
-            <Text key={i} style={{ display: 'block', marginBottom: 6, color: '#1E293B', fontSize: 13 }}>
+            <Text key={i} style={{ display: 'block', marginBottom: 6, color: 'var(--ink)', fontSize: 13 }}>
               {line}
             </Text>
           ))}

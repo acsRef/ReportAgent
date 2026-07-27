@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   analysisReducer,
+  canRetryFailedAction,
   initialAnalysisState,
   isBusyPhase,
   type AnalysisState,
@@ -127,4 +128,34 @@ describe('isBusyPhase', () => {
   const idle: AnalysisPhase[] = ['idle', 'awaiting_missing', 'awaiting_confirm', 'report_ready', 'error']
   for (const p of busy) it(`returns true for ${p}`, () => expect(isBusyPhase(p)).toBe(true))
   for (const p of idle) it(`returns false for ${p}`, () => expect(isBusyPhase(p)).toBe(false))
+})
+
+describe('canRetryFailedAction', () => {
+  const confirmError = { code: 'QUERY_FAILED', message: '查询未返回数据', recoverable: true, failed_action: 'confirm' } as const
+
+  it('true for recoverable confirm failure in error phase', () => {
+    expect(canRetryFailedAction({ phase: 'error', error: { ...confirmError } })).toBe(true)
+  })
+
+  it('false when the failed action is not confirm', () => {
+    expect(canRetryFailedAction({
+      phase: 'error',
+      error: { ...confirmError, failed_action: 'new' },
+    })).toBe(false)
+  })
+
+  it('false when the error is not recoverable', () => {
+    expect(canRetryFailedAction({
+      phase: 'error',
+      error: { ...confirmError, recoverable: false },
+    })).toBe(false)
+  })
+
+  it('false outside the error phase even with a stale error object', () => {
+    expect(canRetryFailedAction({ phase: 'report_ready', error: { ...confirmError } })).toBe(false)
+  })
+
+  it('false when error is null', () => {
+    expect(canRetryFailedAction({ phase: 'error', error: null })).toBe(false)
+  })
 })

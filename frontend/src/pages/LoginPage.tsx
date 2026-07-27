@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { App, Button, Form, Input, Typography } from 'antd'
+import { Form } from 'antd'
+import Button from '../components/atelier/Button'
+import TextField from '../components/atelier/TextField'
+import { Text, Title, Paragraph } from '../components/atelier/Typography'
+import { useToast } from '../components/atelier/useToast'
 import { useAuthStore } from '../stores/authStore'
 import { loginAPI } from '../api/api'
 import '../styles/global.css'
@@ -18,17 +22,17 @@ export default function LoginPage() {
   const setAuth = useAuthStore((s) => s.setAuth)
   const [submitting, setSubmitting] = useState(false)
   const [form] = Form.useForm()
-  const { message } = App.useApp()
+  const toast = useToast()
 
   async function onFinish(values: { username: string; password: string }) {
     setSubmitting(true)
     try {
       const res = await loginAPI(values.username, values.password)
       setAuth(res.access_token, res.user_id, res.username)
-      message.success('登录成功')
+      toast.success('登录成功')
       navigate('/')
     } catch (err) {
-      message.error(`登录失败：${(err as Error).message ?? '未知错误'}`)
+      toast.error(`登录失败：${(err as Error).message ?? '未知错误'}`)
     } finally {
       setSubmitting(false)
     }
@@ -53,12 +57,11 @@ export default function LoginPage() {
           gap: 24,
         }}
       >
-        <Typography.Title
+        <Title
           level={1}
           style={{
             fontFamily: 'var(--font-display)',
             fontSize: 40,
-            color: 'var(--ink)',
             margin: 0,
             lineHeight: 1.15,
             fontWeight: 700,
@@ -67,12 +70,10 @@ export default function LoginPage() {
           数据，先问再查
           <br />
           报告，按需演化
-        </Typography.Title>
-        <Typography.Paragraph
+        </Title>
+        <Paragraph
           style={{
             fontFamily: 'var(--font-ui)',
-            color: 'var(--ink-2)',
-            fontSize: 14,
             maxWidth: 460,
             margin: 0,
             lineHeight: 1.7,
@@ -80,8 +81,8 @@ export default function LoginPage() {
         >
           ReportAgent 让你用中文提问，自动生成 SQL、报告与洞察。
           每一份分析都可追溯、可调整、可重做。
-        </Typography.Paragraph>
-        <Typography.Text
+        </Paragraph>
+        <Text
           style={{
             color: 'var(--muted)',
             fontSize: 11,
@@ -91,7 +92,7 @@ export default function LoginPage() {
           }}
         >
           默认账号 · admin / admin123
-        </Typography.Text>
+        </Text>
       </section>
 
       {/* Right — form card on paper */}
@@ -114,39 +115,38 @@ export default function LoginPage() {
             padding: '40px 32px',
           }}
         >
-          <Typography.Title
+          <Title
             level={3}
             style={{
               fontFamily: 'var(--font-display)',
               fontSize: 22,
-              color: 'var(--ink)',
               marginBottom: 24,
             }}
           >
             登录
-          </Typography.Title>
+          </Title>
           <Form form={form} layout="vertical" onFinish={onFinish} initialValues={{ username: 'admin', password: 'admin123' }}>
             <Form.Item
               label={<span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>用户名</span>}
               name="username"
               rules={[{ required: true, message: '请输入用户名' }]}
             >
-              <Input placeholder="admin" autoComplete="username" />
+              <TextField placeholder="admin" autoComplete="username" />
             </Form.Item>
             <Form.Item
               label={<span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>密码</span>}
               name="password"
               rules={[{ required: true, message: '请输入密码' }]}
             >
-              <Input.Password placeholder="••••••••" autoComplete="current-password" />
+              <TextField type="password" placeholder="••••••••" autoComplete="current-password" />
             </Form.Item>
             <Form.Item>
               <Button
-                type="primary"
-                htmlType="submit"
+                variant="primary"
                 block
                 loading={submitting}
-                style={{ height: 38, fontWeight: 500, marginTop: 8 }}
+                style={{ marginTop: 8 }}
+                type="submit"
               >
                 进入工作台
               </Button>

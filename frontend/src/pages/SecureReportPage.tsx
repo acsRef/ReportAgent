@@ -1,14 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Layout, Spin, Typography } from 'antd'
+import { Text, Title } from '../components/atelier/Typography'
 import { fetchReportVersion, type ReportVersionDetail } from '../api/sessionsClient'
+import Spinner from '../components/atelier/Spinner'
 import '../styles/global.css'
 
-/**
- * Authenticated report page — reads `agent.report_version` for the given
- * (session, version) tuple via `GET /api/v1/sessions/{sid}/reports/{v}`.
- * No LLM, no graph; just a pure DB read.
- */
 export default function SecureReportPage() {
   const { sessionId, version } = useParams<{ sessionId: string; version: string }>()
   const [report, setReport] = useState<ReportVersionDetail | null>(null)
@@ -35,24 +31,25 @@ export default function SecureReportPage() {
   }, [sessionId, version])
 
   return (
-    <Layout style={{ minHeight: '100vh', background: 'var(--canvas)' }}>
-      <Layout.Header
+    <div style={{ minHeight: '100vh', background: 'var(--canvas)', display: 'flex', flexDirection: 'column' }}>
+      <header
         style={{
           background: 'var(--ink)',
           color: '#FFFFFF',
           padding: '0 22px',
           display: 'flex',
           alignItems: 'center',
+          height: 48,
         }}
       >
-        <Typography.Title
+        <Title
           level={4}
-          style={{ color: '#FFFFFF', margin: 0, fontFamily: 'var(--font-display)' }}
+          style={{ color: '#FFFFFF', margin: 0, fontFamily: 'var(--font-display)', fontSize: 16 }}
         >
           ReportAgent — 报告 v{version}
-        </Typography.Title>
-      </Layout.Header>
-      <Layout.Content style={{ padding: 'var(--sp-xl)' }}>
+        </Title>
+      </header>
+      <main style={{ padding: 'var(--sp-xl)', flex: 1 }}>
         <div
           style={{
             background: 'var(--paper)',
@@ -65,17 +62,17 @@ export default function SecureReportPage() {
           }}
         >
           {loading ? (
-            <Spin />
+            <Spinner />
           ) : error ? (
-            <Typography.Text type="danger">{error}</Typography.Text>
+            <Text type="danger">{error}</Text>
           ) : report ? (
             <>
-              <Typography.Title
+              <Title
                 level={2}
                 style={{ fontFamily: 'var(--font-display)', color: 'var(--ink)' }}
               >
                 {report.title}
-              </Typography.Title>
+              </Title>
               <pre
                 style={{
                   whiteSpace: 'pre-wrap',
@@ -93,10 +90,10 @@ export default function SecureReportPage() {
               </pre>
             </>
           ) : (
-            <Typography.Text type="secondary">未找到该报告版本</Typography.Text>
+            <Text type="secondary">未找到该报告版本</Text>
           )}
         </div>
-      </Layout.Content>
-    </Layout>
+      </main>
+    </div>
   )
 }

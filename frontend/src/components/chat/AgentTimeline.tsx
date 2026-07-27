@@ -1,8 +1,6 @@
-import { Typography } from 'antd'
 import { LoadingOutlined, CloseCircleFilled } from '@ant-design/icons'
+import { Text } from '../atelier/Typography'
 import type { TimelineEntry } from '../../types/report'
-
-const { Text } = Typography
 
 interface Props {
   events: TimelineEntry[]
@@ -26,21 +24,20 @@ export default function AgentTimeline({ events, isStreaming }: Props) {
   return (
     <div style={{
       width: 300,
-      background: '#FFFFFF',
-      borderLeft: '1px solid #E2E8F0',
+      background: 'var(--paper)',
+      borderLeft: '1px solid var(--line)',
       display: 'flex',
       flexDirection: 'column',
       flexShrink: 0,
     }}>
-      {/* Header */}
       <div style={{
         padding: '14px 16px',
-        borderBottom: '1px solid #F1F5F9',
+        borderBottom: '1px solid var(--line)',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
       }}>
-        <Text strong style={{ fontSize: 13, color: '#1E293B' }}>
+        <Text strong style={{ fontSize: 13, color: 'var(--ink)' }}>
           <span style={{ marginRight: 6 }}>⚙️</span>
           Agent Runtime
         </Text>
@@ -55,19 +52,18 @@ export default function AgentTimeline({ events, isStreaming }: Props) {
         )}
       </div>
 
-      {/* Body — custom timeline */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
         {events.length === 0 ? (
           <div style={{ textAlign: 'center', paddingTop: 40 }}>
             {isStreaming ? (
               <>
-                <LoadingOutlined style={{ fontSize: 20, color: '#3B82F6' }} />
-                <Text style={{ display: 'block', marginTop: 8, color: '#94A3B8', fontSize: 12 }}>
+                <LoadingOutlined style={{ fontSize: 20, color: 'var(--teal)' }} />
+                <Text style={{ display: 'block', marginTop: 8, color: 'var(--muted)', fontSize: 12 }}>
                   等待 Agent 启动...
                 </Text>
               </>
             ) : (
-              <Text style={{ color: '#CBD5E1', fontSize: 12 }}>暂无执行记录</Text>
+              <Text style={{ color: 'var(--faint)', fontSize: 12 }}>暂无执行记录</Text>
             )}
           </div>
         ) : (
@@ -86,14 +82,12 @@ export default function AgentTimeline({ events, isStreaming }: Props) {
                 paddingLeft: 20,
                 paddingBottom: isLast ? 4 : 14,
               }}>
-                {/* Vertical line */}
                 {!isLast && (
                   <div style={{
                     position: 'absolute', left: 6, top: 18, bottom: 0,
-                    width: 2, background: '#E2E8F0',
+                    width: 2, background: 'var(--line)',
                   }} />
                 )}
-                {/* Dot / indicator */}
                 <div style={{
                   position: 'absolute', left: 0, top: 2,
                   width: 14, height: 14,
@@ -109,13 +103,12 @@ export default function AgentTimeline({ events, isStreaming }: Props) {
                     </span>
                   )}
                 </div>
-                {/* Content */}
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Text style={{
                       fontSize: 13,
-                      color: event.status === 'running' ? '#1E40AF'
-                        : event.status === 'pending' ? '#CBD5E1' : '#1E293B',
+                      color: event.status === 'running' ? 'var(--teal-deep)'
+                        : event.status === 'pending' ? 'var(--faint)' : 'var(--ink)',
                       fontWeight: event.status === 'running' ? 500 : 400,
                     }}>
                       {event.nodeName}
@@ -129,13 +122,13 @@ export default function AgentTimeline({ events, isStreaming }: Props) {
                       </span>
                     )}
                     {event.duration && (
-                      <span style={{ fontSize: 10, color: '#94A3B8', marginLeft: 'auto' }}>
+                      <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 'auto' }}>
                         {event.duration}
                       </span>
                     )}
                   </div>
                   {event.detail && (
-                    <Text style={{ display: 'block', fontSize: 11, color: '#94A3B8', marginTop: 2 }}>
+                    <Text style={{ display: 'block', fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
                       {event.detail}
                     </Text>
                   )}

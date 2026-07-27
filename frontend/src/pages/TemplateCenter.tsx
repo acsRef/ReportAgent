@@ -1,12 +1,20 @@
-import { Typography, Card, Row, Col, Empty, Modal, Form, Input, Button, message } from 'antd'
-import { AppstoreOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useState } from 'react'
+import { Form } from 'antd'
+import { AppstoreOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+
+import { Text, Title } from '../components/atelier/Typography'
+import Card from '../components/atelier/Card'
+import Empty from '../components/atelier/Empty'
+import Modal from '../components/atelier/Modal'
+import Button from '../components/atelier/Button'
+import TextField from '../components/atelier/TextField'
+import TextArea from '../components/atelier/TextArea'
+import { useToast } from '../components/atelier/useToast'
 import { useSessionStore } from '../stores/session'
 
-const { Text, Title } = Typography
-
 export default function TemplateCenter() {
+  const toast = useToast()
   const { templates, deleteTemplate, saveAsTemplate, setTemplateParams, setViewMode } = useSessionStore()
   const navigate = useNavigate()
   const [modalOpen, setModalOpen] = useState(false)
@@ -15,7 +23,7 @@ export default function TemplateCenter() {
   const handleCreate = () => {
     form.validateFields().then((values) => {
       saveAsTemplate(values.name, values.description)
-      message.success('模板创建成功')
+      toast.success('模板创建成功')
       setModalOpen(false)
       form.resetFields()
     })
@@ -28,7 +36,7 @@ export default function TemplateCenter() {
   }
 
   return (
-    <div style={{ height: '100%', overflow: 'auto', background: '#f5f6f9', padding: 32 }}>
+    <div style={{ height: '100%', overflow: 'auto', background: 'var(--canvas)', padding: 32 }}>
       <div style={{ maxWidth: 1000, margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
           <div>
@@ -40,54 +48,50 @@ export default function TemplateCenter() {
               保存和管理报告模板，快速复用分析逻辑
             </Text>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
-            新建模板
+          <Button variant="primary" onClick={() => setModalOpen(true)}>
+            <PlusOutlined /> 新建模板
           </Button>
         </div>
 
         {templates.length === 0 ? (
           <Empty
-            image={<AppstoreOutlined style={{ fontSize: 48, color: '#bbb' }} />}
+            icon={<AppstoreOutlined style={{ fontSize: 48, color: 'var(--muted)' }} />}
             description="暂无模板，在对话页面可保存当前报告为模板"
             style={{ marginTop: 60 }}
           />
         ) : (
-          <Row gutter={[16, 16]}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
             {templates.map((t) => (
-              <Col span={8} key={t.id}>
-                <Card
-                  hoverable
-                  actions={[
-                    <Button type="link" size="small" key="use" onClick={() => handleUse(t)}>
-                      使用模板
-                    </Button>,
-                    <DeleteOutlined key="delete" onClick={() => { deleteTemplate(t.id); message.success('已删除') }} />,
-                  ]}
-                >
-                  <Card.Meta
-                    title={<Text strong>{t.name}</Text>}
-                    description={
-                      <div>
-                        <Text type="secondary" style={{ fontSize: 12 }}>{t.description || '无描述'}</Text>
-                        <div style={{ marginTop: 8, fontSize: 11, color: '#999' }}>
-                          创建于 {new Date(t.createdAt).toLocaleDateString('zh-CN')}
-                        </div>
-                      </div>
-                    }
-                  />
-                </Card>
-              </Col>
+              <Card
+                key={t.id}
+                hoverable
+                bodyStyle={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}
+              >
+                <Text strong>{t.name}</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>{t.description || '无描述'}</Text>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  创建于 {new Date(t.createdAt).toLocaleDateString('zh-CN')}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                  <Button variant="default" size="sm" onClick={() => handleUse(t)}>
+                    使用模板
+                  </Button>
+                  <Button variant="quiet" size="sm" onClick={() => { deleteTemplate(t.id); toast.success('已删除') }}>
+                    删除
+                  </Button>
+                </div>
+              </Card>
             ))}
-          </Row>
+          </div>
         )}
 
-        <Modal title="新建模板" open={modalOpen} onOk={handleCreate} onCancel={() => setModalOpen(false)} okText="创建" cancelText="取消">
+        <Modal title="新建模板" open={modalOpen} onOk={handleCreate} onClose={() => setModalOpen(false)} okText="创建" cancelText="取消">
           <Form form={form} layout="vertical">
             <Form.Item name="name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }]}>
-              <Input placeholder="例如：月度销售分析" />
+              <TextField placeholder="例如：月度销售分析" />
             </Form.Item>
             <Form.Item name="description" label="描述">
-              <Input.TextArea rows={2} placeholder="可选：模板用途说明" />
+              <TextArea rows={2} placeholder="可选：模板用途说明" style={{ width: '100%' }} />
             </Form.Item>
           </Form>
         </Modal>

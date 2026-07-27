@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Typography, Select, Button, Modal, Form, Input, message } from 'antd'
+import { Form } from 'antd'
 import {
   ReloadOutlined, SaveOutlined, DownloadOutlined, PlusOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
+import { Text } from '../components/atelier/Typography'
+import Button from '../components/atelier/Button'
+import Modal from '../components/atelier/Modal'
+import TextField from '../components/atelier/TextField'
+import TextArea from '../components/atelier/TextArea'
+import { useToast } from '../components/atelier/useToast'
 import { useSessionStore } from '../stores/session'
 import { exportReportHTML } from '../utils/export'
 import AgentTimeline from '../components/chat/AgentTimeline'
@@ -16,9 +22,8 @@ import ChatView from './views/ChatView'
 import RunningView from './views/RunningView'
 import ReportView from './views/ReportView'
 
-const { Text } = Typography
-
 export default function ChatPage() {
+  const toast = useToast()
   const {
     viewMode, sessionId, sessions, currentReport, sessionLabel, timeline,
     templates, templateParams, setTemplateParams, resetSession, busy,
@@ -30,12 +35,12 @@ export default function ChatPage() {
 
   const handleSaveAsTemplate = () => {
     if (!currentReport || currentReport.blocks.length === 0) {
-      message.warning('当前没有可保存的报告')
+      toast.warning('当前没有可保存的报告')
       return
     }
     tmplForm.validateFields().then((values) => {
       saveAsTemplate(values.name, values.description ?? '')
-      message.success('已保存到模板中心')
+      toast.success('已保存到模板中心')
       setTmplModalOpen(false)
       tmplForm.resetFields()
     })
@@ -45,7 +50,7 @@ export default function ChatPage() {
     const t = templates.find((x) => x.id === tmplId)
     if (!t) return
     setTemplateParams({ ...t.params })
-    message.success(`已套用模板「${t.name}」`)
+    toast.success(`已套用模板「${t.name}」`)
     navigate('/')
   }
 
@@ -54,31 +59,25 @@ export default function ChatPage() {
   const showTimeline = viewMode === 'running'
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', background: '#FFFFFF' }}>
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--paper)' }}>
       <aside style={{
         width: 280,
-        background: '#FAFAFA',
-        borderRight: '1px solid #E5E7EB',
+        background: 'var(--canvas)',
+        borderRight: '1px solid var(--line)',
         display: 'flex',
         flexDirection: 'column',
         flexShrink: 0,
       }}>
         <div style={{ padding: 12 }}>
-          <button
+          <Button
+            variant="primary"
+            block
             onClick={resetSession}
             disabled={busy}
-            style={{
-              width: '100%', padding: 8, background: '#1677FF', color: '#FFFFFF',
-              border: 'none', borderRadius: 6, cursor: busy ? 'not-allowed' : 'pointer', fontSize: 14,
-              opacity: busy ? 0.55 : 1,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-              fontWeight: 500, boxShadow: 'none',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = '#4096FF' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = '#1677FF' }}
+            style={{ fontSize: 14, gap: 8, justifyContent: 'center' }}
           >
             <PlusOutlined style={{ fontSize: 14 }} /> 新建分析
-          </button>
+          </Button>
         </div>
 
         <SidebarSection title="最近报告" icon={<IconReport />}>
@@ -93,10 +92,10 @@ export default function ChatPage() {
           ))}
           {sessions.length === 0 && (
             <div style={{ padding: '8px 4px' }}>
-              <Text style={{ fontSize: 12, color: '#9CA3AF', display: 'block' }}>暂无历史会话</Text>
+              <Text style={{ fontSize: 12, color: 'var(--muted)', display: 'block' }}>暂无历史会话</Text>
               <Button
-                size="small"
-                type="link"
+                size="sm"
+                variant="quiet"
                 style={{ padding: '4px 0', height: 'auto', fontSize: 12 }}
                 onClick={() => !busy && navigate('/history')}
                 disabled={busy}
@@ -107,8 +106,8 @@ export default function ChatPage() {
           )}
           {sessions.length > 5 && (
             <Button
-              size="small"
-              type="link"
+              size="sm"
+              variant="quiet"
               style={{ padding: '4px 0', height: 'auto', fontSize: 12 }}
               onClick={() => !busy && navigate('/history')}
               disabled={busy}
@@ -131,12 +130,12 @@ export default function ChatPage() {
           ))}
           {templates.length === 0 && (
             <div style={{ padding: '8px 4px' }}>
-              <Text style={{ fontSize: 12, color: '#9CA3AF', display: 'block' }}>
+              <Text style={{ fontSize: 12, color: 'var(--muted)', display: 'block' }}>
                 暂无模板
               </Text>
               <Button
-                size="small"
-                type="link"
+                size="sm"
+                variant="quiet"
                 style={{ padding: '4px 0', height: 'auto', fontSize: 12 }}
                 onClick={() => !busy && navigate('/templates')}
                 disabled={busy}
@@ -147,8 +146,8 @@ export default function ChatPage() {
           )}
           {templates.length > 0 && (
             <Button
-              size="small"
-              type="link"
+              size="sm"
+              variant="quiet"
               style={{ padding: '4px 0', height: 'auto', fontSize: 12 }}
               onClick={() => !busy && navigate('/templates')}
               disabled={busy}
@@ -161,13 +160,13 @@ export default function ChatPage() {
         <div style={{ flex: 1 }} />
 
         <div style={{
-          padding: '12px 16px', borderTop: '1px solid #F3F4F6',
-          fontSize: 12, color: '#9CA3AF', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '12px 16px', borderTop: '1px solid var(--line)',
+          fontSize: 12, color: 'var(--muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <span>Session: {sessionLabel}</span>
           <Button
-            size="small"
-            type="link"
+            size="sm"
+            variant="quiet"
             style={{ padding: 0, height: 'auto', fontSize: 12 }}
             onClick={() => !busy && navigate('/history')}
             disabled={busy}
@@ -180,61 +179,57 @@ export default function ChatPage() {
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {viewMode === 'report' && (
           <div style={{
-            background: '#FFFFFF', padding: '8px 24px',
-            borderBottom: '1px solid #E5E7EB',
+            background: 'var(--paper)', padding: '8px 24px',
+            borderBottom: '1px solid var(--line)',
             display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0,
           }}>
-            <Text strong style={{ fontSize: 14, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <IconReport style={{ color: '#6B7280' }} />当前报告
+            <Text strong style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <IconReport style={{ color: 'var(--muted)' }} />当前报告
             </Text>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 13, color: '#6B7280' }}>年份:</span>
-              <Select
-                size="small"
+              <span style={{ fontSize: 13, color: 'var(--muted)' }}>年份:</span>
+              <select
                 value={templateParams.year}
-                onChange={(v) => setTemplateParams({ year: v })}
-                style={{ width: 80 }}
-                options={[
-                  { value: '2024', label: '2024' },
-                  { value: '2025', label: '2025' },
-                ]}
-              />
+                onChange={(e) => setTemplateParams({ year: e.target.value })}
+                style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--line)', background: 'var(--paper)', color: 'var(--ink)' }}
+              >
+                <option value="2024">2024</option>
+                <option value="2025">2025</option>
+              </select>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 13, color: '#6B7280' }}>区域:</span>
-              <Select
-                size="small"
+              <span style={{ fontSize: 13, color: 'var(--muted)' }}>区域:</span>
+              <select
                 value={templateParams.region}
-                onChange={(v) => setTemplateParams({ region: v })}
-                style={{ width: 100 }}
-                options={[
-                  { value: '华东区域', label: '华东区域' },
-                  { value: '华南区域', label: '华南区域' },
-                  { value: '全国', label: '全国' },
-                ]}
-              />
+                onChange={(e) => setTemplateParams({ region: e.target.value })}
+                style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--line)', background: 'var(--paper)', color: 'var(--ink)' }}
+              >
+                <option value="华东区域">华东区域</option>
+                <option value="华南区域">华南区域</option>
+                <option value="全国">全国</option>
+              </select>
             </div>
             <div style={{ flex: 1 }} />
             <Button
-              size="small"
-              icon={<SaveOutlined />}
-              style={{ fontSize: 13, borderRadius: 6 }}
+              size="sm"
+              variant="default"
+              style={{ fontSize: 13, gap: 4 }}
               onClick={() => setTmplModalOpen(true)}
               disabled={!currentReport || currentReport.blocks.length === 0}
             >
-              保存为模板
+              <SaveOutlined /> 保存为模板
             </Button>
             <Button
-              size="small"
-              icon={<DownloadOutlined />}
-              style={{ fontSize: 13, borderRadius: 6 }}
+              size="sm"
+              variant="default"
+              style={{ fontSize: 13, gap: 4 }}
               onClick={() => currentReport && exportReportHTML(currentReport)}
               disabled={!currentReport}
             >
-              导出
+              <DownloadOutlined /> 导出
             </Button>
-            <Button size="small" icon={<ReloadOutlined />} style={{ fontSize: 13, borderRadius: 6 }} disabled>
-              刷新参数并重新生成
+            <Button size="sm" variant="default" style={{ fontSize: 13, gap: 4 }} disabled>
+              <ReloadOutlined /> 刷新参数并重新生成
             </Button>
           </div>
         )}
@@ -252,16 +247,16 @@ export default function ChatPage() {
         title="保存为模板"
         open={tmplModalOpen}
         onOk={handleSaveAsTemplate}
-        onCancel={() => setTmplModalOpen(false)}
+        onClose={() => setTmplModalOpen(false)}
         okText="保存"
         cancelText="取消"
       >
         <Form form={tmplForm} layout="vertical">
           <Form.Item name="name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }]}>
-            <Input placeholder="例如:华东月度销售趋势" />
+            <TextField placeholder="例如:华东月度销售趋势" />
           </Form.Item>
           <Form.Item name="description" label="描述(可选)">
-            <Input.TextArea rows={2} placeholder="模板用途说明" />
+            <TextArea rows={2} placeholder="模板用途说明" style={{ width: '100%' }} />
           </Form.Item>
         </Form>
       </Modal>
@@ -279,7 +274,7 @@ function SidebarSection({ title, icon, children }: SidebarSectionProps) {
   return (
     <div style={{ padding: 12 }}>
       <Text style={{
-        fontSize: 13, fontWeight: 600, color: '#6B7280',
+        fontSize: 13, fontWeight: 600, color: 'var(--muted)',
         display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
       }}>
         {icon}{title}
@@ -304,28 +299,28 @@ function SidebarItem({ icon, label, meta, active, onClick, disabled = false }: S
       onClick={() => { if (!disabled) onClick() }}
       style={{
         padding: '8px 12px', borderRadius: 6, cursor: disabled ? 'not-allowed' : 'pointer', marginBottom: 4,
-        background: active ? '#EFF6FF' : 'transparent',
+        background: active ? 'var(--canvas)' : 'transparent',
         border: '1px solid transparent',
         display: 'flex', alignItems: 'center', gap: 8,
         transition: 'color 0.15s, background 0.15s',
-        fontSize: 14, color: active ? '#0F172A' : '#6B7280',
+        fontSize: 14, color: active ? 'var(--ink)' : 'var(--muted)',
         fontWeight: active ? 600 : 400,
         opacity: disabled ? 0.55 : 1,
       }}
       onMouseEnter={(e) => {
         if (disabled) return
-        e.currentTarget.style.color = '#0F172A'
-        if (!active) e.currentTarget.style.background = '#FFFFFF'
+        e.currentTarget.style.color = 'var(--ink)'
+        if (!active) e.currentTarget.style.background = 'var(--paper)'
       }}
       onMouseLeave={(e) => {
         if (disabled) return
-        e.currentTarget.style.color = active ? '#0F172A' : '#6B7280'
+        e.currentTarget.style.color = active ? 'var(--ink)' : 'var(--muted)'
         if (!active) e.currentTarget.style.background = 'transparent'
       }}
     >
       <span style={{ display: 'flex', flexShrink: 0 }}>{icon}</span>
       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-      {meta && <span style={{ fontSize: 13, color: '#9CA3AF', flexShrink: 0 }}>{meta}</span>}
+      {meta && <span style={{ fontSize: 13, color: 'var(--muted)', flexShrink: 0 }}>{meta}</span>}
     </div>
   )
 }

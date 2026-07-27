@@ -1,32 +1,18 @@
-/**
- * Workbench page — three-column layout (TopBar + LeftRail + Center + RightRail).
- *
- * Flow:
- *   1. composer → /chat mode=new → SSE → requirement card
- *   2. card form (select/checkbox + assumption accept/reject)
- *   3. "确认执行" → PATCH /requirement → if complete, POST /confirm → SSE → report
- *   4. report v1 in center
- *
- * Strict hook usage: ALL `App.useApp()` calls happen inside the component
- * body; helpers that need `message` take it as a parameter.
- */
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  App,
-  Avatar,
-  Button,
-  Dropdown,
-  Empty,
-  Input,
-  Layout,
-  Spin,
-  Tag,
-  Typography,
-} from 'antd'
-import { DownOutlined, LogoutOutlined, PlusOutlined, UserOutlined } from '@ant-design/icons'
+import { Text, Title, Paragraph } from '../components/atelier/Typography'
+import { LogoutOutlined, PlusOutlined } from '@ant-design/icons'
+import Button from '../components/atelier/Button'
+import Tag from '../components/atelier/Tag'
+import TextArea from '../components/atelier/TextArea'
+import Spinner from '../components/atelier/Spinner'
+import Empty from '../components/atelier/Empty'
+import Avatar from '../components/atelier/Avatar'
+import TopBar from '../components/atelier/TopBar'
+import Dropdown from '../components/atelier/Dropdown'
+import { useToast } from '../components/atelier/useToast'
 import { useAnalysisStore } from '../stores/analysisStore'
-import { isBusyPhase } from '../stores/analysisReducer'
+import { canRetryFailedAction, isBusyPhase } from '../stores/analysisReducer'
 import { useAuthStore } from '../stores/authStore'
 import {
   fetchSessions,
@@ -45,6 +31,7 @@ const DONE_TIMEOUT_MS = 60_000
 export default function WorkbenchPage() {
   const navigate = useNavigate()
   const phase = useAnalysisStore((s) => s.phase)
+  const error = useAnalysisStore((s) => s.error)
   const dispatch = useAnalysisStore((s) => s.dispatch)
   const activeSessionId = useAnalysisStore((s) => s.activeSessionId)
   const sessions = useAnalysisStore((s) => s.sessions)
@@ -52,7 +39,7 @@ export default function WorkbenchPage() {
   const reportVersions = useAnalysisStore((s) => s.reportVersions)
   const selectedReportVersion = useAnalysisStore((s) => s.selectedReportVersion)
   const auth = useAuthStore()
-  const { message } = App.useApp()
+  const toast = useToast()
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [composer, setComposer] = useState('')
   const [sending, setSending] = useState(false)
@@ -60,15 +47,12 @@ export default function WorkbenchPage() {
   const [confirming, setConfirming] = useState(false)
   const busy = isBusyPhase(phase)
 
-  // Load sessions on mount
   useEffect(() => {
     let cancelled = false
     setSessionsLoading(true)
     fetchSessions()
       .then((res) => {
         if (!cancelled) {
-          // Map API → store. The store's SessionSummary is strict on
-          // `phase` / `status` literals; we coerce here.
           const mapped = res.sessions.map((s) => ({
             session_id: s.session_id,
             title: s.title ?? '',
@@ -89,7 +73,7 @@ export default function WorkbenchPage() {
         }
       })
       .catch((err) => {
-        if (!cancelled) message.error(`会话列表加载失败：${String(err).slice(0, 100)}`)
+        if (!cancelled) toast.error(`会话列表加载失败：${String(err).slice(0, 100)}`)
       })
       .finally(() => {
         if (!cancelled) setSessionsLoading(false)
@@ -97,11 +81,11 @@ export default function WorkbenchPage() {
     return () => {
       cancelled = true
     }
-  }, [dispatch, message])
+  }, [dispatch, toast])
 
   function handleLogout() {
     auth.logout()
-    message.success('已退出登录')
+    toast.success('已退出登录')
     navigate('/login', { replace: true })
   }
 
@@ -110,21 +94,23 @@ export default function WorkbenchPage() {
     setComposer('')
   }
 
-  function handleSend(msgApi: MsgApi) {
+  function handleSend() {
     const text = composer.trim()
     if (!text || sending) return
     setSending(true)
     setComposer('')
+    const sid = activeSessionId ?? crypto.randomUUID()
+    if (!activeSessionId) {
+      dispatch({ type: 'session/selected', sessionId: sid })
+    }
     openChat(
-      { user_query: text, mode: 'new', session_id: activeSessionId ?? undefined },
-      (evt) => handleSSEEvent(evt, msgApi, setSending),
+      { user_query: text, mode: 'new', session_id: sid },
+      (evt) => handleSSEEvent(evt, toast, setSending),
     )
-    // Safety net: if no `done` event within DONE_TIMEOUT_MS, surface an
-    // error and reset the spinner. The happy path resets on `done`.
     setTimeout(() => {
       setSending((cur) => {
         if (cur) {
-          msgApi.error('请求超时，请稍后重试')
+          toast.error('请求超时，请稍后重试')
           return false
         }
         return cur
@@ -134,12 +120,12 @@ export default function WorkbenchPage() {
 
   function handleSelectSession(sessionId: string) {
     dispatch({ type: 'session/selected', sessionId })
-    void loadSessionSnapshot(sessionId, { error: message.error })
+    void loadSessionSnapshot(sessionId, toast)
   }
 
   async function handlePatchAndConfirm(card: RC) {
     if (!activeSessionId) {
-      message.error('会话丢失，请重新开始')
+      toast.error('会话丢失，请重新开始')
       return
     }
     setPatching(true)
@@ -152,71 +138,50 @@ export default function WorkbenchPage() {
         await postConfirmStream(
           activeSessionId,
           {
-            message: {
-              error: (m) => message.error(m),
-              success: (m) => message.success(m),
-              warning: (m) => message.warning(m),
-            },
+            toast,
             dispatch,
             setConfirming,
             onReport: () => refreshVersionsAndSelectLatest(activeSessionId, dispatch),
           },
         )
       } else {
-        message.info('PATCH 已保存，但仍有缺失字段未填')
+        toast.info('PATCH 已保存，但仍有缺失字段未填')
       }
     } catch (err) {
-      message.error(`PATCH 失败：${String(err).slice(0, 200)}`)
+      toast.error(`PATCH 失败：${String(err).slice(0, 200)}`)
     } finally {
       setPatching(false)
     }
   }
 
+  async function handleRetry() {
+    if (!activeSessionId) {
+      toast.error('会话丢失，请重新开始')
+      return
+    }
+    setConfirming(true)
+    await postConfirmStream(
+      activeSessionId,
+      {
+        toast,
+        dispatch,
+        setConfirming,
+        onReport: () => refreshVersionsAndSelectLatest(activeSessionId, dispatch),
+      },
+      'retry',
+    )
+  }
+
   return (
     <div className="workbench-shell">
-      {/* TopBar */}
-      <Layout.Header
-        style={{
-          background: 'var(--ink)',
-          color: '#FFFFFF',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 22px',
-          fontFamily: 'var(--font-display)',
-          letterSpacing: 0.3,
-        }}
-      >
-        <Typography.Title
-          level={4}
-          style={{
-            color: '#FFFFFF',
-            margin: 0,
-            fontFamily: 'var(--font-display)',
-            fontSize: 17,
-            fontWeight: 700,
-          }}
-        >
-          ReportAgent
-        </Typography.Title>
-        <span
-          style={{
-            marginLeft: 14,
-            color: 'rgba(255,255,255,.65)',
-            fontFamily: 'var(--font-ui)',
-            fontSize: 11,
-            letterSpacing: 1.2,
-            textTransform: 'uppercase',
-          }}
-        >
-          工作台
-        </span>
+      <TopBar brand="ReportAgent" subtitle="工作台">
         <div style={{ flex: 1 }} />
         <span
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
-            color: 'rgba(255,255,255,.85)',
+            color: 'var(--on-ink-2)',
             fontSize: 12,
             fontFamily: 'var(--font-ui)',
           }}
@@ -233,22 +198,20 @@ export default function WorkbenchPage() {
           {busy ? '处理中' : '已连接'}
         </span>
         <Dropdown
-          menu={{
-            items: [
-              {
-                key: 'logout',
-                icon: <LogoutOutlined />,
-                label: '退出登录',
-                onClick: handleLogout,
-              },
-            ],
-          }}
-          placement="bottomRight"
+          items={[
+            {
+              key: 'logout',
+              icon: <LogoutOutlined />,
+              label: '退出登录',
+              onClick: handleLogout,
+            },
+          ]}
+          placement="bottom-end"
         >
           <span
             style={{
               marginLeft: 18,
-              color: '#FFFFFF',
+              color: 'var(--on-ink)',
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
@@ -257,15 +220,14 @@ export default function WorkbenchPage() {
               fontSize: 12,
             }}
           >
-            <Avatar size={24} icon={<UserOutlined />} style={{ background: 'var(--teal)' }} />
+            <Avatar size="sm">{auth.username?.[0]?.toUpperCase() ?? 'U'}</Avatar>
             {auth.username ?? 'user'}
-            <DownOutlined style={{ fontSize: 10 }} />
+            <span style={{ fontSize: 10 }}>▾</span>
           </span>
         </Dropdown>
-      </Layout.Header>
+      </TopBar>
 
       <div className="workbench-body">
-        {/* LeftRail */}
         <aside
           className="workbench-rail workbench-rail--left"
           style={{
@@ -279,16 +241,15 @@ export default function WorkbenchPage() {
           }}
         >
           <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleNewAnalysis}
+            variant="primary"
             block
+            onClick={handleNewAnalysis}
             style={{ fontWeight: 600, height: 36 }}
           >
-            新建分析
+            <PlusOutlined /> 新建分析
           </Button>
 
-          <Typography.Text
+          <Text
             style={{
               fontSize: 10,
               letterSpacing: 1.4,
@@ -299,16 +260,16 @@ export default function WorkbenchPage() {
             }}
           >
             最近会话
-          </Typography.Text>
+          </Text>
 
           {sessionsLoading ? (
             <div style={{ textAlign: 'center', padding: 8 }}>
-              <Spin size="small" />
+              <Spinner size="sm" />
             </div>
           ) : sessions.length === 0 ? (
-            <Typography.Text style={{ color: 'var(--faint)', fontSize: 12 }}>
+            <Text style={{ color: 'var(--faint)', fontSize: 12 }}>
               暂无会话
-            </Typography.Text>
+            </Text>
           ) : (
             <SessionListBuckets
               sessions={sessions}
@@ -319,7 +280,7 @@ export default function WorkbenchPage() {
 
           <div style={{ flex: 1 }} />
           <Button
-            type="link"
+            variant="quiet"
             onClick={() => navigate('/templates')}
             style={{ color: 'var(--ink-2)', padding: 0, justifyContent: 'flex-start' }}
           >
@@ -327,7 +288,6 @@ export default function WorkbenchPage() {
           </Button>
         </aside>
 
-        {/* Center */}
         <main
           className="workbench-canvas"
           style={{
@@ -338,7 +298,7 @@ export default function WorkbenchPage() {
             gap: 18,
           }}
         >
-          <Typography.Title
+          <Title
             level={3}
             style={{
               fontFamily: 'var(--font-display)',
@@ -347,9 +307,8 @@ export default function WorkbenchPage() {
             }}
           >
             新分析
-          </Typography.Title>
+          </Title>
 
-          {/* Composer */}
           <div
             style={{
               background: 'var(--paper)',
@@ -359,26 +318,21 @@ export default function WorkbenchPage() {
               boxShadow: 'var(--shadow-soft)',
             }}
           >
-            <Input.TextArea
+            <TextArea
               placeholder="用一句话描述你想分析的问题，例如：今年华东销售趋势"
               value={composer}
               onChange={(e) => setComposer(e.target.value)}
-              autoSize={{ minRows: 2, maxRows: 6 }}
               disabled={sending}
               style={{ marginBottom: 12 }}
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Typography.Text style={{ color: 'var(--muted)', fontSize: 11 }}>
-                当前 phase: <Tag color={phase === 'error' ? 'red' : phase === 'idle' ? 'default' : 'teal'}>{phase}</Tag>
-              </Typography.Text>
+              <Text style={{ color: 'var(--muted)', fontSize: 11 }}>
+                当前 phase: <Tag tone={phase === 'error' ? 'red' : phase === 'idle' ? 'default' : 'teal'}>{phase}</Tag>
+              </Text>
               <Button
-                type="primary"
+                variant="primary"
                 loading={sending}
-                onClick={() => handleSend({
-                  error: (m) => message.error(m),
-                  success: (m) => message.success(m),
-                  warning: (m) => message.warning(m),
-                })}
+                onClick={handleSend}
                 disabled={!composer.trim()}
               >
                 提交分析
@@ -386,7 +340,33 @@ export default function WorkbenchPage() {
             </div>
           </div>
 
-          {/* Requirement card */}
+          {canRetryFailedAction({ phase, error }) && (
+            <div
+              style={{
+                background: 'var(--red-soft)',
+                border: '1px solid var(--red)',
+                borderRadius: 'var(--r-m)',
+                padding: 'var(--sp-l)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 12,
+              }}
+            >
+              <div>
+                <Text strong type="danger">
+                  {error?.message ?? '执行失败'}
+                </Text>
+                <Text style={{ display: 'block', color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>
+                  需求卡已锁定为 complete，可直接重试确认执行（服务端会自动恢复陈旧锁）。
+                </Text>
+              </div>
+              <Button variant="primary" loading={confirming} onClick={handleRetry}>
+                重试
+              </Button>
+            </div>
+          )}
+
           {requirement && (
             <RequirementCardView
               card={requirement}
@@ -398,7 +378,6 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {/* Report versions list */}
           {reportVersions.length > 0 && (
             <div
               style={{
@@ -408,7 +387,7 @@ export default function WorkbenchPage() {
                 padding: 'var(--sp-l)',
               }}
             >
-              <Typography.Text
+              <Text
                 style={{
                   fontSize: 10,
                   letterSpacing: 1.4,
@@ -420,7 +399,7 @@ export default function WorkbenchPage() {
                 }}
               >
                 报告版本
-              </Typography.Text>
+              </Text>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {reportVersions.map((r) => (
                   <div
@@ -445,7 +424,6 @@ export default function WorkbenchPage() {
             </div>
           )}
 
-          {/* Selected report */}
           {activeSessionId && selectedReportVersion != null && (
             <ReportPaper
               key={`${activeSessionId}-${selectedReportVersion}`}
@@ -454,9 +432,6 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {/* Empty state — distinguish "no session selected" from
-              "selected session is empty (e.g. user typed but never
-              confirmed an analysis)" */}
           {!requirement && reportVersions.length === 0 && phase === 'idle' && (
             <div
               style={{
@@ -468,30 +443,23 @@ export default function WorkbenchPage() {
             >
               {activeSessionId && sessions.find((s) => s.session_id === activeSessionId)?.first_message ? (
                 <>
-                  <Typography.Text style={{ color: 'var(--muted)', fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: 700, display: 'block', marginBottom: 8 }}>
+                  <Text style={{ color: 'var(--muted)', fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: 700, display: 'block', marginBottom: 8 }}>
                     该会话暂无分析记录
-                  </Typography.Text>
-                  <Typography.Paragraph style={{ color: 'var(--ink-2)', fontSize: 13, marginBottom: 12 }}>
+                  </Text>
+                  <Paragraph style={{ color: 'var(--ink-2)', fontSize: 13, marginBottom: 12 }}>
                     {sessions.find((s) => s.session_id === activeSessionId)?.first_message}
-                  </Typography.Paragraph>
-                  <Button type="primary" onClick={handleNewAnalysis}>
+                  </Paragraph>
+                  <Button variant="primary" onClick={handleNewAnalysis}>
                     在此会话上开始分析
                   </Button>
                 </>
               ) : (
-                <Empty
-                  description={
-                    <Typography.Text style={{ color: 'var(--muted)' }}>
-                      在上方输入框提出问题，agent 会自动生成需求卡
-                    </Typography.Text>
-                  }
-                />
+                <Empty description="在上方输入框提出问题，agent 会自动生成需求卡" />
               )}
             </div>
           )}
         </main>
 
-        {/* RightRail: hint */}
         <aside
           className="workbench-rail workbench-rail--right"
           style={{
@@ -501,7 +469,7 @@ export default function WorkbenchPage() {
             overflow: 'auto',
           }}
         >
-          <Typography.Text
+          <Text
             style={{
               fontSize: 10,
               letterSpacing: 1.4,
@@ -511,15 +479,15 @@ export default function WorkbenchPage() {
             }}
           >
             分析助手
-          </Typography.Text>
-          <Typography.Paragraph
+          </Text>
+          <Paragraph
             style={{ color: 'var(--ink-2)', fontSize: 12, marginTop: 12 }}
           >
             1. 提出问题 → 生成需求卡<br />
             2. 填写每个字段 + 接受/拒绝假设<br />
             3. 点击「确认执行」→ 报告版本出现在中央<br />
             4. 点版本号切换查看历史报告
-          </Typography.Paragraph>
+          </Paragraph>
           <div style={{ marginTop: 16, fontSize: 11, color: 'var(--faint)' }}>
             会话已锁定到左栏选中的那条；切换会话会拉取 PG 快照。
           </div>
@@ -529,15 +497,6 @@ export default function WorkbenchPage() {
   )
 }
 
-/**
- * `SessionListBuckets` groups the left-rail session list by recency:
- *   - 今天 (today)
- *   - 过去 7 天
- *   - 更早 (collapsed by default)
- *
- * The prototype's left rail does the same grouping (today / 7d / 30d);
- * we keep three buckets to keep the 268px column uncluttered.
- */
 function SessionListBuckets({
   sessions,
   activeSessionId,
@@ -648,17 +607,14 @@ function SessionListBuckets({
   )
 }
 
-// --- helpers (no React hooks; message + dispatch are passed in) -----
-
-type MsgApi = { error: (m: string) => void; success: (m: string) => void; warning: (m: string) => void }
+type ToastApi = { error: (m: string) => void; success: (m: string) => void; warning: (m: string) => void; info: (m: string) => void }
 type Dispatcher = (a: any) => void
 
 function handleSSEEvent(
   evt: { type: string; data: any },
-  msgApi: MsgApi,
+  msgApi: ToastApi,
   setSending: (v: boolean | ((cur: boolean) => boolean)) => void,
 ) {
-  // Read the current dispatch via getState (no subscription needed here).
   const dispatch = useAnalysisStore.getState().dispatch
   if (evt.type === 'phase') {
     dispatch({ type: 'phase/received', phase: evt.data.phase as AnalysisPhase })
@@ -679,7 +635,7 @@ function handleSSEEvent(
 
 async function loadSessionSnapshot(
   sessionId: string,
-  msgApi: { error: (m: string) => void },
+  msgApi: ToastApi,
 ) {
   try {
     const { fetchSession } = await import('../api/sessionsClient')
@@ -759,31 +715,31 @@ async function refreshVersionsAndSelectLatest(
 
 async function postConfirmStream(
   sessionId: string,
-  ctx: { message: MsgApi; dispatch: Dispatcher; setConfirming: (v: boolean) => void; onReport: () => void | Promise<void> },
+  ctx: { toast: ToastApi; dispatch: Dispatcher; setConfirming: (v: boolean) => void; onReport: () => void | Promise<void> },
+  action: 'confirm' | 'retry' = 'confirm',
 ) {
-  // Read JWT
   const raw = localStorage.getItem('ragent_auth')
   const token = raw ? (JSON.parse(raw)?.state?.token ?? null) : null
   if (!token) {
-    ctx.message.error('未登录')
+    ctx.toast.error('未登录')
     return
   }
   const dispatch = useAnalysisStore.getState().dispatch
   let res: Response
   try {
-    res = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/confirm`, {
+    res = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/${action}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     })
   } catch (err) {
-    ctx.message.error(`confirm 请求失败：${String(err).slice(0, 100)}`)
+    ctx.toast.error(`${action} 请求失败：${String(err).slice(0, 100)}`)
     return
   }
   if (!res.ok || !res.body) {
-    ctx.message.error(`confirm 失败: ${res.status}`)
+    ctx.toast.error(`${action} 失败: ${res.status}`)
     dispatch({
       type: 'analysis/failed',
-      error: { code: 'HTTP_ERROR', message: `status ${res.status}`, recoverable: false, failed_action: 'confirm' },
+      error: { code: 'HTTP_ERROR', message: `status ${res.status}`, recoverable: false, failed_action: action },
     })
     return
   }
@@ -796,21 +752,20 @@ async function postConfirmStream(
     if (done) break
     buffer += decoder.decode(value, { stream: true })
     let sepIndex
-    while ((sepIndex = buffer.indexOf('\n\n')) >= 0) {
+    while ((sepIndex = buffer.search(/\r\n\r\n|\n\n/)) >= 0) {
+      const match = buffer.match(/\r\n\r\n|\n\n/)!
       const frame = buffer.slice(0, sepIndex)
-      buffer = buffer.slice(sepIndex + 2)
+      buffer = buffer.slice(sepIndex + match[0].length)
       const evt = parseSSEFrame(frame)
       if (!evt) continue
       if (evt.eventName === 'phase') {
         dispatch({ type: 'phase/received', phase: evt.data.phase as AnalysisPhase })
       } else if (evt.eventName === 'report') {
         sawReport = true
-        // The SSE report payload may be partial; fetch the persisted
-        // version list to populate the store with the canonical row.
         await ctx.onReport()
         dispatch({ type: 'phase/received', phase: 'report_ready' })
       } else if (evt.eventName === 'error') {
-        ctx.message.error(evt.data?.message ?? '执行失败')
+        ctx.toast.error(evt.data?.message ?? '执行失败')
         dispatch({ type: 'analysis/failed', error: evt.data })
       } else if (evt.eventName === 'done' && evt.data?.final_phase) {
         dispatch({ type: 'phase/received', phase: evt.data.final_phase as AnalysisPhase })
@@ -818,7 +773,7 @@ async function postConfirmStream(
     }
   }
   if (!sawReport) {
-    ctx.message.warning('确认完成，但未收到报告事件')
+    ctx.toast.warning('确认完成，但未收到报告事件')
   }
 }
 

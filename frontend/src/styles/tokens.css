@@ -38,8 +38,10 @@
   --sp-s: 8px;
   --sp-m: 12px;
   --sp-l: 16px;
+  --sp-20: 20px;
   --sp-xl: 24px;
   --sp-2xl: 32px;
+  --sp-40: 40px;
 
   /* Radii */
   --r-xs: 4px;
@@ -51,6 +53,23 @@
   --shadow-card: 0 18px 55px rgba(22, 42, 59, 0.09);
   --shadow-soft: 0 8px 26px rgba(22, 42, 59, 0.07);
   --shadow-topbar: 0 8px 30px rgba(16, 36, 62, 0.18);
+  --shadow-focus: 0 0 0 3px rgba(8, 127, 115, 0.18);
+
+  /* Layout */
+  --topbar-h: 58px;
+  --left-rail-w: 248px;
+  --right-rail-w: 300px;
+  --content-max: 1180px;
+
+  /* Motion */
+  --t-fast: 120ms ease;
+  --t-base: 200ms ease;
+  --t-slow: 320ms ease;
+
+  /* On-ink text (white text on dark backgrounds) */
+  --on-ink: #fff;
+  --on-ink-2: rgba(255, 255, 255, 0.85);
+  --on-ink-3: rgba(255, 255, 255, 0.65);
 
   /* Typography */
   --font-display: "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;

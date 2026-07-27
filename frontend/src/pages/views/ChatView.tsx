@@ -1,9 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { Typography, Input, Button, Spin } from 'antd'
-import type { InputRef } from 'antd'
-import { SendOutlined, UserOutlined, CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons'
+import { SendOutlined, UserOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { v4 as uuid } from 'uuid'
 
+import { Text } from '../../components/atelier/Typography'
+import Button from '../../components/atelier/Button'
+import TextArea from '../../components/atelier/TextArea'
+import Spinner from '../../components/atelier/Spinner'
 import { useSessionStore } from '../../stores/session'
 import { adaptReport } from '../../adapter/reportAdapter'
 import EmptyState from '../../components/chat/EmptyState'
@@ -11,9 +13,6 @@ import ChatCards from '../../components/chat/ChatCards'
 import { IconChevronRight, IconLogo, IconReport, IconStop } from '../../components/ui/Icons'
 import type { ConversationMessage, ReportEntry, ChatCard } from '../../types/report'
 import { isChatCard } from '../../types/report'
-
-const { Text } = Typography
-const { TextArea } = Input
 
 const styles: Record<string, React.CSSProperties> = {
   messageBubble: {
@@ -35,7 +34,7 @@ export default function ChatView() {
   const [inputText, setInputText] = useState('')
   const [now, setNow] = useState(Date.now())
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<InputRef>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   // Heartbeat for the busy-timeout / "is it stuck?" banner.
   useEffect(() => {
@@ -255,45 +254,43 @@ export default function ChatView() {
               }}>
                 {msg.busy ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Spin indicator={<LoadingOutlined style={{ fontSize: 14, color: '#1677FF' }} />} size="small" />
-                    <Text style={{ color: '#6B7280', fontSize: 12 }}>{msg.content}</Text>
+                    <Spinner size="sm" />
+                    <Text style={{ color: 'var(--muted)', fontSize: 12 }}>{msg.content}</Text>
                   </div>
                 ) : msg.reportData ? (
                   <div>
-                    <Text style={{ fontSize: 14, color: '#0F172A' }}>{msg.content}</Text>
+                    <Text style={{ fontSize: 14 }}>{msg.content}</Text>
                     <div style={{ marginTop: 12 }}>
                       <Button
-                        type="default"
-                        size="small"
+                        variant="default"
+                        size="sm"
                         onClick={() => viewReport(msg.reportData!, msg.content)}
-                        icon={<IconReport />}
-                        style={{ fontSize: 13, padding: '4px 12px', borderRadius: 6, boxShadow: 'none' }}
+                        style={{ fontSize: 13 }}
                       >
-                        查看完整报告 <IconChevronRight />
+                        <IconReport /> 查看完整报告 <IconChevronRight />
                       </Button>
                     </div>
                   </div>
                 ) : msg.msgType === 'error' ? (
-                  <Text style={{ color: '#EF4444', fontSize: 12 }}>{msg.content}</Text>
+                  <Text type="danger" style={{ fontSize: 12 }}>{msg.content}</Text>
                 ) : msg.msgType === 'clarify' ? (
-                  <Text style={{ fontSize: 14, color: '#1677FF' }}>{msg.content}</Text>
+                  <Text style={{ fontSize: 14, color: 'var(--teal)' }}>{msg.content}</Text>
                 ) : !msg.content && !msg.cards?.length ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <CheckCircleOutlined style={{ color: '#10B981', fontSize: 14 }} />
-                    <Text style={{ fontSize: 12, color: '#10B981' }}>报告生成完成</Text>
+                    <CheckCircleOutlined style={{ color: 'var(--green)', fontSize: 14 }} />
+                    <Text style={{ fontSize: 12, color: 'var(--green)' }}>报告生成完成</Text>
                     <Button
-                      type="primary"
-                      size="small"
-                      ghost
+                      variant="primary"
+                      size="sm"
                       onClick={() => setViewMode('report')}
-                      style={{ fontSize: 13, padding: '4px 12px', borderRadius: 6, marginLeft: 4, boxShadow: 'none' }}
+                      style={{ fontSize: 13, marginLeft: 4 }}
                     >
                       查看完整报告 <IconChevronRight />
                     </Button>
                   </div>
                 ) : (
                   <div>
-                    {msg.content ? <Text style={{ fontSize: 14, whiteSpace: 'pre-wrap', color: '#0F172A' }}>{msg.content}</Text> : null}
+                    {msg.content ? <Text style={{ fontSize: 14, whiteSpace: 'pre-wrap' }}>{msg.content}</Text> : null}
                     {msg.cards?.map((card) => (
                       <ChatCards
                         key={`${card.id}-${card.version}`}
@@ -321,12 +318,12 @@ export default function ChatView() {
             display: 'flex', alignItems: 'center', gap: 10, maxWidth: '70%',
           }}>
             <span>⏳ 这次想得有点久(已等 {(displayMessages.find((m) => m.showStuck)?.stuckSeconds ?? 0)}s)。要不要继续?</span>
-            <Button size="small" type="default" onClick={() => { useSessionStore.getState().cancel() }}
-              style={{ fontSize: 12, padding: '2px 10px', borderRadius: 4 }}>
+            <Button variant="default" size="sm" onClick={() => { useSessionStore.getState().cancel() }}
+              style={{ fontSize: 12 }}>
               重试
             </Button>
-            <Button size="small" type="primary" danger onClick={() => { useSessionStore.getState().cancel(); setInputText(currentReport?.query ?? '') }}
-              style={{ fontSize: 12, padding: '2px 10px', borderRadius: 4 }}>
+            <Button variant="danger" size="sm" onClick={() => { useSessionStore.getState().cancel(); setInputText(currentReport?.query ?? '') }}
+              style={{ fontSize: 12 }}>
               取消
             </Button>
           </div>
@@ -350,17 +347,17 @@ export default function ChatView() {
             </div>
             <span style={{ fontSize: 13 }}>{error}</span>
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button size="small" type="primary" onClick={() => {
+              <Button variant="primary" size="sm" onClick={() => {
                 if (currentReport?.query) sendMessage(currentReport.query)
               }}
-                style={{ fontSize: 12, padding: '2px 10px', borderRadius: 4 }}>
+                style={{ fontSize: 12 }}>
                 重试同样条件
               </Button>
-              <Button size="small" onClick={() => {
+              <Button variant="default" size="sm" onClick={() => {
                 setInputText(currentReport?.query ?? '')
                 window.setTimeout(() => inputRef.current?.focus(), 0)
               }}
-                style={{ fontSize: 12, padding: '2px 10px', borderRadius: 4 }}>
+                style={{ fontSize: 12 }}>
                 修改问题
               </Button>
             </div>
@@ -374,7 +371,7 @@ export default function ChatView() {
 }
 
 interface InputAreaProps {
-  inputRef: React.RefObject<InputRef | null>
+  inputRef: React.RefObject<HTMLTextAreaElement | null>
   value: string
   onChange: (value: string) => void
   onSend: () => void
@@ -388,20 +385,19 @@ function InputArea({ inputRef, value, onChange, onSend, onCancel, disabled }: In
   return (
     <div style={{
       padding: '12px 24px',
-      borderTop: '1px solid #E5E7EB',
-      background: '#FFFFFF',
+      borderTop: '1px solid var(--line)',
+      background: 'var(--paper)',
       flexShrink: 0,
     }}>
       <div style={{
         display: 'flex',
         gap: 8,
         alignItems: 'flex-end',
-        background: '#FFFFFF',
-        border: `1px solid ${focused ? '#1677FF' : '#E5E7EB'}`,
+        background: 'var(--paper)',
+        border: `1px solid ${focused ? 'var(--teal)' : 'var(--line)'}`,
         borderRadius: 8,
         padding: '8px 8px 8px 16px',
         transition: 'border-color 0.2s',
-        boxShadow: 'none',
       }}>
         <TextArea
           ref={inputRef}
@@ -416,14 +412,11 @@ function InputArea({ inputRef, value, onChange, onSend, onCancel, disabled }: In
             }
           }}
           placeholder="输入分析问题，例如：2024年各区域销售总额"
-          autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={disabled}
-          variant="borderless"
-          style={{ fontSize: 14, lineHeight: 1.5, resize: 'none', color: '#0F172A' }}
+          style={{ fontSize: 14, lineHeight: 1.5, resize: 'none', color: 'var(--ink)', flex: 1, border: 'none', outline: 'none', background: 'transparent' }}
         />
         <Button
-          type="primary"
-          icon={disabled ? <IconStop /> : <SendOutlined />}
+          variant="primary"
           onClick={disabled ? onCancel : onSend}
           disabled={!disabled && !value.trim()}
           style={{
@@ -431,20 +424,19 @@ function InputArea({ inputRef, value, onChange, onSend, onCancel, disabled }: In
             minWidth: 32,
             width: disabled ? 'auto' : 32,
             padding: disabled ? '0 12px' : 0,
-            borderRadius: 6,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
             fontWeight: 500,
-            boxShadow: 'none',
+            fontSize: 14,
           }}
         >
-          {disabled ? '停止' : ''}
+          {disabled ? <><IconStop /> 停止</> : <SendOutlined />}
         </Button>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, padding: '0 4px' }}>
-        <Text style={{ fontSize: 11, color: '#9CA3AF' }}>Shift+Enter 换行 · Enter 发送</Text>
+        <Text style={{ fontSize: 11, color: 'var(--muted)' }}>Shift+Enter 换行 · Enter 发送</Text>
       </div>
     </div>
   )

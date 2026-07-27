@@ -1,160 +1,143 @@
 import ReactECharts from 'echarts-for-react'
-import { Card, Tag } from 'antd'
+import Tag from '../../../components/atelier/Tag'
+import Card from '../../../components/atelier/Card'
 import type { ReportBlock } from '../../../types/report'
+import { prepareChart, uniqueCategories, type PreparedChart } from './chartPrepare'
 
 interface Props {
   block: ReportBlock
 }
 
-const CHART_COLORS = ['#1E40AF', '#3B82F6', '#D97706', '#059669', '#DC2626', '#7C3AED']
+const CHART_COLORS = ['var(--teal-deep)', 'var(--teal)', '#D97706', '#059669', '#DC2626', '#7C3AED']
+
+const TYPE_LABELS: Record<PreparedChart['chartType'], string> = {
+  bar: '柱状图',
+  line: '折线图',
+  pie: '饼图',
+}
 
 export default function ChartBlock({ block }: Props) {
-  const data = block.data as Record<string, unknown>
-  const chartType = String(data.type || 'bar')
-  const config = data.config as Record<string, unknown> | undefined
-  const chartData = (data.data as Record<string, unknown>[]) || (data.dataset as Record<string, unknown>[]) || []
-
-  let option: Record<string, unknown>
-
-  if (chartType === 'line') {
-    option = buildLineOption(config, chartData)
-  } else if (chartType === 'pie') {
-    option = buildPieOption(config, chartData)
-  } else {
-    option = buildBarOption(config, chartData)
-  }
-
-  const typeLabel = chartType === 'bar' ? '柱状图' : chartType === 'line' ? '折线图' : '饼图'
+  const prepared = prepareChart(block.data as Record<string, unknown>)
+  const option = buildOption(prepared)
 
   return (
     <Card
       title={block.title || '图表'}
-      extra={<Tag style={{ borderRadius: 4, fontSize: 11, padding: '0 8px', lineHeight: '22px' }}>{typeLabel}</Tag>}
+      extra={
+        <Tag tone="default" style={{ borderRadius: 4, fontSize: 11, padding: '0 8px', lineHeight: '22px' }}>
+          {TYPE_LABELS[prepared.chartType]}
+        </Tag>
+      }
       size="small"
-      styles={{ body: { padding: '8px 16px 16px' } }}
-      style={{
-        borderRadius: 10,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)',
-      }}
+      bodyStyle={{ padding: '8px 0 0', display: 'block' }}
+      style={{ borderRadius: 10 }}
     >
+      {/* width:100% is load-bearing: the Card body is a flex container,
+          and without it the chart div shrinks to 0px wide → ECharts
+          "Can't get DOM width or height". */}
       <ReactECharts
         option={option}
-        style={{ height: 280 }}
+        style={{ height: 280, width: '100%' }}
         opts={{ renderer: 'svg' }}
+        notMerge
       />
     </Card>
   )
 }
 
-function buildBarOption(config: Record<string, unknown> | undefined, data: Record<string, unknown>[]) {
-  const xField = String(config?.xField || config?.x || '')
-  const yField = String(config?.yField || config?.y || '')
-  const hasFields = xField && yField
+function buildOption(p: PreparedChart): Record<string, unknown> {
+  if (p.rows.length === 0 || !p.xField || !p.yField) {
+    return {
+      title: { text: '无图表数据', left: 'center', top: 'middle', textStyle: { color: 'var(--muted)', fontSize: 13, fontWeight: 400 } },
+    }
+  }
+  if (p.chartType === 'pie') return buildPieOption(p)
+  return buildCartesianOption(p)
+}
 
+const TOOLTIP_STYLE = {
+  backgroundColor: 'var(--paper)',
+  borderColor: 'var(--line)',
+  borderWidth: 1,
+  textStyle: { color: 'var(--ink)', fontSize: 12 },
+}
+
+function buildSeries(p: PreparedChart, type: 'bar' | 'line') {
+  const categories = uniqueCategories(p.rows, p.xField)
+  const value = (row: Record<string, unknown>) => Number(row[p.yField]) || 0
+
+  if (!p.seriesField) {
+    return [
+      {
+        name: p.yField,
+        type,
+        data: p.rows.map(value),
+        ...(type === 'bar'
+          ? { barMaxWidth: 40, itemStyle: { borderRadius: [4, 4, 0, 0] } }
+          : { smooth: true, lineStyle: { width: 2.5 }, symbol: 'circle', symbolSize: 6 }),
+      },
+    ]
+  }
+
+  const seriesNames = uniqueCategories(p.rows, p.seriesField)
+  return seriesNames.map((name) => ({
+    name,
+    type,
+    data: categories.map((cat) => {
+      const row = p.rows.find(
+        (r) => String(r[p.xField] ?? '') === cat && String(r[p.seriesField!] ?? '') === name,
+      )
+      return row ? value(row) : null
+    }),
+    ...(type === 'bar'
+      ? { barMaxWidth: 28, itemStyle: { borderRadius: [3, 3, 0, 0] } }
+      : { smooth: true, lineStyle: { width: 2.5 }, symbol: 'circle', symbolSize: 6 }),
+  }))
+}
+
+function buildCartesianOption(p: PreparedChart): Record<string, unknown> {
+  const type = p.chartType === 'line' ? 'line' : 'bar'
   return {
     color: CHART_COLORS,
-    tooltip: { trigger: 'axis' as const, backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderWidth: 1, textStyle: { color: '#1E293B', fontSize: 12 } },
-    grid: { left: 60, right: 20, bottom: 40, top: 20 },
+    tooltip: { trigger: 'axis', ...TOOLTIP_STYLE },
+    legend: p.seriesField ? { bottom: 0, textStyle: { color: 'var(--muted)', fontSize: 11 } } : undefined,
+    grid: { left: 60, right: 20, bottom: p.seriesField ? 42 : 40, top: 20 },
     xAxis: {
-      type: 'category' as const,
-      data: hasFields ? data.map((d) => d[xField]) : data.map((_, i) => `项${i + 1}`),
-      axisLabel: { rotate: 30, fontSize: 11, color: '#64748B' },
-      axisLine: { lineStyle: { color: '#E2E8F0' } },
+      type: 'category',
+      data: uniqueCategories(p.rows, p.xField),
+      axisLabel: { rotate: 30, fontSize: 11, color: 'var(--muted)' },
+      axisLine: { lineStyle: { color: 'var(--line)' } },
       axisTick: { alignWithLabel: true },
     },
     yAxis: {
-      type: 'value' as const,
-      splitLine: { lineStyle: { color: '#F1F5F9', type: 'dashed' as const } },
-      axisLabel: { fontSize: 11, color: '#64748B' },
+      type: 'value',
+      splitLine: { lineStyle: { color: 'var(--line)', type: 'dashed' } },
+      axisLabel: { fontSize: 11, color: 'var(--muted)' },
     },
-    series: [
-      {
-        type: 'bar' as const,
-        data: hasFields ? data.map((d) => Number(d[yField]) || 0) : data.map((d) => Number(Object.values(d)[0]) || 0),
-        itemStyle: {
-          color: '#1E40AF',
-          borderRadius: [4, 4, 0, 0],
-        },
-        barMaxWidth: 40,
-        emphasis: { itemStyle: { shadowBlur: 6, shadowOffsetX: 0, shadowColor: 'rgba(30,64,175,0.2)' } },
-      },
-    ],
+    series: buildSeries(p, type),
   }
 }
 
-function buildLineOption(config: Record<string, unknown> | undefined, data: Record<string, unknown>[]) {
-  const xField = String(config?.xField || config?.x || '')
-  const yField = String(config?.yField || config?.y || '')
-  const hasFields = xField && yField
-
-  return {
-    color: CHART_COLORS,
-    tooltip: { trigger: 'axis' as const, backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderWidth: 1, textStyle: { color: '#1E293B', fontSize: 12 } },
-    grid: { left: 60, right: 20, bottom: 40, top: 20 },
-    xAxis: {
-      type: 'category' as const,
-      data: hasFields ? data.map((d) => d[xField]) : data.map((_, i) => `项${i + 1}`),
-      axisLabel: { fontSize: 11, color: '#64748B' },
-      axisLine: { lineStyle: { color: '#E2E8F0' } },
-      splitLine: { show: false },
-    },
-    yAxis: {
-      type: 'value' as const,
-      splitLine: { lineStyle: { color: '#F1F5F9', type: 'dashed' as const } },
-      axisLabel: { fontSize: 11, color: '#64748B' },
-    },
-    series: [
-      {
-        type: 'line' as const,
-        data: hasFields ? data.map((d) => Number(d[yField]) || 0) : data.map((d) => Number(Object.values(d)[0]) || 0),
-        smooth: true,
-        lineStyle: { width: 2.5 },
-        itemStyle: { color: '#3B82F6' },
-        areaStyle: {
-          color: {
-            type: 'linear' as const,
-            x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(59,130,246,0.15)' },
-              { offset: 1, color: 'rgba(59,130,246,0.01)' },
-            ],
-          },
-        },
-        symbol: 'circle',
-        symbolSize: 6,
-        emphasis: { itemStyle: { shadowBlur: 6, shadowOffsetX: 0, shadowColor: 'rgba(59,130,246,0.3)' } },
-      },
-    ],
+function buildPieOption(p: PreparedChart): Record<string, unknown> {
+  // Aggregate duplicate names (e.g. one slice per 区域 summed over 季度).
+  const totals = new Map<string, number>()
+  for (const row of p.rows) {
+    const name = String(row[p.xField] ?? '')
+    totals.set(name, (totals.get(name) ?? 0) + (Number(row[p.yField]) || 0))
   }
-}
-
-function buildPieOption(config: Record<string, unknown> | undefined, data: Record<string, unknown>[]) {
-  const nameField = String(config?.nameField || config?.name || '')
-  const valueField = String(config?.valueField || config?.value || '')
-  const hasFields = nameField && valueField
-
-  const pieData = hasFields
-    ? data.map((d) => ({ name: String(d[nameField] || ''), value: Number(d[valueField]) || 0 }))
-    : data.map((d) => {
-        const vals = Object.values(d)
-        return { name: String(vals[0] || ''), value: Number(vals[1]) || 0 }
-      })
-
   return {
-    tooltip: { trigger: 'item' as const, formatter: '{b}: {c} ({d}%)', backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderWidth: 1, textStyle: { color: '#1E293B', fontSize: 12 } },
     color: CHART_COLORS,
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)', ...TOOLTIP_STYLE },
+    legend: { bottom: 0, textStyle: { color: 'var(--muted)', fontSize: 11 } },
     series: [
       {
-        type: 'pie' as const,
+        type: 'pie',
         radius: ['35%', '60%'],
-        center: ['50%', '50%'],
-        data: pieData,
-        label: { show: true, formatter: '{b}\n{d}%', fontSize: 11, color: '#475569' },
-        labelLine: { lineStyle: { color: '#E2E8F0' } },
-        emphasis: {
-          itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.1)' },
-          label: { fontWeight: 'bold' as const },
-        },
+        center: ['50%', '46%'],
+        data: [...totals.entries()].map(([name, total]) => ({ name, value: total })),
+        label: { show: true, formatter: '{b}\n{d}%', fontSize: 11, color: 'var(--ink-2)' },
+        labelLine: { lineStyle: { color: 'var(--line)' } },
+        emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.1)' } },
       },
     ],
   }

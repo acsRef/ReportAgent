@@ -73,7 +73,6 @@ async function main() {
 
     log('3. accept all assumptions + pick first option per radio group')
     // Click all ✓ check buttons
-    const checkBtns = page.locator('.session-row')  // noop
     const acceptBtns = page.locator('button:has(.anticon-check)')
     const acceptCount = await acceptBtns.count()
     log(`   accept buttons: ${acceptCount}`)
@@ -97,20 +96,28 @@ async function main() {
     const beforeConfirm = net.length
     await page.getByRole('button', { name: '确认执行' }).first().click()
 
-    // Wait for "报告版本" section or "v1" anywhere
+    // Wait for the report to materialize — success criterion is the page
+    // reaching `phase=report_ready` (which ReportPaper's mounted effect
+    // requires before it fetches /reports/{v}), or any svg/canvas, or a
+    // "v1" label. The backend takes ~40-50s to plan+execute+assemble,
+    // so be patient.
     log('   waiting for confirm to produce v1...')
     let reportSeen = false
-    for (let i = 0; i < 30; i++) {
+    let chartSvgCount = 0
+    for (let i = 0; i < 60; i++) {
       await page.waitForTimeout(3000)
       const versionCount = await page.locator('text=/v\\d+/').count()
       const sectionCount = await page.locator('text=报告版本').count()
-      if (versionCount > 0 || sectionCount > 0) {
+      chartSvgCount = await page.locator('.report-paper svg, .report-paper canvas, .report-paper .ant-table, .report-paper .ant-table-wrapper').count()
+      const phaseText = await page.locator('text=/phase:/i').first().textContent().catch(() => '')
+      if (versionCount > 0 || sectionCount > 0 || chartSvgCount > 0 || (phaseText && phaseText.includes('report_ready'))) {
         reportSeen = true
-        log(`   report detected after ${(i + 1) * 3}s`)
+        log(`   report detected after ${(i + 1) * 3}s (svg=${chartSvgCount}, phase=${phaseText?.trim()})`)
         break
       }
     }
-    if (!reportSeen) log('   (no report within 90s — confirm may have errored)')
+    if (!reportSeen) log('   (no report within 180s — confirm may have errored)')
+    else log(`   ✓ report rendered with ${chartSvgCount} chart/svg/table element(s)`)
     const newNet2 = net.slice(beforeConfirm)
     log(`   api calls during confirm: ${newNet2.length}`)
     for (const n of newNet2) {
@@ -119,8 +126,6 @@ async function main() {
     await shot(page, '04-after-confirm')
 
     log('5. inspect chart + snapshot data via API')
-    // Fetch the latest session's reports via API
-    const sessionSnap = net.find((n) => n.url.includes('/sessions/') && n.url.endsWith && !n.url.includes('/reports/'))
     // We need the actual session_id; use any "active" session from the
     // recent /api/v1/chat 200 response.
     const lastChat = [...net].reverse().find((n) => n.method === 'POST' && n.url.endsWith('/chat'))

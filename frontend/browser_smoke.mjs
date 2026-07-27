@@ -8,7 +8,7 @@
 // Usage:
 //   node browser_smoke.mjs
 import { chromium } from 'playwright'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 const EDGE_PATH = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
@@ -97,9 +97,7 @@ async function main() {
     log('5. fill requirement fields')
     // Click each Radio.Button group option we can find; easiest is to
     // pick the first option per group then accept assumptions.
-    // Accept all assumption rows (look for green-check button)
-    const checkBtns = await page.locator('button[aria-label]').all()
-    // Fallback: click any ✓ icon button in the requirement card
+    // Accept all assumption rows: click any ✓ icon button in the requirement card
     const acceptBtns = page.locator('.anticon-check')
     const acceptCount = await acceptBtns.count()
     log(`   accept-assumption buttons found: ${acceptCount}`)

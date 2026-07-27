@@ -1,38 +1,29 @@
-/**
- * Template Library — PG-backed CRUD via /api/v1/templates.
- *
- * Layout (per docs/ui-style-guide.md):
- *  - Left: filters (search)
- *  - Center: template cards (click → preview)
- *  - Right: preview + delete button
- */
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  App,
-  Button,
-  Empty,
   Form,
   Input,
-  Layout,
-  List,
-  Modal,
-  Popconfirm,
-  Spin,
-  Tag,
   Typography,
 } from 'antd'
-import { ArrowLeftOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
+import {
+  ArrowLeftOutlined,
+  DeleteOutlined,
+  PlusOutlined,
+} from '@ant-design/icons'
 import { useTemplateStore } from '../stores/templateStore'
 import { useAnalysisStore } from '../stores/analysisStore'
 import type { TemplateRow } from '../api/templatesClient'
 import type { RequirementCard as RC } from '../types/requirement'
+import { useToast } from '../components/atelier/useToast'
+import Button from '../components/atelier/Button'
+import Empty from '../components/atelier/Empty'
+import Modal from '../components/atelier/Modal'
+import Popconfirm from '../components/atelier/Popconfirm'
+import Spinner from '../components/atelier/Spinner'
+import Tag from '../components/atelier/Tag'
+import TextField from '../components/atelier/TextField'
 import '../styles/global.css'
 
-/** Build a minimal valid `RequirementCard` for cases where the user
- * opens the modal without first having analysed anything. The card is
- * in `status: "missing"` so the server will accept it (Pydantic
- * validator: missing ↔ missing_fields non-empty). */
 function buildMinimalRequirement(): RC {
   return {
     id: `tpl-minimal-${Date.now()}`,
@@ -60,7 +51,7 @@ function buildMinimalRequirement(): RC {
 
 export default function TemplateLibraryPage() {
   const navigate = useNavigate()
-  const { message } = App.useApp()
+  const toast = useToast()
   const templates = useTemplateStore((s) => s.templates)
   const loading = useTemplateStore((s) => s.loading)
   const error = useTemplateStore((s) => s.error)
@@ -88,19 +79,15 @@ export default function TemplateLibraryPage() {
   async function handleCreateTemplate() {
     try {
       const values = await createForm.validateFields()
-      // Build the requirement_payload: prefer the current workbench
-      // requirement; otherwise fall back to a minimal valid card so the
-      // server-side Pydantic validator accepts it.
       const payload: RC = analysisRequirement ?? buildMinimalRequirement()
       setCreating(true)
       await create(values.name, values.description ?? '', payload)
-      message.success(`已创建模板「${values.name}」`)
+      toast.success(`已创建模板「${values.name}」`)
       setCreateOpen(false)
       createForm.resetFields()
     } catch (err) {
-      // AntD Form validation throws a special object; ignore those.
       if (err && (err as any).errorFields) return
-      message.error(`创建失败：${String(err).slice(0, 200)}`)
+      toast.error(`创建失败：${String(err).slice(0, 200)}`)
     } finally {
       setCreating(false)
     }
@@ -115,32 +102,30 @@ export default function TemplateLibraryPage() {
   async function handleDelete(t: TemplateRow) {
     try {
       await remove(t.id)
-      message.success('已删除')
+      toast.success('已删除')
       if (selected?.id === t.id) setSelected(null)
     } catch (err) {
-      message.error(`删除失败：${String(err).slice(0, 100)}`)
+      toast.error(`删除失败：${String(err).slice(0, 100)}`)
     }
   }
 
   async function handleMigrate() {
     const res = await migrate()
-    message.success(`已导入 ${res.imported} 个，${res.skipped} 个跳过`)
+    toast.success(`已导入 ${res.imported} 个，${res.skipped} 个跳过`)
   }
 
   function handleUseTemplate(t: TemplateRow) {
-    // Inject the template as the current requirement and route back to
-    // the workbench, where the user can hit confirm.
     const payload = t.requirement_payload as any
     if (payload?.id) {
       dispatch({ type: 'requirement/received', requirement: payload })
-      message.success(`已载入模板「${t.name}」，回工作台确认执行`)
+      toast.success(`已载入模板「${t.name}」，回工作台确认执行`)
     }
     navigate('/')
   }
 
   return (
-    <Layout style={{ minHeight: '100vh', background: 'var(--canvas)' }}>
-      <Layout.Header
+    <div style={{ minHeight: '100vh', background: 'var(--canvas)', display: 'flex', flexDirection: 'column' }}>
+      <header
         style={{
           background: 'var(--ink)',
           color: '#FFFFFF',
@@ -148,19 +133,19 @@ export default function TemplateLibraryPage() {
           display: 'flex',
           alignItems: 'center',
           gap: 18,
+          height: 48,
         }}
       >
         <Button
-          type="text"
-          icon={<ArrowLeftOutlined />}
+          variant="quiet"
           onClick={() => navigate('/')}
           style={{ color: '#FFFFFF' }}
         >
-          返回工作台
+          <ArrowLeftOutlined /> 返回工作台
         </Button>
         <Typography.Title
           level={4}
-          style={{ color: '#FFFFFF', margin: 0, fontFamily: 'var(--font-display)' }}
+          style={{ color: '#FFFFFF', margin: 0, fontFamily: 'var(--font-display)', fontSize: 16 }}
         >
           模板中心
         </Typography.Title>
@@ -168,16 +153,16 @@ export default function TemplateLibraryPage() {
         <Typography.Text style={{ color: 'rgba(255,255,255,.65)', fontSize: 11 }}>
           {templates.length} 个模板
         </Typography.Text>
-      </Layout.Header>
-      <Layout.Content
+      </header>
+      <main
         style={{
           padding: 'var(--sp-xl)',
           display: 'grid',
           gridTemplateColumns: '240px 1fr 320px',
           gap: 'var(--sp-l)',
+          flex: 1,
         }}
       >
-        {/* Left: search + migration banner */}
         <aside
           style={{
             background: 'var(--paper)',
@@ -200,11 +185,10 @@ export default function TemplateLibraryPage() {
           >
             搜索
           </Typography.Text>
-          <Input.Search
+          <TextField
             placeholder="按名称搜索"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            allowClear
           />
 
           {pendingMigration && pendingMigration.length > 0 && (
@@ -225,10 +209,10 @@ export default function TemplateLibraryPage() {
                 旧的 localStorage 模板可以导入 PG。继续？
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <Button type="primary" size="small" onClick={handleMigrate}>
+                <Button variant="primary" size="sm" onClick={handleMigrate}>
                   导入
                 </Button>
-                <Button size="small" onClick={dismiss}>
+                <Button variant="default" size="sm" onClick={dismiss}>
                   忽略
                 </Button>
               </div>
@@ -236,7 +220,6 @@ export default function TemplateLibraryPage() {
           )}
         </aside>
 
-        {/* Center: list */}
         <section
           style={{
             background: 'var(--paper)',
@@ -266,20 +249,19 @@ export default function TemplateLibraryPage() {
               模板列表
             </Typography.Text>
             <Button
-              type="primary"
-              size="small"
-              icon={<PlusOutlined />}
+              variant="primary"
+              size="sm"
               onClick={() => {
                 createForm.resetFields()
                 setCreateOpen(true)
               }}
             >
-              新建模板
+              <PlusOutlined /> 新建模板
             </Button>
           </div>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 24 }}>
-              <Spin />
+              <Spinner />
             </div>
           ) : error ? (
             <Empty description={error} />
@@ -294,12 +276,12 @@ export default function TemplateLibraryPage() {
               }
             />
           ) : (
-            <List
-              dataSource={filtered}
-              renderItem={(t) => {
+            <div>
+              {filtered.map((t) => {
                 const isActive = selected?.id === t.id
                 return (
-                  <List.Item
+                  <div
+                    key={t.id}
                     onClick={() => setSelected(t)}
                     style={{
                       padding: '12px 14px',
@@ -317,16 +299,15 @@ export default function TemplateLibraryPage() {
                           {t.description || '（无描述）'}
                         </div>
                       </div>
-                      <Tag color="teal">v{t.requirement_payload?.version ?? '?'}</Tag>
+                      <Tag tone="teal">v{t.requirement_payload?.version ?? '?'}</Tag>
                     </div>
-                  </List.Item>
+                  </div>
                 )
-              }}
-            />
+              })}
+            </div>
           )}
         </section>
 
-        {/* Right: preview */}
         <aside
           style={{
             background: 'var(--paper)',
@@ -386,12 +367,11 @@ export default function TemplateLibraryPage() {
               </pre>
               <div style={{ display: 'flex', gap: 8 }}>
                 <Button
-                  type="primary"
-                  icon={<PlusOutlined />}
+                  variant="primary"
                   onClick={() => handleUseTemplate(selected)}
                   block
                 >
-                  使用此模板
+                  <PlusOutlined /> 使用此模板
                 </Button>
                 <Popconfirm
                   title="确定删除？"
@@ -399,7 +379,7 @@ export default function TemplateLibraryPage() {
                   okText="删除"
                   cancelText="取消"
                 >
-                  <Button danger icon={<DeleteOutlined />} />
+                  <Button variant="danger"><DeleteOutlined /></Button>
                 </Popconfirm>
               </div>
             </>
@@ -413,17 +393,16 @@ export default function TemplateLibraryPage() {
             />
           )}
         </aside>
-      </Layout.Content>
+      </main>
 
       <Modal
         title="新建模板"
         open={createOpen}
-        onCancel={() => setCreateOpen(false)}
+        onClose={() => setCreateOpen(false)}
         onOk={handleCreateTemplate}
         confirmLoading={creating}
         okText="创建"
         cancelText="取消"
-        destroyOnClose
       >
         <Form
           form={createForm}
@@ -461,7 +440,7 @@ export default function TemplateLibraryPage() {
             </Typography.Text>
             <div style={{ marginTop: 4 }}>
               {analysisRequirement ? (
-                <Tag color="teal">
+                <Tag tone="teal">
                   当前工作台需求卡 v{analysisRequirement.version} · {analysisRequirement.status}
                 </Tag>
               ) : (
@@ -473,6 +452,6 @@ export default function TemplateLibraryPage() {
           </div>
         </Form>
       </Modal>
-    </Layout>
+    </div>
   )
 }

@@ -50,6 +50,22 @@ export function isBusyPhase(phase: AnalysisPhase): boolean {
   return BUSY_PHASES.has(phase)
 }
 
+/**
+ * True when the current error came from a recoverable confirm failure,
+ * i.e. the UI should offer a retry button wired to
+ * `POST /api/v1/sessions/{sid}/retry`.
+ */
+export function canRetryFailedAction(
+  state: Pick<AnalysisState, 'phase' | 'error'>,
+): boolean {
+  return (
+    state.phase === 'error' &&
+    state.error !== null &&
+    state.error.recoverable === true &&
+    state.error.failed_action === 'confirm'
+  )
+}
+
 export function analysisReducer(
   state: AnalysisState,
   action: AnalysisAction,

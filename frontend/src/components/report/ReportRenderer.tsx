@@ -1,8 +1,6 @@
 import type { ReportBlock } from '../../types/report'
 import { getBlockComponent } from './registry'
-import { Typography } from 'antd'
-
-const { Text } = Typography
+import { Text } from '../atelier/Typography'
 
 interface Props {
   blocks: ReportBlock[]

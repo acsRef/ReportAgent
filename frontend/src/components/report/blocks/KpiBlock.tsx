@@ -1,8 +1,7 @@
-import { Typography, Card } from 'antd'
 import { ArrowUpOutlined, ArrowDownOutlined, MinusOutlined } from '@ant-design/icons'
+import { Text } from '../../../components/atelier/Typography'
+import Card from '../../../components/atelier/Card'
 import type { ReportBlock } from '../../../types/report'
-
-const { Text } = Typography
 
 interface Props {
   block: ReportBlock
@@ -46,37 +45,25 @@ function KpiCard({ item }: { item: Record<string, unknown> }) {
   return (
     <Card
       size="small"
-      styles={{ body: { padding: '20px 22px' } }}
-      style={{
-        borderRadius: 10,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)',
-        transition: 'box-shadow 0.2s, transform 0.2s',
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 6px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.06)'
-        ;(e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)'
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.boxShadow = '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)'
-        ;(e.currentTarget as HTMLElement).style.transform = 'translateY(0)'
-      }}
+      bodyStyle={{ padding: '20px 22px' }}
+      style={{ borderRadius: 10 }}
     >
-      <Text style={{ fontSize: 12, color: '#64748B', display: 'block', marginBottom: 8, fontWeight: 500 }}>
+      <Text style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginBottom: 8, fontWeight: 500 }}>
         {title}
       </Text>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 26, fontWeight: 700, color: '#1E293B', lineHeight: 1.2 }}>
+        <span style={{ fontSize: 26, fontWeight: 700, color: 'var(--ink)', lineHeight: 1.2 }}>
           {prefix}<span>{displayValue}</span>{suffix}
         </span>
         {trendRaw && (
           <span style={{
             fontSize: 12,
             fontWeight: 600,
-            color: isUp ? '#059669' : isDown ? '#DC2626' : '#64748B',
+            color: isUp ? '#059669' : isDown ? '#DC2626' : 'var(--muted)',
             display: 'flex',
             alignItems: 'center',
             gap: 2,
-            background: isUp ? '#F0FDF4' : isDown ? '#FEF2F2' : '#F8FAFC',
+            background: isUp ? '#F0FDF4' : isDown ? '#FEF2F2' : 'var(--canvas)',
             padding: '2px 8px',
             borderRadius: 12,
           }}>

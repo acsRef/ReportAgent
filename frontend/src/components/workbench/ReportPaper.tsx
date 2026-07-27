@@ -1,14 +1,8 @@
-/**
- * ReportPaper — render a report version fetched from
- * `GET /api/v1/sessions/{sid}/reports/{v}`.
- *
- * The backend stores `report_payload` as a `ReportResponse` shape
- * (answer.text, answer.table, answer.chart, answer.insight). We
- * adapt that into a flat block list and render with the legacy
- * ReportRenderer if available.
- */
 import { useEffect, useState } from 'react'
-import { Empty, Spin, Tag, Typography } from 'antd'
+import { Text, Title } from '../atelier/Typography'
+import Spinner from '../atelier/Spinner'
+import Empty from '../atelier/Empty'
+import Tag from '../atelier/Tag'
 import { fetchReportVersion, type ReportVersionDetail } from '../../api/sessionsClient'
 import { adaptReport } from '../../adapter/reportAdapter'
 import type { ReportBlock } from '../../types/report'
@@ -33,9 +27,6 @@ export default function ReportPaper({ sessionId, version }: Props) {
       .then((r) => {
         if (cancelled) return
         setReport(r.report)
-        // Adapt the report_payload to ReportBlock[]; if adapt fails
-        // (e.g. payload doesn't match legacy shape), fall back to a
-        // single markdown block with the raw JSON.
         try {
           const adapted = adaptReport(r.report.report_payload as any)
           setBlocks(adapted)
@@ -64,7 +55,7 @@ export default function ReportPaper({ sessionId, version }: Props) {
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: 32 }}>
-        <Spin />
+        <Spinner />
       </div>
     )
   }
@@ -86,7 +77,7 @@ export default function ReportPaper({ sessionId, version }: Props) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-        <Typography.Title
+        <Title
           level={2}
           style={{
             fontFamily: 'var(--font-display)',
@@ -96,15 +87,15 @@ export default function ReportPaper({ sessionId, version }: Props) {
           }}
         >
           {report.title}
-        </Typography.Title>
-        <Tag color={report.status === 'done' ? 'teal' : 'amber'}>{report.status}</Tag>
+        </Title>
+        <Tag tone={report.status === 'done' ? 'teal' : 'amber'}>{report.status}</Tag>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted)' }}>
           v{report.version} · {new Date(report.created_at).toLocaleString('zh-CN')}
         </span>
       </div>
-      <Typography.Text style={{ color: 'var(--muted)', fontSize: 12 }}>
+      <Text style={{ color: 'var(--muted)', fontSize: 12 }}>
         session: {report.session_id}
-      </Typography.Text>
+      </Text>
       <div style={{ marginTop: 18 }}>
         <ReportRenderer blocks={blocks} />
       </div>

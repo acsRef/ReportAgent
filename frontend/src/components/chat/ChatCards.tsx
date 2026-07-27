@@ -1,11 +1,8 @@
 import { useState } from 'react'
-import { Typography } from 'antd'
 import { CheckCircleFilled } from '@ant-design/icons'
-
+import { Text } from '../atelier/Typography'
 import { useSessionStore } from '../../stores/session'
 import type { ChatCard, ChatCardType, ConfirmCard, IntentCard, IntentOption, OptionsGroup, PreviewCard } from '../../types/report'
-
-const { Text } = Typography
 
 interface Props {
   type: ChatCardType
@@ -29,7 +26,7 @@ function OptionsGroupCard({ data, busy, onSelect }: {
   return (
     <div style={{ margin: '4px 0' }}>
       {data.label && (
-        <Text style={{ fontSize: 12, fontWeight: 600, color: '#475569', display: 'block', marginBottom: 4 }}>
+        <Text style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', display: 'block', marginBottom: 4 }}>
           {data.label}
         </Text>
       )}
@@ -42,12 +39,12 @@ function OptionsGroupCard({ data, busy, onSelect }: {
             onClick={() => onSelect(option.value)}
             style={{
               padding: '4px 12px',
-              border: `1px solid ${option.selected ? '#1E40AF' : '#E2E8F0'}`,
+              border: `1px solid ${option.selected ? 'var(--teal-deep)' : 'var(--line)'}`,
               borderRadius: 6,
               fontSize: 12,
               cursor: busy ? 'not-allowed' : 'pointer',
-              background: option.selected ? '#EFF6FF' : '#FFFFFF',
-              color: option.selected ? '#1E40AF' : '#475569',
+              background: option.selected ? 'var(--teal-soft)' : 'var(--paper)',
+              color: option.selected ? 'var(--teal-deep)' : 'var(--ink-2)',
               fontWeight: option.selected ? 500 : 400,
               opacity: busy ? 0.55 : 1,
               transition: 'all 0.15s',
@@ -69,12 +66,12 @@ function ConfirmCardView({ data, busy, onModify, onStartGenerate }: {
 }) {
   const buttonCursor = busy ? 'not-allowed' : 'pointer'
   return (
-    <div style={{ margin: '8px 0', background: '#EFF6FF', border: '1px solid #DBEAFE', borderRadius: 10, padding: 16 }}>
-      <Text strong style={{ fontSize: 13, color: '#1E40AF', display: 'block', marginBottom: 8 }}>
+    <div style={{ margin: '8px 0', background: 'var(--teal-soft)', border: '1px solid var(--teal-pale)', borderRadius: 10, padding: 16 }}>
+      <Text strong style={{ fontSize: 13, color: 'var(--teal-deep)', display: 'block', marginBottom: 8 }}>
         {data.title}
       </Text>
       {data.items.map((item, index) => (
-        <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, color: '#1E293B' }}>
+        <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 12, color: 'var(--ink)' }}>
           <CheckCircleFilled style={{ color: '#059669', fontSize: 12 }} />
           <span>{item.text}</span>
         </div>
@@ -84,7 +81,7 @@ function ConfirmCardView({ data, busy, onModify, onStartGenerate }: {
           type="button"
           disabled={busy}
           onClick={onModify}
-          style={{ padding: '6px 16px', border: '1px solid #E2E8F0', borderRadius: 6, background: '#FFFFFF', color: '#475569', cursor: buttonCursor, fontSize: 12, opacity: busy ? 0.55 : 1 }}
+          style={{ padding: '6px 16px', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--paper)', color: 'var(--ink-2)', cursor: buttonCursor, fontSize: 12, opacity: busy ? 0.55 : 1 }}
         >
           修改需求
         </button>
@@ -92,7 +89,7 @@ function ConfirmCardView({ data, busy, onModify, onStartGenerate }: {
           type="button"
           disabled={busy}
           onClick={onStartGenerate}
-          style={{ padding: '6px 16px', border: 'none', borderRadius: 6, background: '#1E40AF', color: '#FFFFFF', cursor: buttonCursor, fontSize: 12, opacity: busy ? 0.55 : 1 }}
+          style={{ padding: '6px 16px', border: 'none', borderRadius: 6, background: 'var(--teal-deep)', color: 'var(--paper)', cursor: buttonCursor, fontSize: 12, opacity: busy ? 0.55 : 1 }}
         >
           开始生成
         </button>
@@ -107,28 +104,28 @@ function PreviewCardView({ data, busy, onViewReport }: {
   onViewReport: () => void
 }) {
   return (
-    <div style={{ margin: '8px 0', background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 10, padding: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)' }}>
-      <Text strong style={{ fontSize: 13, color: '#1E293B', display: 'block', marginBottom: 10 }}>
+    <div style={{ margin: '8px 0', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 10, padding: 16, boxShadow: 'var(--shadow-card)' }}>
+      <Text strong style={{ fontSize: 13, color: 'var(--ink)', display: 'block', marginBottom: 10 }}>
         {data.title}
       </Text>
       {data.kpis.length > 0 && (
         <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
           {data.kpis.map((kpi, index) => (
             <div key={index} style={{ flex: 1 }}>
-              <Text style={{ fontSize: 11, color: '#94A3B8', display: 'block' }}>{kpi.label}</Text>
-              <Text strong style={{ fontSize: 18, color: '#1E293B' }}>{kpi.value}</Text>
+              <Text style={{ fontSize: 11, color: 'var(--muted)', display: 'block' }}>{kpi.label}</Text>
+              <Text strong style={{ fontSize: 18, color: 'var(--ink)' }}>{kpi.value}</Text>
               {kpi.trend && <Text style={{ fontSize: 11, color: kpi.trend.startsWith('↑') || kpi.trend.startsWith('+') ? '#059669' : '#DC2626' }}>{kpi.trend}</Text>}
             </div>
           ))}
         </div>
       )}
       {data.chartType && (
-        <div style={{ height: 120, background: '#F8FAFC', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#CBD5E1', fontSize: 12, marginBottom: 10, border: '1px solid #F1F5F9' }}>
+        <div style={{ height: 120, background: 'var(--canvas)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--faint)', fontSize: 12, marginBottom: 10, border: '1px solid var(--line)' }}>
           {data.chartType}
         </div>
       )}
       {data.insight && (
-        <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.6, padding: '8px 12px', background: '#F8FAFC', borderRadius: 6, marginBottom: 10 }}>
+        <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.6, padding: '8px 12px', background: 'var(--canvas)', borderRadius: 6, marginBottom: 10 }}>
           {data.insight}
         </div>
       )}
@@ -136,7 +133,7 @@ function PreviewCardView({ data, busy, onViewReport }: {
         type="button"
         disabled={busy}
         onClick={onViewReport}
-        style={{ width: '100%', padding: '8px', background: '#EFF6FF', border: '1px solid #DBEAFE', color: '#1E40AF', borderRadius: 6, cursor: busy ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 500, opacity: busy ? 0.55 : 1 }}
+        style={{ width: '100%', padding: '8px', background: 'var(--teal-soft)', border: '1px solid var(--teal-pale)', color: 'var(--teal-deep)', borderRadius: 6, cursor: busy ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 500, opacity: busy ? 0.55 : 1 }}
       >
         查看完整报告 →
       </button>
@@ -150,8 +147,8 @@ function IntentCardView({ data, busy, onSelect }: {
   onSelect: (option: IntentOption) => void
 }) {
   return (
-    <div style={{ margin: "12px 0", background: "#FFFFFF", border: "1px solid #DBEAFE", borderRadius: 10, padding: 16 }}>
-      <Text style={{ fontSize: 14, fontWeight: 600, color: "#0F172A", display: "block", marginBottom: 12 }}>
+    <div style={{ margin: "12px 0", background: "var(--paper)", border: "1px solid var(--teal-pale)", borderRadius: 10, padding: 16 }}>
+      <Text style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)", display: "block", marginBottom: 12 }}>
         {data.payload.title ?? "我能这样帮你分析 — 选一个继续"}
       </Text>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -161,15 +158,15 @@ function IntentCardView({ data, busy, onSelect }: {
             type="button"
             disabled={busy}
             onClick={() => onSelect(opt)}
-            style={{ textAlign: "left", padding: "12px 14px", border: "1px solid #E2E8F0", borderRadius: 8, background: "#FFFFFF", cursor: busy ? "not-allowed" : "pointer", fontSize: 13, opacity: busy ? 0.55 : 1 }}
+            style={{ textAlign: "left", padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--paper)", cursor: busy ? "not-allowed" : "pointer", fontSize: 13, opacity: busy ? 0.55 : 1 }}
           >
-            <div style={{ fontWeight: 500, color: "#0F172A", marginBottom: 4 }}>{opt.label}</div>
-            {opt.description && <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.5 }}>{opt.description}</div>}
-            <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 6, fontFamily: "monospace" }}>tool: {opt.tool}</div>
+            <div style={{ fontWeight: 500, color: "var(--ink)", marginBottom: 4 }}>{opt.label}</div>
+            {opt.description && <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>{opt.description}</div>}
+            <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 6, fontFamily: "monospace" }}>tool: {opt.tool}</div>
           </button>
         ))}
       </div>
-      {data.reasoning && <div style={{ marginTop: 12, fontSize: 11, color: "#9CA3AF", fontStyle: "italic" }}>{data.reasoning}</div>}
+      {data.reasoning && <div style={{ marginTop: 12, fontSize: 11, color: "var(--faint)", fontStyle: "italic" }}>{data.reasoning}</div>}
     </div>
   )
 }
@@ -214,8 +211,6 @@ export default function ChatCards({ type, data, cardId, onModify }: Props) {
         busy={busy}
         onSelect={(opt) => {
           if (busy) return
-          // Round-2 of the 3-stage flow: send the chosen tool name via
-          // `chosen_tool` so the backend plan node can pre-orient the SQL.
           void sendMessage('继续', { chosenTool: opt.tool })
         }}
       />

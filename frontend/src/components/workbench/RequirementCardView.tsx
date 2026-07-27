@@ -1,17 +1,10 @@
-/**
- * RequirementCardView — render a RequirementCard with form controls.
- *
- * Layout:
- *   - 标题 + status 标签
- *   - 每个 missing_field 一个 segmented / checkbox 组（按 kind）
- *   - 每个 assumption 一行 [✓ ✗ 文字]
- *   - 底部 [确认执行] 按钮（仅 status=complete 时启用）
- *
- * Mutations are pushed up via the `onChange` callback; the parent owns
- * the source of truth (analysisStore).
- */
-import { App, Button, Checkbox, Radio, Space, Tag, Typography } from 'antd'
+import { Title, Paragraph } from '../atelier/Typography'
 import { CheckOutlined, CloseOutlined } from '@ant-design/icons'
+import Button from '../atelier/Button'
+import Tag from '../atelier/Tag'
+import RadioGroup from '../atelier/RadioGroup'
+import CheckboxGroup from '../atelier/CheckboxGroup'
+import { useToast } from '../atelier/useToast'
 import type { RequirementCard as RC } from '../../types/requirement'
 
 interface Props {
@@ -21,15 +14,21 @@ interface Props {
   confirming?: boolean
 }
 
-const STATUS_COLOR: Record<RC['status'], string> = {
+const STATUS_COLOR: Record<RC['status'], 'amber' | 'teal' | 'ink'> = {
   missing: 'amber',
   complete: 'teal',
   locked: 'ink',
 }
 
 export default function RequirementCardView({ card, onChange, onConfirm, confirming }: Props) {
-  const { message } = App.useApp()
-  const canConfirm = card.status === 'complete'
+  const toast = useToast()
+
+  const unfilled = card.missing_fields.filter((mf) => {
+    const v = mf.selected_value
+    return v === null || v === '' || (Array.isArray(v) && v.length === 0)
+  })
+  const unresolved = card.assumptions.filter((a) => a.accepted === null)
+  const canConfirm = unfilled.length === 0 && unresolved.length === 0
 
   function setSelectedValue(key: string, value: string | string[] | null) {
     onChange({
@@ -50,20 +49,20 @@ export default function RequirementCardView({ card, onChange, onConfirm, confirm
   }
 
   async function handleConfirm() {
-    // Sanity: at least one missing field selected?
-    const unfilled = card.missing_fields.filter((mf) => {
-      const v = mf.selected_value
-      return v === null || v === '' || (Array.isArray(v) && v.length === 0)
-    })
     if (unfilled.length > 0) {
-      message.warning(`还有 ${unfilled.length} 个字段未选择`)
+      toast.warning(`还有 ${unfilled.length} 个字段未选择`)
       return
     }
-    const unresolved = card.assumptions.filter((a) => a.accepted === null)
     if (unresolved.length > 0) {
-      message.warning(`还有 ${unresolved.length} 个待确认假设未表态`)
+      toast.warning(`还有 ${unresolved.length} 个待确认假设未表态`)
       return
     }
+    const promoted: RC = {
+      ...card,
+      status: 'complete',
+      confirmed_at: null,
+    }
+    onChange(promoted)
     onConfirm()
   }
 
@@ -77,9 +76,8 @@ export default function RequirementCardView({ card, onChange, onConfirm, confirm
         boxShadow: 'var(--shadow-soft)',
       }}
     >
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <Typography.Title
+        <Title
           level={4}
           style={{
             fontFamily: 'var(--font-display)',
@@ -89,8 +87,8 @@ export default function RequirementCardView({ card, onChange, onConfirm, confirm
           }}
         >
           需求卡
-        </Typography.Title>
-        <Tag color={STATUS_COLOR[card.status]} style={{ fontWeight: 600 }}>
+        </Title>
+        <Tag tone={STATUS_COLOR[card.status]} style={{ fontWeight: 600 }}>
           {card.status.toUpperCase()}
         </Tag>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted)' }}>
@@ -98,17 +96,16 @@ export default function RequirementCardView({ card, onChange, onConfirm, confirm
         </span>
       </div>
 
-      <Typography.Paragraph
+      <Paragraph
         style={{ color: 'var(--ink-2)', fontSize: 13, marginBottom: 18, fontFamily: 'var(--font-display)' }}
       >
         {card.summary}
-      </Typography.Paragraph>
+      </Paragraph>
 
-      {/* Missing fields */}
       {card.missing_fields.length > 0 && (
         <>
           <SectionTitle>待补充 ({card.missing_fields.length})</SectionTitle>
-          <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, width: '100%' }}>
             {card.missing_fields.map((mf) => (
               <div key={mf.key}>
                 <div
@@ -124,41 +121,29 @@ export default function RequirementCardView({ card, onChange, onConfirm, confirm
                   {mf.label}
                 </div>
                 {mf.kind === 'single' ? (
-                  <Radio.Group
-                    value={mf.selected_value as string | undefined}
-                    onChange={(e) => setSelectedValue(mf.key, e.target.value)}
-                    style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}
-                  >
-                    {mf.options.map((o) => (
-                      <Radio.Button key={o.value} value={o.value}>
-                        {o.label}
-                      </Radio.Button>
-                    ))}
-                  </Radio.Group>
+                  <RadioGroup
+                    kind="pill"
+                    options={mf.options.map((o) => ({ value: o.value, label: o.label }))}
+                    value={mf.selected_value as string | null}
+                    onChange={(val) => setSelectedValue(mf.key, val)}
+                  />
                 ) : (
-                  <Checkbox.Group
+                  <CheckboxGroup
+                    options={mf.options.map((o) => ({ value: o.value, label: o.label }))}
                     value={(mf.selected_value as string[] | undefined) ?? []}
-                    onChange={(vals) => setSelectedValue(mf.key, vals as string[])}
-                    style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}
-                  >
-                    {mf.options.map((o) => (
-                      <Checkbox key={o.value} value={o.value}>
-                        {o.label}
-                      </Checkbox>
-                    ))}
-                  </Checkbox.Group>
+                    onChange={(vals) => setSelectedValue(mf.key, vals)}
+                  />
                 )}
               </div>
             ))}
-          </Space>
+          </div>
         </>
       )}
 
-      {/* Assumptions */}
       {card.assumptions.length > 0 && (
         <>
           <SectionTitle>待确认假设 ({card.assumptions.length})</SectionTitle>
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
             {card.assumptions.map((a) => (
               <div
                 key={a.key}
@@ -173,29 +158,29 @@ export default function RequirementCardView({ card, onChange, onConfirm, confirm
                 }}
               >
                 <Button
-                  size="small"
-                  type={a.accepted === true ? 'primary' : 'default'}
-                  icon={<CheckOutlined />}
+                  size="sm"
+                  variant={a.accepted === true ? 'primary' : 'default'}
                   onClick={() => setAssumptionAccepted(a.key, true)}
-                />
+                >
+                  <CheckOutlined />
+                </Button>
                 <Button
-                  size="small"
-                  danger
-                  type={a.accepted === false ? 'primary' : 'default'}
-                  icon={<CloseOutlined />}
+                  size="sm"
+                  variant={a.accepted === false ? 'primary' : 'danger'}
                   onClick={() => setAssumptionAccepted(a.key, false)}
-                />
+                >
+                  <CloseOutlined />
+                </Button>
                 <span style={{ flex: 1, color: 'var(--ink-2)', fontSize: 12 }}>{a.text}</span>
               </div>
             ))}
-          </Space>
+          </div>
         </>
       )}
 
-      {/* Confirm button */}
       <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
         <Button
-          type="primary"
+          variant="primary"
           disabled={!canConfirm}
           loading={confirming}
           onClick={handleConfirm}

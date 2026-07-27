@@ -94,11 +94,14 @@ export function openChat(
         const { value, done } = await reader.read()
         if (done) break
         buffer += decoder.decode(value, { stream: true })
-        // SSE frames are separated by a blank line
+        // SSE frames are separated by a blank line. sse_starlette emits
+        // them as `\r\n\r\n` per the SSE spec, but proxies may strip
+        // carriage returns. Accept either.
         let sepIndex
-        while ((sepIndex = buffer.indexOf('\n\n')) >= 0) {
+        while ((sepIndex = buffer.search(/\r\n\r\n|\n\n/)) >= 0) {
+          const match = buffer.match(/\r\n\r\n|\n\n/)!
           const frame = buffer.slice(0, sepIndex)
-          buffer = buffer.slice(sepIndex + 2)
+          buffer = buffer.slice(sepIndex + match[0].length)
           const evt = parseSSEFrame(frame)
           if (evt) onEvent(evt)
         }
