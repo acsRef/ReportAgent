@@ -78,7 +78,7 @@ curl http://localhost:8100/health
 - **Types:** Prefer `interface` for Props/State, `type` for unions/utilities. Use discriminated unions over `Record<string, unknown>`. SSE type guards required; no `unknown` into reducer.
 - **Components:** Default export function components. Props interface named `Props` (local per file). No class components.
 - **State:** Zustand stores with pure reducers. `analysisReducer` is the single source of truth — React components never write `phase` directly. Use immer middleware.
-- **Styling:** Use CSS variables from `src/styles/tokens.css` + Ant Design `ConfigProvider` theme (`src/theme/antdTheme.ts`). No inline style magic values. No `!important`. No global CSS selectors.
+- **Styling:** Use CSS variables from `src/styles/tokens.css` + `src/styles/workbench.css` (the approved prototype `docs/intelligent-analysis-workbench.html` is the visual source of truth; all prototype colors are promoted to tokens). antd is fully removed — components come from `src/components/atelier/` and icons from `src/components/ui/Icons.tsx`. No new hex values outside tokens.css. No `!important`.
 - **Design tokens** (single source of truth in `tokens.css`): `--ink`, `--teal`, `--paper`, `--canvas`, `--rail`, `--muted`, `--amber`, `--red`, `--green`, `--font-display`, `--font-ui`, `--font-mono`. AntD theme mirrors these exactly.
 - **State machine:** `AnalysisPhase` transitions live in both backend and frontend reducer. Frontend mirrors backend SSE `phase` events.
 - **Lint:** oxlint (not eslint). `react/rules-of-hooks: error`, `react/only-export-components: warn`.

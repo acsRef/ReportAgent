@@ -58,3 +58,9 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# JS
+node_modules/
+
+# Claude Code local state
+.claude/

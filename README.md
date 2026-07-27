@@ -1,58 +1,57 @@
 # ReportAgent
 
-AI 驱动的自然语言 → 报表系统。用户用中文提问，LangGraph Agent 自动生成并执行 SQL，在前端呈现图表 + 洞察分析。
+AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆解并让用户**确认需求**，确认后自动生成并执行 SQL，在工作台呈现图表 + 明细 + 洞察。界面按已批准的原型 [docs/intelligent-analysis-workbench.html](docs/intelligent-analysis-workbench.html) 1:1 实现。
 
 ## 系统架构
 
 ```
-用户 ←SSE→ React + Vite (:3000)
-              ↓ 代理 /api (Vite proxy)
-        FastAPI + LangGraph Agent (:8100)
-              ↓ MCP
-         MCP Schema Server (自动发现)
-              ↓
-         PostgreSQL (分析数据 + 会话 + 追踪 + 记忆)
+用户 ←SSE v2→ React + Vite (:3000)
+                 ↓ 代理 /api (Vite proxy)
+           FastAPI + LangGraph Agent (:8100)
+                 ↓ MCP
+            MCP Schema Server (自动发现，本地工具兜底)
+                 ↓
+            PostgreSQL (分析数据 + 会话 + 需求草稿 + 报告版本 + 记忆 + 追踪)
 ```
 
 三个服务（严格按此顺序启动）：
-- **MCP Schema Server** (随机端口) — 通过 MCP 协议暴露数据库 Schema
-- **后端** (:8100) — FastAPI + LangGraph 8 节点父图 (+ 3 个子图)
-- **前端** (:3000) — React + Vite + Ant Design + ECharts，深色 BI 仪表盘风格
+
+- **MCP Schema Server**（随机端口）— 通过 MCP 协议暴露数据库 Schema
+- **后端**（:8100）— FastAPI + LangGraph 双图协作
+- **前端**（:3000）— React 19 + Vite + ECharts + atelier 组件库（**antd 已完全移除**）
+
+### 两图协作流程（核心）
+
+1. **需求分析图**（`requirement_analysis_graph`）：**只暴露 schema 工具**（search_tables / get_table_ddl / list_tables），产出 `RequirementCard`（缺失字段带后端受控选项）。
+2. **确认执行图**（`confirmed_execution_graph`）：门控（status=complete、无缺失、假设全部表态、owner 校验）→ 锁定草稿 → schema → SQL（plan → generate → validate(EXPLAIN) → execute）→ report → 落库 `agent.report_version`（append-only）。
+
+关键语义：
+
+- **失败绝不伪装成功**：SQL 无数据 → `execution_status=FAILED` → 条件边跳过落库 → SSE `error` 事件 + `session.phase=error`，前端出现「重试当前任务」卡（`POST /sessions/{sid}/retry`）。
+- **reasoning 模型兼容**：`utils/text.extract_sql` 剥离 `
+</think>
+
+` 块；校验失败的 SQL + 错误信息会喂回重新生成的 prompt（重试不盲打）。
+- 旧的 `mode=legacy` 单图流程（interrupt + chosen_tool）仍保留一个兼容周期。
 
 ## 技术栈
 
-| 层          | 技术                                           |
-|-------------|------------------------------------------------|
-| 前端         | React 18 + Vite + TypeScript + Ant Design       |
-| 渲染         | ECharts (SVG) + 自定义 ReportBlock 组件          |
-| 状态管理      | Zustand + persist (localStorage)                |
-| API 协议     | Server-Sent Events (SSE) 流式推送                |
-| 认证         | JWT (PyJWT, 单 token, 无 refresh)               |
-| Agent       | LangGraph (Parent + 3 SubGraph)                 |
-| LLM         | OpenAI 兼容 (MiniMax M2.7-highspeed，可配置)      |
-| Embedding   | SiliconFlow API (pgvector 语义搜索)              |
-| 分析数据库    | PostgreSQL (public schema, 10 张星型模型表)      |
-| 持久化       | PostgreSQL + asyncpg + pgvector (pgvector/pgvector:0.7.0-pg15) |
-| 记忆         | MemoryManager (UserMemory + QueryMemory, pgvector 混合排序) |
-| 安全         | SecurityGuard 规则引擎 (风险评分: LOW / HIGH)      |
-| 追踪         | 自定义 Trace SDK → PostgreSQL                     |
-| 检查点       | LangGraph MemorySaver (dev)                      |
-
-## 数据模型
-
-零售 + 电商星型模型，6 张维度表 + 4 张事实表（存储在 PostgreSQL `public` schema）：
-
-- **维度表：** dim_date (51行), dim_region (17行), dim_product (20行), dim_customer (12行), dim_warehouse (5行), dim_employee (8行)
-- **事实表：** fact_sales (48条), fact_returns (12条), fact_inventory (30条), fact_attendance (20条)
+| 层 | 技术 |
+|---|---|
+| 前端 | React 19 + Vite 8 + TypeScript 6 + Zustand + immer |
+| UI | atelier 组件库（`components/atelier/`，antd 已移除）+ 手绘 SVG 图标（`components/ui/Icons.tsx`）+ `styles/tokens.css` / `styles/workbench.css` |
+| 渲染 | ECharts 6 (SVG) + ReportBlock 组件体系 |
+| API 协议 | SSE v2 流式推送（phase / requirement / report / error / done） |
+| 认证 | JWT（PyJWT，单 token，无 refresh，24h） |
+| Agent | LangGraph 双图 + psycopg2 + sqlglot |
+| LLM | OpenAI 兼容（MiniMax，可配置） |
+| Embedding | SiliconFlow API（pgvector 语义搜索，失败降级关键字匹配） |
+| 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型 6 维 4 事实；数据覆盖 2020–2024） |
+| 测试 | pytest（61 通过）+ vitest（224 通过） |
 
 ## 环境要求
 
-- Miniconda (Python 3.11)
-- Node.js 18+
-- PostgreSQL 15+ (含 pgvector 扩展)
-- Docker (用于启动 PostgreSQL)
-- SiliconFlow API Key (用于 Embedding)
-- MiniMax API Key (用于 LLM)
+Miniconda（Python 3.11）、Node.js 18+、Docker、MiniMax API Key、SiliconFlow API Key。
 
 ## 快速开始
 
@@ -60,40 +59,34 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，LangGraph Ag
 
 ```bash
 docker run -d --name ragent-postgres \
-  -e POSTGRES_USER=ragent \
-  -e POSTGRES_PASSWORD=ragent \
-  -e POSTGRES_DB=ragent \
-  -p 5432:5432 \
-  pgvector/pgvector:0.7.0-pg15
+  -e POSTGRES_USER=ragent -e POSTGRES_PASSWORD=ragent -e POSTGRES_DB=ragent \
+  -p 5432:5432 pgvector/pgvector:0.7.0-pg15
 ```
 
 ### 2. 配置环境变量
 
+仓库根创建 `.env`（可参考 [backend/.env.example](backend/.env.example)）：
+
 ```bash
-# 复制 .env 并填入 API Key
 MINIMAX_API_KEY=your-minimax-key
-LLM_MODEL=MiniMax-M2.7-highspeed
 SILICONFLOW_API_KEY=your-siliconflow-key
-EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
 DATABASE_URL=postgresql://ragent:ragent@localhost:5432/ragent
+# LLM_MODEL / LLM_BASE_URL / EMBEDDING_MODEL / EMBEDDING_DIM(必须 1536) 可选
 ```
 
 ### 3. 初始化数据库
 
 ```bash
-# 3a. 创建 PG 表结构（认证 + 会话）
 docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/init_pg.sql
-
-# 3b. 导入分析数据（10 张星型模型表）
 docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_pg.sql
 ```
 
 ### 4. 安装依赖
 
 ```bash
-conda create -n agent python=3.11
-conda activate agent
+conda create -n agent python=3.11 && conda activate agent
 pip install -r backend/requirements.txt
+pip install -r backend/requirements-dev.txt   # 测试依赖
 pip install -r mcp_schema_server/requirements.txt
 cd frontend && npm install
 ```
@@ -101,181 +94,117 @@ cd frontend && npm install
 ### 5. 启动服务（严格按此顺序）
 
 ```bash
-# 终端 1: MCP Schema Server（必须先启动）
-python -m mcp_schema_server.server
-
-# 终端 2: ReportAgent API
-cd backend && uvicorn app.main:app --port 8100 --reload
-
-# 终端 3: 前端开发服务器
-cd frontend && npm run dev
+python -m mcp_schema_server.server                      # 终端 1：MCP（必须先启动）
+cd backend && uvicorn app.main:app --port 8100 --reload # 终端 2：后端
+cd frontend && npm run dev                              # 终端 3：前端
 ```
 
 ### 6. 登录测试
 
 ```bash
-# 默认管理员账号
+# 默认管理员 admin / admin123
 curl -X POST http://localhost:8100/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
+  -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'
 
-# 发送查询（需要先登录获取 token）
-curl -X POST http://localhost:8100/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{"user_query": "2024年各区域销售总额", "session_id": "test-1"}'
+# 发起分析（SSE v2 流）
+curl -N -X POST http://localhost:8100/api/v1/chat \
+  -H "Content-Type: application/json" -H "Authorization: Bearer <token>" \
+  -d '{"user_query":"2024年各区域销售额排名","session_id":"test-1","mode":"new"}'
 ```
 
 ## API 接口
 
-| 端点                      | 方法   | 认证   | 说明                        |
-|---------------------------|--------|--------|-----------------------------|
-| `/health`                 | GET    | 否     | 健康检查                    |
-| `/api/v1/auth/login`      | POST   | 否     | 登录，返回 JWT token        |
-| `/api/v1/auth/register`   | POST   | 否     | 注册新用户                  |
-| `/api/v1/sessions`        | GET    | 是     | 查询历史会话列表            |
-| `/api/v1/conversations/{session_id}` | GET | 是 | 查询会话消息详情          |
-| `/api/v1/chat`            | POST   | 是     | 发送查询，返回 SSE 事件流    |
+| 端点 | 方法 | 认证 | 说明 |
+|---|---|---|---|
+| `/health` | GET | 否 | 健康检查 |
+| `/api/v1/auth/login` / `/api/v1/auth/register` | POST | 否 | 登录 / 注册 |
+| `/api/v1/chat` | POST | 是 | `mode: new/supplement/adjust/legacy`，SSE v2 流 |
+| `/api/v1/sessions` | GET | 是 | 会话列表（含标题/phase/首末消息/报告版本） |
+| `/api/v1/sessions/{sid}` | GET | 是 | 全量快照（会话 + 消息 + 当前需求 + 报告版本） |
+| `/api/v1/sessions/{sid}/requirement` | PATCH | 是 | 服务端重算 `RequirementCard`（填充选项、重算 status） |
+| `/api/v1/sessions/{sid}/confirm` | POST | 是 | SSE v2：执行确认图，成功出 `report`，失败出 `error` |
+| `/api/v1/sessions/{sid}/retry` | POST | 是 | 按 `last_failed_action` 恢复（清标记后委托 confirm） |
+| `/api/v1/sessions/{sid}/reports/{version}` | GET | 是 | 报告版本详情（纯 PG 读，无 LLM） |
+| `/api/v1/conversations/{sid}` | GET | 是 | 会话消息明细 |
+| `/api/v1/templates` | POST/GET/PATCH/DELETE | 是 | PG 模板 CRUD |
 
-### SSE 事件协议
+### SSE v2 事件
 
-| 事件      | 说明                      |
-|-----------|---------------------------|
-| `token`   | LLM 流式输出文本           |
-| `trace`   | 执行步骤更新 {step, status, detail} |
-| `report`  | 最终结果 {answer: {text, table, chart, insight}} |
-| `clarify` | 追问用户 {question}        |
-| `error`   | 错误信息                  |
-| `done`    | 流结束                    |
+| 事件 | 载荷 |
+|---|---|
+| `phase` | `{phase, reason?}` |
+| `requirement` | 完整 `RequirementCard` |
+| `report` | `{version, parent_version, title, answer, trace}` |
+| `error` | `{code, message, recoverable, failed_action}` |
+| `done` | `{final_phase}` |
 
-> 所有需要认证的接口在 Header 中传入 `Authorization: Bearer <token>`。
-> token 过期后返回 401，前端自动跳转登录页。
+`card` / `clarify` / `token` 仅在 `mode=legacy` 出现。
 
-## 项目结构
+## 工作台界面
 
-```
-backend/
-  app/
-    main.py              — FastAPI 入口 + SSE 流处理
-    llm.py               — LLM 统一客户端
-    db.py                — DuckDB 连接管理 (旧版兼容)
-    agent/               — LangGraph Agent
-      security_guard.py  — ⭐ 安全守卫 (规则引擎 + 风险评分)
-      parent_graph.py    — 父图 (8个节点)
-      data_graph.py      — Data SubGraph (Schema发现)
-      sql_graph.py       — SQL SubGraph (生成/执行)
-      report_graph.py    — Report SubGraph (图表/洞察)
-    models/              — Pydantic 契约模型
-    tools/               — 工具注册 (含 risk_level 元数据)
-      __init__.py        — 10个工具的中文决策边界描述
-      registry.py        — ToolRegistry + ToolMetadata
-      data_tools.py      — Schema 发现工具
-      sql_tools.py       — SQL 校验/执行/AST解析 (连接 PostgreSQL)
-      report_tools.py    — 图表/洞察/趋势/异常检测
-    infra/
-      auth/              — JWT 认证 (FastAPI Depends)
-        jwt.py           — token 签发/验证
-        repository.py    — 用户查询
-        deps.py          — FastAPI 依赖注入
-      conversation/      — 会话存储
-        repository.py    — 消息 CRUD
-      db/postgres.py     — asyncpg 连接池
-      trace/             — Trace SDK + 持久化
-      memory/            — MemoryManager + UserMemory + QueryMemory
-      checkpoint/        — Session管理
-    utils/
-      text.py            — 文本工具类
-    embedding/service.py — EmbeddingService (SiliconFlow)
-  scripts/
-    init_pg.sql          — PG 认证/会话建表
-    seed_pg.sql          — PG 分析数据灌入 (10张星型表)
+按原型 1:1 还原（`docs/intelligent-analysis-workbench.html`）：
 
-mcp_schema_server/
-  server.py              — MCP Schema 发现服务
-  registry.py            — 硬编码 Schema 注册 (不依赖 DuckDB)
+- **左栏**：新建分析（青绿按钮）+ 会话分桶（今天/过去 7 天/更早，状态 pill + 相对时间）+ 激活会话的 version-box 时间线
+- **中央**：canvas-head（phase kicker）→ 滚动态（气泡、需求卡、进度卡/错误卡、报告壳）→ **底部浮动对话框**（input + 发送 ↗，placeholder 随 phase 变化）
+- **右栏**：分析助手（phase 完成度 + 需求范围 + report_ready 推荐分析）
+- **需求卡**：左色条（amber/teal）+ AGENT REQUIREMENT BRIEF 刊头 + chips 网格 + 缺失字段 pill 选项 + 假设接受条 + 两步动作（补充完成查看确认 → 确认并生成报告），**无 spinner**
+- **报告壳**：REPORT/v{n} 刊头 + meta（数据范围/分析范围/可信度）+ 核心发现（insight）+ 编号分节（OVERVIEW / VISUALIZATION / EVIDENCE 平铺明细表，展开收起）+ 脚注；内容严格来自真实载荷，**不伪造演示数据**
 
-frontend/
-  src/
-    api/
-      api.ts             — 通用请求封装 (自动带 Authorization)
-      chat.ts            — SSE 流式 chat 客户端
-      sse.ts             — SSE 事件解析器
-    components/
-      chat/              — AgentTimeline, EmptyState
-      layout/            — Navbar, AppShell
-      report/            — ReportRenderer, registry, blocks (Chart/Table/Kpi/Insight/Markdown)
-    pages/
-      LoginPage.tsx      — 深色主题登录页
-      ChatPage.tsx       — 主聊天页 (三态视图切换)
-      HistoryPage.tsx    — 历史会话页
-      TemplateCenter.tsx — 报告模板中心
-      views/
-        ChatView.tsx     — 对话视图
-        RunningView.tsx  — 执行中视图
-        ReportView.tsx   — 报表视图
-    stores/
-      session.ts         — 会话/Zustand store
-      authStore.ts       — 认证 store (+ localStorage persist)
-    theme/
-      antdTheme.ts       — 深色 BI 仪表盘 Design Token
-    types/
-      report.ts          — ReportBlock, SSEEvent, ConversationMessage 等类型
-    adapter/
-      reportAdapter.ts   — 后端 ReportResponse → ReportBlock[]
-    utils/
-      export.ts          — 报告导出 HTML
+视觉 token 全部收敛在 `frontend/src/styles/tokens.css`（不在组件里写新 hex）；图标为 `components/ui/Icons.tsx` 手绘 16×16 描边 SVG。
+
+## 测试
+
+```bash
+# 后端（backend/ 目录）
+pytest                          # 离线套件（persistence/e2e 自动跳过）
+pytest -m graphs                # 图测试（SQL sanitize/重试反馈/FAILED 路由/需求解析）
+pytest -m persistence           # 需 ragent-postgres 起着
+
+# 前端（frontend/ 目录）
+npm run test:run                # vitest 224 用例
+npx tsc -b && npx oxlint        # 类型 + lint
+
+# 真实端到端（需 PG + 后端 :8100 + 真实 LLM key，仓库根目录）
+REPORTAGENT_E2E=1 python -m pytest backend/tests/e2e/test_full_flow.py -s
 ```
 
-## Agent 流程
+e2e 断言真实数据：`query_snapshot.sql` 非空、`answer.table` 有行、模板 CRUD 与用户隔离。
+
+## 项目结构（要点）
 
 ```
-用户输入 → security_guard (规则引擎 + 风险评分)
-  ├── HIGH → 直接拒绝，返回错误
-  └── LOW → classify_intent
-       ├── "闲聊" → 直接结束
-       └── "报表" → data_agent (Schema发现)
-                        ↓
-                  sql_agent (SQL生成+执行+重试)
-                        ↓
-                  evaluate (检查状态)
-                   ├── SUCCESS → report_agent (图表+洞察)
-                   └── NEED_CLARIFICATION → clarify (追问用户)
+backend/app/
+  main.py                      — FastAPI 路由 + SSE v2 + confirm/retry 流
+  agent/
+    requirement_analysis_graph.py — 需求分析图（仅 schema 工具）
+    confirmed_execution_graph.py  — 确认执行图（门控/锁定/FAILED 路由）
+    sql_graph.py               — plan→generate→validate→execute→evaluate→build_output
+    parent_graph.py            — 旧单图流程（mode=legacy）
+  utils/text.py                — extract_sql / strip_think / safe_json_parse
+  services/                    — requirement / report_version / snapshot / template
+  infra/db/                    — asyncpg 池 + requirement/report_version 仓储
+
+frontend/src/
+  components/atelier/          — 18 个组件 + ToastProvider/useToast + atelier.css
+  components/ui/Icons.tsx      — 手绘图标
+  components/workbench/        — Composer / SessionRail / RightRail / ProgressCard /
+                                 ErrorCard / ReportPaper / RequirementCardView / phaseText
+  stores/analysisStore.ts      — zustand+immer，analysisReducer 是唯一 phase 入口
+  api/confirmStream.ts         — confirm/retry SSE 客户端
+  styles/tokens.css + workbench.css — 视觉单一来源
+
+docs/
+  intelligent-analysis-workbench.html — 已批准原型（视觉真源）
+  atelier/MIGRATION.md         — antd→atelier 迁移清单（已全部完成）
+  hand-off.md                  — 现场快照与已知问题
+  plans/                       — 计划存档
 ```
 
-- **Security Guard** 在入口层做 Prompt Injection 风险检测，纯规则匹配 (<1ms)
-- **风险分级:** LOW (放行) / HIGH (阻断)
-- SQL Agent 支持自动重试 (语法错误重试3次，Schema错误重试1次)
-- 追问是唯一调用 `interrupt()` 的节点
-- 所有节点自动记录 Trace
+## 参考文档
 
-## 记忆系统 (Memory Ranking)
-
-统一入口 `MemoryManager`，两个后端：
-
-- **QueryMemory:** 历史 SQL 模板，pgvector 语义搜索 + 关键词混合排序
-  - 排序权重: `semantic×0.5 + success_rate×0.3 + freq×0.1 + recency×0.1`
-  - 字段: `question, sql, schema, target_metric, access_count, failure_count, verified`
-- **UserMemory:** 用户偏好/洞察记录
-  - 排序权重: `semantic×0.6 + importance×0.2 + freq×0.1 + recency×0.1`
-  - 类型: `stable_preference / temporary_preference / insight`
-  - 字段: `content, memory_type, importance_score, access_count`
-
-```sql
--- 安全性：关键词回退使用 LIKE ANY($1::text[]) 参数化查询
-```
-
-## 安全防护 (Security Guard)
-
-四层纵深防御：
-
-| 层 | 机制 | 状态 |
-|----|------|------|
-| 入口 | SecurityGuard 规则引擎 (10条正则，风险评分分级) | ✅ |
-| Agent 隔离 | 各 Agent 只有最小工具集 (无 DDL/DML 能力) | ✅ |
-| SQL 安全 | 三重校验 (关键字黑名单 + AST解析 + EXPLAIN) | ✅ |
-| 数据库 | PostgreSQL 只读查询 (psycopg2, 仅 SELECT) | ✅ |
-
-- SecurityGuard 不引入 LLM 分类器，避免增加延迟
-- 10 条规则覆盖英文 jailbreak、中文变体、SQL DDL、数据泄露
-- score ≥ 3 即阻断，无 MEDIUM 降级（避免不被消费的未使用代码路径）
-- 工具元数据含 `risk_level` (low/medium/high)，引导 LLM 正确调用
+- [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) — 架构与操作指引
+- [docs/state-machine.md](docs/state-machine.md) — phase ↔ LangGraph 状态映射
+- [docs/persistence.md](docs/persistence.md) — DDL 权威
+- [docs/api-reference.md](docs/api-reference.md) / [docs/sse-v2.md](docs/sse-v2.md) — API 与事件协议
+- [docs/contracts/requirement-card.md](docs/contracts/requirement-card.md) — RequirementCard 契约
+- [docs/ui-style-guide.md](docs/ui-style-guide.md) — 视觉规范
