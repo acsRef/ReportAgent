@@ -39,13 +39,13 @@
 
 | 页面 | 当前状态 | 改造难度 | 建议阶段 |
 | --- | --- | --- | --- |
-| `LoginPage.tsx` | 单表单 + 默认主题 | 简单 | 阶段 A |
-| `WorkbenchPage.tsx` | 三栏 + 大量 antd | 中 | 阶段 B |
-| `RequirementCardView.tsx` | Radio.Group / Checkbox.Group | 中 | 阶段 B |
-| `ReportPaper.tsx` | 4 区块 | 简单（已无 antd） | 阶段 B |
-| `TemplateLibraryPage.tsx` | Form + Modal + Popconfirm | 中 | 阶段 C |
-| `SecureReportPage.tsx` | Layout + Spin + Tag | 简单 | 阶段 C |
-| `HistoryPage.tsx` | Typography / Empty | 简单 | 阶段 C |
+| `LoginPage.tsx` | ✅ 阶段 A 完成（atelier Button/TextField + useToast；Form 校验壳保留） | 简单 | 阶段 A |
+| `WorkbenchPage.tsx` | ✅ 阶段 B 完成（TopBar/Dropdown/Avatar/Tag/Empty/Spinner/TextArea 真实组件 + 失败重试横幅） | 中 | 阶段 B |
+| `RequirementCardView.tsx` | ✅ 阶段 B 完成（RadioGroup kind="pill" / CheckboxGroup） | 中 | 阶段 B |
+| `ReportPaper.tsx` | ✅ 阶段 B 完成（现已真正无 antd） | 简单 | 阶段 B |
+| `TemplateLibraryPage.tsx` | ✅ 阶段 C 完成（Modal/Popconfirm/Spinner/Tag/Empty 真实组件；Form 校验壳保留） | 中 | 阶段 C |
+| `SecureReportPage.tsx` | ✅ 阶段 C 完成（已无 antd） | 简单 | 阶段 C |
+| `HistoryPage.tsx` | ✅ 阶段 C 完成（色值 token 化；组件仍为 legacy，阶段 D 删除） | 简单 | 阶段 C |
 | `TemplateCenter.tsx` | Card + Row + Modal + Form | 中（legacy） | 阶段 D（Phase 8 删除时） |
 | `ChatPage.tsx` | Select + Modal + Form | 中（legacy） | 阶段 D |
 | `views/ChatView.tsx` | 大量 inline | 中（legacy） | 阶段 D |
@@ -119,10 +119,10 @@
 
 | 阶段 | 起始 commit | 主要改动 |
 | --- | --- | --- |
-| A | TBD | `LoginPage` + `authStore` + 新增 `useToast` |
-| B | TBD | `WorkbenchPage` + `RequirementCardView` + `TopBar` |
-| C | TBD | `TemplateLibraryPage` + `SecureReportPage` + `HistoryPage` |
-| D | TBD | 删除 legacy，删除 `antd` 依赖 |
+| A | TBD（已完成，待拆分提交） | `LoginPage` + `ToastProvider`/`useToast` + `TextField`/`Button` |
+| B | TBD（已完成，待拆分提交） | `WorkbenchPage` + `RequirementCardView` + `ReportPaper` + `TopBar`/`RadioGroup`/`CheckboxGroup`/`Dropdown`/`Avatar`/`ProgressCircle`/`Stepper` + confirm 失败重试横幅 |
+| C | TBD（已完成，待拆分提交） | `TemplateLibraryPage` + `SecureReportPage` + `HistoryPage` token 化 + `Modal`/`Popconfirm`/`Tooltip` + 删除 `adapters/antd/` 过渡层 |
+| D | TBD | 删除 legacy，删除 `antd` 依赖，Form 校验迁移 react-hook-form |
 
 ## 10. 仍然依赖 antd 的部分（阶段 D 之前保留）
 

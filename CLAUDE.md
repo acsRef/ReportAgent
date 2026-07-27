@@ -26,6 +26,7 @@ Requirements: Python 3.11, Node.js 18+, Docker, a MiniMax API key, and a Silicon
 conda create -n agent python=3.11
 conda activate agent
 pip install -r backend/requirements.txt
+pip install -r backend/requirements-dev.txt   # test deps (pytest, pytest-asyncio); not in main requirements
 pip install -r mcp_schema_server/requirements.txt
 npm --prefix frontend install
 
@@ -60,10 +61,26 @@ Frontend commands:
 cd frontend && npm run dev       # Vite on :3000; /api proxies to :8100
 cd frontend && npm run build     # tsc -b && vite build
 cd frontend && npm run lint      # oxlint, not ESLint
+cd frontend && npm run test:run  # vitest one-shot (`npm run test` for watch mode)
 cd frontend && npm run preview
 ```
 
-There is no test runner, test suite, or single-test command in this repository. Neither backend nor frontend has test configuration, and `frontend/package.json` has no `test` script. Verify backend behavior with authenticated curl requests and verify frontend changes with `npm run build`, `npm run lint`, and manual interaction.
+### Testing
+
+Backend tests use pytest ([backend/pytest.ini](backend/pytest.ini): `asyncio_mode = auto`, `testpaths = tests`, `--strict-markers`); frontend tests use vitest (jsdom, `src/**/__tests__/*.test.ts`). Suites live in `backend/tests/{smoke,contracts,persistence,graphs,e2e}`.
+
+```bash
+# Backend (run from backend/)
+cd backend && pytest                     # full suite
+cd backend && pytest -m smoke            # markers: smoke | contracts | graphs | persistence | api
+cd backend && pytest tests/graphs/test_requirement_parser.py -k "keyword"   # single file / test
+
+# Frontend
+cd frontend && npm run test:run          # vitest --run (one-shot)
+cd frontend && npx vitest --run src/stores/__tests__/analysisReducer.test.ts -t "test name"
+```
+
+`persistence`-marked tests need a running PostgreSQL; [backend/tests/conftest.py](backend/tests/conftest.py) auto-skips them when `DATABASE_URL` is unset, so plain `pytest` works without a database. `e2e`-marked tests are auto-skipped unless `REPORTAGENT_E2E` is set. [backend/tests/e2e/test_full_flow.py](backend/tests/e2e/test_full_flow.py) drives the real API and requires the full stack running (backend on :8100 + PG); run it from the repo root with `python -m pytest backend/tests/e2e/test_full_flow.py -s`. For end-to-end behavior also verify with the authenticated curl requests below, and frontend changes with `npm run build` and `npm run lint`.
 
 ```bash
 # Health check
@@ -219,6 +236,16 @@ Phases 0–7 of [docs/plans/2026-07-24-conversational-workbench.md](docs/plans/2
 | oxlint | 0 errors |
 | `mode=legacy` endpoint | retained on `/api/v1/chat?mode=legacy` for backward compatibility |
 
+## Atelier · 工作室组件库
+
+[`docs/atelier/`](docs/atelier/) is a pure HTML/CSS/JS component library (73+ components) designed to replace Ant Design. The library is built in demo form at `docs/atelier/index.html` (viewable directly in a browser), and its migration is tracked in [`docs/atelier/MIGRATION.md`](docs/atelier/MIGRATION.md).
+
+- **Current phase:** Active migration on `feat/atelier-demo` branch (stages A–C: replace antd with real React components from the atelier set; stage D: remove legacy pages and antd dependency deferred).
+- **Adapter layer:** [`frontend/src/components/atelier/adapters/antd/`](frontend/src/components/atelier/adapters/antd/) is a transitional directory — proxy components that map antd props to atelier props. Slated for deletion at end of stage C.
+- **Component API:** Props follow the `MIGRATION.md` §1 mapping table: `variant`/`tone`/`open`/`actions`/`startAdornment`/`kind="pill"` etc. Visual spec is `docs/atelier/index.html` demo; a11y spec is `MIGRATION.md` §7 keyboard table.
+- **Design tokens:** in `frontend/src/styles/tokens.css` and `docs/atelier/tokens.css`. All AntD component tokens overridden; the teal family replaces AntD default `#1677ff`.
+- **Active plan:** [`docs/plans/2026-07-27-bugfix-atelier-migration.md`](docs/plans/2026-07-27-bugfix-atelier-migration.md) — SQL empty-data bug fix + atelier migration stages A–C.
+
 ## Reference Documents
 
 - [README.md](README.md) — setup, endpoints, current UI, and architecture overview.
@@ -230,7 +257,11 @@ Phases 0–7 of [docs/plans/2026-07-24-conversational-workbench.md](docs/plans/2
 - [docs/api-reference.md](docs/api-reference.md), [docs/sse-v2.md](docs/sse-v2.md) — API surface and SSE v2 event protocol.
 - [docs/contracts/](docs/contracts/) — backend/frontend contract mirrors (start with [docs/contracts/requirement-card.md](docs/contracts/requirement-card.md)).
 - [docs/ui-style-guide.md](docs/ui-style-guide.md), [docs/code-style-conventions.md](docs/code-style-conventions.md) — visual and code conventions.
-- [docs/plans/2026-07-24-conversational-workbench.md](docs/plans/2026-07-24-conversational-workbench.md) — **active 8-phase rework plan**; supersedes older plans where they conflict.
+- [docs/hand-off.md](docs/hand-off.md) — session hand-off notes, known bugs, and resume guide for the current branch.
+- [docs/atelier/README.md](docs/atelier/README.md) — atelier component library overview and component catalog.
+- [docs/atelier/MIGRATION.md](docs/atelier/MIGRATION.md) — antd → atelier migration checklist with API mappings and stages.
+- [docs/plans/2026-07-27-bugfix-atelier-migration.md](docs/plans/2026-07-27-bugfix-atelier-migration.md) — **active plan** for SQL bug fixes + atelier migration stages A–C.
+- [docs/plans/2026-07-24-conversational-workbench.md](docs/plans/2026-07-24-conversational-workbench.md) — shipped 8-phase rework plan; supersedes older plans where they conflict.
 - [docs/plans/2026-07-24-intelligent-analysis-workbench-design.md](docs/plans/2026-07-24-intelligent-analysis-workbench-design.md) — design rationale for the workbench.
 - [docs/plans/2026-07-22-frontend-ui-refactor.md](docs/plans/2026-07-22-frontend-ui-refactor.md) — earlier frontend refactor plan; design-token work overlaps with the active plan.
 - [docs/plans/2026-07-24-intelligent-analysis-workbench-html.md](docs/plans/2026-07-24-intelligent-analysis-workbench-html.md) — implementation plan for the approved HTML prototype.

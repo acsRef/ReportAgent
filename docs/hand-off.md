@@ -19,8 +19,8 @@
 | `oxlint` | ✅ 0 errors |
 | 后端 `/health` | ✅ 200 OK（在 8100 上跑着） |
 | 前端 Vite | ✅ 200 OK（在 3000 上跑着） |
-| **真实端到端（curl 走 chat→PATCH→confirm）** | ⚠️ **半通**：requirement card 正常；v1 报告写出但**SQL 没数据**（chart=`{type:table, config:{}}`, table=`null`, insight=`null`, query_snapshot=`null`） |
-| **浏览器 Playwright E2E** | ❌ **未通过**：浏览器侧 requirement card 浮现延迟 + Vite 代理 SSE buffer，导致 smoke 120s 超时 |
+| **真实端到端（chat→PATCH→confirm）** | ✅ **通过**（2026-07-27 修复验证）：e2e 断言真实 SQL + table 23 行 + bar chart + query_snapshot；失败路径发 SSE `error` 事件且不落垃圾报告 |
+| **浏览器 Playwright E2E** | ⚠️ 手动门：`browser_test_query.mjs`（需装 playwright + Edge）；Vite 代理已调优，未接入 CI |
 | **`文档智能分析工作台` UI 风格一致性** | ✅ 已统一到 `tokens.css` + `antdTheme.ts` |
 
 **结论**：架构完成、契约定稿、测试通过率全绿；最致命的剩余问题是 **SQL 阶段不产出数据**（即使后端用户已 PATCH `complete`），浏览器冒烟卡在 Vite proxy buffer。
@@ -95,7 +95,7 @@ User ←SSE→ React + Vite (:3000) → /api proxy → FastAPI + LangGraph (:810
 
 ## 3. 已知 Bug 与未解决问题（**这是文档的核心**）
 
-### 3.1 🔴 **SQL 阶段不产出数据**（最致命，已确认）
+### 3.1 ✅ **SQL 阶段不产出数据**（已修复 2026-07-27：think 块 sanitize 集中到 `utils/text.extract_sql` + planner 权威查询合成 + `answer.table` 真实构建 + 图路由 FAILED 跳过 persist 并发 SSE `error`；e2e 收紧断言后真实通过）
 
 **症状**：
 - 用户输入"查询2024年各区域销售额排名"
@@ -135,7 +135,7 @@ User ←SSE→ React + Vite (:3000) → /api proxy → FastAPI + LangGraph (:810
 4. 若 `_plan` 跑出 SQL 但 `execute_sql` 失败，看 `tools/sql_tools.py` 的安全层拒了什么。
 5. 把相关日志贴出来再继续。
 
-### 3.2 🟡 Playwright 浏览器 smoke 120s 超时
+### 3.2 🟡 Playwright 浏览器 smoke 120s 超时（部分缓解：vite 代理 selfHandleResponse/timeout 已调；smoke 等待放宽到 180s；仍为手动门）
 
 **症状**：
 - smoke 跑 `登录 → 提交查询 → 等待 确认执行 按钮（120s）→ ...`，永远超时。
@@ -156,7 +156,7 @@ node -e "fetch('http://127.0.0.1:8100/api/v1/chat', { method:'POST', headers:{Au
 
 如果上面能在 5s 内拿到完整的 `event: requirement\ndata: {...}` 帧，就证实 Vite 代理是瓶颈。
 
-### 3.3 🟡 `query_snapshot` 在 v1 report 为 `null`
+### 3.3 ✅ `query_snapshot` 在 v1 report 为 `null`（已修复：SQL 成功后 snapshot 正常写入，e2e 断言 `snapshot.sql` 非空 + rows 存在）
 
 **症状**：v1 report 的 `query_snapshot=null`。
 

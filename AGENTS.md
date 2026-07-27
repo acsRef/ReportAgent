@@ -15,14 +15,12 @@ User ←SSE→ React+Vite (:3000) → proxy /api → FastAPI+LangGraph (:8100)
                                               ↓ MCP
                                          MCP Schema Server
                                               ↓
-                                         PostgreSQL (all data — analytical + session + trace + memory)
+                                         PostgreSQL (all data)
 ```
 
-Business data moved from DuckDB to PostgreSQL `public` schema in migration. DuckDB path is legacy (`backend/app/db.py` marked 旧版兼容).
+**PostgreSQL schemas:** `public` (dim/fact tables via `seed_pg.sql`), `app` (users, conversations), `agent` (session, requirement_draft, report_version), `memory` (query_template VECTOR(1536), semantic_entry), `observability` (trace spans, LLM calls).
 
-**PostgreSQL schemas:** `public` (dim/fact tables via `seed_pg.sql`), `app` (users, conversations via `init_pg.sql`), `agent` (session), `memory` (query_template VECTOR(1536), semantic_entry), `observability` (trace spans, LLM calls).
-
-## Key Commands
+## Commands
 
 | Purpose | Command |
 |---------|---------|
@@ -32,46 +30,78 @@ Business data moved from DuckDB to PostgreSQL `public` schema in migration. Duck
 | Frontend build | `cd frontend && npm run build` (tsc -b && vite build) |
 | Frontend lint | `cd frontend && npm run lint` (oxlint, not eslint) |
 | Frontend preview | `cd frontend && npm run preview` |
-| Login (default) | `curl -X POST http://localhost:8100/api/v1/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'` |
-| Test API | `curl -X POST http://localhost:8100/api/v1/chat -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"user_query":"今年华东销售趋势","session_id":"test-1"}'` |
-| Health check | `curl http://localhost:8100/health` |
 
-**No tests exist.** All verification manual via curl. No CI.
+## Testing
 
-## Setup
+**Backend (pytest):** Run from `backend/`. `asyncio_mode=auto`, `testpaths=tests`, strict markers.
 
+| Command | Purpose |
+|---------|---------|
+| `pytest` | Full suite |
+| `pytest -m smoke` | Smoke tests only |
+| `pytest -m contracts` | Frontend/backend contract parity |
+| `pytest -m graphs` | LangGraph tests |
+| `pytest -m persistence` | PostgreSQL-dependent tests (auto-skip if `DATABASE_URL` unset) |
+| `pytest tests/smoke/test_models.py -k "keyword"` | Single file + keyword filter |
+| `python -m pytest tests/e2e/test_full_flow.py -s` | E2E (requires full stack) |
+
+Markers defined in `backend/pytest.ini`: `smoke`, `persistence`, `graphs`, `contracts`, `api`, `e2e`.
+
+**Frontend (vitest):** Run from `frontend/`. jsdom environment, `src/**/__tests__/` directory.
+
+| Command | Purpose |
+|---------|---------|
+| `npm run test:run` | Vitest one-shot |
+| `npm run test` | Vitest watch mode |
+| `npx vitest --run src/stores/__tests__/analysisReducer.test.ts -t "test name"` | Single file + test name |
+
+**Manual test:**
 ```bash
-conda create -n agent python=3.11; conda activate agent
-pip install -r backend/requirements.txt
-pip install -r mcp_schema_server/requirements.txt
-cd frontend && npm install
-docker run -d --name ragent-postgres -e POSTGRES_USER=ragent -e POSTGRES_PASSWORD=ragent -e POSTGRES_DB=ragent -p 5432:5432 pgvector/pgvector:0.7.0-pg15
-docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/init_pg.sql
-docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_pg.sql
+curl -X POST http://localhost:8100/api/v1/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'
+curl -X POST http://localhost:8100/api/v1/chat -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"user_query":"今年华东销售趋势","session_id":"test-1"}'
+curl http://localhost:8100/health
 ```
 
-**.env** (create manually, no `.env.example`): `MINIMAX_API_KEY`, `SILICONFLOW_API_KEY`, `DATABASE_URL`, `LLM_MODEL`, `LLM_BASE_URL`, `EMBEDDING_DIM` (must be 1536 to match VECTOR(1536) in `init_pg.sql`). `LLM_API_KEY` also accepted — falls back to `MINIMAX_API_KEY`. Both also populate `OPENAI_API_KEY` automatically in `main.py`.
+## Code Style — Python (Backend)
 
-## JWT Auth
+- **Imports:** stdlib first, then third-party, then local. Group with blank lines. `from __future__ import annotations` at the top.
+- **Types:** Always annotate function signatures. Use `X | None` not `Optional[X]`. Use Pydantic v2 `BaseModel` + `Field` + `model_validator`.
+- **Naming:** `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE` for constants. Private helpers prefixed with `_`.
+- **Error handling:** Catch specific exceptions; `logger.warning` for recoverable, `raise` for fatal. Log with `%s` formatting, not f-strings. Avoid bare `except:`.
+- **Patterns:** Module-level lazy singletons with explicit getter (e.g. `get_connection()`). Globals OK for connections.
+- **Database:** `asyncpg` queries must use `$1` parameter binding (no string concatenation). All writes scoped by `(user_id, session_id)` from JWT context (never request body). Writes belong in a single `async with pool.acquire()` transaction.
+- **Lint:** `ruff check` equivalent.
 
-All `/api/v1/chat`, `/api/v1/sessions`, `/api/v1/conversations/{session_id}` require `Authorization: Bearer <token>`. Token from `/api/v1/auth/login`. Default: admin/admin123. Frontend auto-redirects to `/login` on 401.
+## Code Style — TypeScript/React (Frontend)
+
+- **Imports:** React/external first, then local relative. Use `import type` for type-only imports. `verbatimModuleSyntax` enabled.
+- **Types:** Prefer `interface` for Props/State, `type` for unions/utilities. Use discriminated unions over `Record<string, unknown>`. SSE type guards required; no `unknown` into reducer.
+- **Components:** Default export function components. Props interface named `Props` (local per file). No class components.
+- **State:** Zustand stores with pure reducers. `analysisReducer` is the single source of truth — React components never write `phase` directly. Use immer middleware.
+- **Styling:** Use CSS variables from `src/styles/tokens.css` + Ant Design `ConfigProvider` theme (`src/theme/antdTheme.ts`). No inline style magic values. No `!important`. No global CSS selectors.
+- **Design tokens** (single source of truth in `tokens.css`): `--ink`, `--teal`, `--paper`, `--canvas`, `--rail`, `--muted`, `--amber`, `--red`, `--green`, `--font-display`, `--font-ui`, `--font-mono`. AntD theme mirrors these exactly.
+- **State machine:** `AnalysisPhase` transitions live in both backend and frontend reducer. Frontend mirrors backend SSE `phase` events.
+- **Lint:** oxlint (not eslint). `react/rules-of-hooks: error`, `react/only-export-components: warn`.
 
 ## SSE Event Protocol
 
 | event | purpose |
 |-------|---------|
-| `token` | streaming LLM text (report node only) |
-| `trace` | agent step update {step, status, detail} |
+| `token` | streaming LLM text (report node only, legacy mode) |
+| `trace` | agent step update `{step, status, detail}` |
 | `thinking` | lightweight "planning" hint pre-SQL |
-| `card` | interactive cards (intent_card / options_group / preview_card / confirm_card) |
-| `report` | final answer {answer: {text, table, chart, insight}} |
-| `clarify` | clarification question |
-| `error` | error message |
-| `done` | stream end |
+| `card` | interactive cards (legacy mode: intent_card / options_group / preview_card / confirm_card) |
+| `report` | final answer `{answer: {text, table, chart, insight}}` |
+| `phase` | workbench phase transition (v2: parsing / awaiting_missing / awaiting_confirm / generating / adjusting / report_ready / error) |
+| `requirement` | full `RequirementCard` (v2) |
+| `clarify` | clarification question (legacy) |
+| `error` | `{code, message, recoverable, failed_action}` |
+| `done` | `{final_phase}` |
 
-**2-stage intent card flow:** agent emits `intent_card` → user picks option → frontend sends `chosen_tool` in next `/api/v1/chat` request (with same `session_id`). State resumes via LangGraph `update_state`.
+**v2 flow:** `POST /api/v1/chat` with `mode: new|supplement` → `phase` → `requirement` → PATCH endpoint → `POST /confirm` → `phase: generating` → `report` → `done`.
+**Legacy flow:** `mode=legacy` → `intent_card` → user picks tool → `chosen_tool` in next request → SQL/report → `report` → `done`.
 
-## Agent Graph
+## Agent Graph (Legacy)
 
 ```
 User Query → security_guard (score ≥ 3 → block)
@@ -81,61 +111,23 @@ User Query → security_guard (score ≥ 3 → block)
        └─ NEED_CLARIFICATION → clarify_node (interrupt) → data_agent
 ```
 
-- `clarify` is the **only** node calling `interrupt()` — SubGraphs never interrupt
-- SubGraphs run via `.ainvoke()` inside parent nodes (not LangGraph sub-graphs)
-- Checkpoint saves Parent State only (SubStates are ephemeral)
-- `original_query` frozen; `current_query` enhanced with clarification context
-
-## SQL Retry Logic
-
-**Internal (sql_graph):** syntax error → regenerate (max 3×), schema error → replan (1×), exhausted → `NEED_CLARIFICATION`
-**Parent graph:** SQL fail → retry `sql_agent` (max 3×) instead of falling through to `report_agent`
+- `clarify` is the only node calling `interrupt()`. SubGraphs run via `.ainvoke()` (not LangGraph sub-graphs).
+- Checkpoint saves Parent State only. `original_query` frozen; `current_query` enhanced with clarification context.
 
 ## SQL Safety (3 Layers)
 
 1. Blacklist: reject non-SELECT (DDL/DML keywords)
 2. AST: `sqlglot` verifies parsed result is `Select`
-3. EXPLAIN: run `EXPLAIN <sql>` to catch DuckDB-specific syntax errors
-
-## Memory System
-
-Entry point: `infra/memory/memory_manager.py`. Two backends:
-- **QueryMemory** (`memory.query_template`): pgvector + keyword hybrid search. Score: `semantic×0.5 + success_rate×0.3 + freq×0.1 + recency×0.1`
-- **UserMemory** (`memory.semantic_entry`): Score: `semantic×0.6 + importance×0.2 + freq×0.1 + recency×0.1`
-- Embedding API failure → graceful fallback to `ILIKE ANY($1::text[])` parameterized keyword matching
-
-## TSD-Encrypted Source Files
-
-Many `.py` files show `%TSD-Header-###%` (encrypted placeholders). Read via `git show HEAD:<path>`. Only `main.py`, `llm.py`, and empty `__init__.py` are readable directly.
-
-## Code Style — Python (Backend)
-
-- **Imports:** stdlib first, then third-party, then local. Group with blank lines. Use `from __future__ import annotations` at top of every file.
-- **Types:** Always annotate function signatures. Use `|` for unions (`str | None` not `Optional[str]`). Use `BaseModel` from pydantic for data contracts.
-- **Naming:** `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE` for constants. Private helpers prefixed with `_`.
-- **Error handling:** Catch specific exceptions; use `logger.warning` for recoverable errors, `raise` for fatal. Avoid bare `except:`. Log exceptions with `%s` formatting.
-- **Patterns:** Module-level lazy singletons (e.g. `_conn_rw: DuckDBPyConnection | None = None` with getter). Globals acceptable for connections.
-- **Docstrings:** Optional. Comments in Chinese for domain concepts, English for technical notes.
-
-## Code Style — TypeScript/React (Frontend)
-
-- **Imports:** React/external first, then local relative. Use `import type` for type-only imports. `verbatimModuleSyntax` enabled.
-- **Types:** Prefer `interface` for Props/State, `type` for unions/utilities. Use `Record<string, unknown>` for dynamic data.
-- **Components:** Default export function components. Props interface named `Props` (local to file). No class components.
-- **Styling:** Inline `style={{}}` objects (no CSS modules/tailwind). Ant Design `Typography`. Color tokens: `#1677ff` (primary), `#e8e8e8` (border), `#f0f0f0` (divider), `#8f959e`/`#646a73` (secondary), `#1f2329` (body).
-- **State:** Zustand only. No Redux/Context. Store interfaces inline in `create<>()`.
-- **Imports from `antd`:** Destructure specific components. Avoid `import antd from 'antd'`.
-- **Error handling:** `try/catch` with `err instanceof Error` narrowing. `catch { /* ignore */ }` for non-critical JSON parsing.
+3. EXPLAIN: run `EXPLAIN <sql>` before execution
 
 ## Known Quirks
 
-- `__init__.py` files are intentionally 0 bytes (namespace packages, Python 3.3+)
+- `__init__.py` files are intentionally 0 bytes (namespace packages)
 - `infra/trace/repository.py` uses raw `asyncpg` (not `infra/db/postgres.py` pool) — pool integration not wired
 - MCP Schema Server's `registry.py` and `app/tools/data_tools.py` are **two independent** keyword schema-matching implementations
-- `POST /api/v1/chat` `session_id` doubles for new session and checkpoint resume
+- Session persisted in `localStorage` key `ragent_session_id` (Zustand, 24h TTL). Auth store key: `ragent_auth`.
 - Frontend TypeScript ~6.0; lint uses oxlint, not eslint
-- Embedding uses SiliconFlow API (`.env`: `SILICONFLOW_API_KEY`), separate from LLM (MiniMax)
-- Session persisted in `localStorage` key `ragent_session_id` (Zustand, `stores/session.ts`, 24h TTL). Auth store key: `ragent_auth`.
-- LLM timeout on frontend: 180s. Error message in Chinese.
-- Frontend locale: `zh_CN` via Ant Design.
-- `.claude/settings.local.json` contains stale permission paths referencing `d:/PyProject/ragent-py/`.
+- TSD-encrypted `.py` files: read via `git show HEAD:<path>` instead of working tree bytes
+- Embedding uses SiliconFlow API (`.env`: `SILICONFLOW_API_KEY`), separate from LLM (MiniMax). Falls back to `ILIKE ANY($1::text[])` on failure.
+- `.env` must set `EMBEDDING_DIM=1536` to match `VECTOR(1536)` in `init_pg.sql`
+- Startup verifies embedding dimension; failure degrades to keyword matching (non-blocking)
