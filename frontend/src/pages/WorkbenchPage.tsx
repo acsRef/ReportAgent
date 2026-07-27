@@ -395,7 +395,7 @@ export default function WorkbenchPage() {
               onConfirm={async () => {
                 await handlePatchAndConfirm(requirement)
               }}
-              confirming={patching || confirming}
+              onFocusComposer={() => composerRef.current?.focus()}
             />
           )}
 
@@ -464,7 +464,7 @@ export default function WorkbenchPage() {
             value={composer}
             onChange={setComposer}
             onSubmit={() => handleSend()}
-            disabled={busy || sending}
+            disabled={busy || sending || patching || confirming}
             placeholder={composerPlaceholder(phase)}
           />
         </main>

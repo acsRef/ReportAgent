@@ -1,40 +1,36 @@
-import { Title, Paragraph } from '../atelier/Typography'
-import { CheckOutlined, CloseOutlined } from '@ant-design/icons'
-import Button from '../atelier/Button'
-import Tag from '../atelier/Tag'
 import RadioGroup from '../atelier/RadioGroup'
 import CheckboxGroup from '../atelier/CheckboxGroup'
-import { useToast } from '../atelier/useToast'
-import type { RequirementCard as RC } from '../../types/requirement'
+import { isDraftReadyForReview, type RequirementCard as RC } from '../../types/requirement'
 
 interface Props {
   card: RC
   onChange: (next: RC) => void
   onConfirm: () => void
-  confirming?: boolean
+  /** Focuses the composer (prototype: 继续对话补充). */
+  onFocusComposer?: () => void
 }
 
-const STATUS_COLOR: Record<RC['status'], 'amber' | 'teal' | 'ink'> = {
-  missing: 'amber',
-  complete: 'teal',
-  locked: 'ink',
+const STATUS_PILL: Record<RC['status'], string> = {
+  missing: '', // computed with count
+  complete: '信息完整 · 待确认',
+  locked: '✓ 已确认',
 }
 
-export default function RequirementCardView({ card, onChange, onConfirm, confirming }: Props) {
-  const toast = useToast()
-
-  const unfilled = card.missing_fields.filter((mf) => {
-    const v = mf.selected_value
-    return v === null || v === '' || (Array.isArray(v) && v.length === 0)
-  })
-  const unresolved = card.assumptions.filter((a) => a.accepted === null)
-  const canConfirm = unfilled.length === 0 && unresolved.length === 0
+/**
+ * Requirement card per docs/intelligent-analysis-workbench.html:
+ * left accent bar by status, kicker + status pill head, serif summary,
+ * chips grid, missing-zone with option pills + assumption bar, footer
+ * actions. No spinner anywhere — busy states live in the composer and
+ * the progress card (WorkbenchPage).
+ */
+export default function RequirementCardView({ card, onChange, onConfirm, onFocusComposer }: Props) {
+  const ready = isDraftReadyForReview(card)
 
   function setSelectedValue(key: string, value: string | string[] | null) {
     onChange({
       ...card,
-      missing_fields: card.missing_fields.map((mf) =>
-        mf.key === key ? { ...mf, selected_value: value } : mf,
+      missing_fields: card.missing_fields.map((field) =>
+        field.key === key ? { ...field, selected_value: value } : field,
       ),
     })
   }
@@ -42,171 +38,159 @@ export default function RequirementCardView({ card, onChange, onConfirm, confirm
   function setAssumptionAccepted(key: string, accepted: boolean) {
     onChange({
       ...card,
-      assumptions: card.assumptions.map((a) =>
-        a.key === key ? { ...a, accepted } : a,
+      assumptions: card.assumptions.map((assumption) =>
+        assumption.key === key ? { ...assumption, accepted } : assumption,
       ),
     })
   }
 
-  async function handleConfirm() {
-    if (unfilled.length > 0) {
-      toast.warning(`还有 ${unfilled.length} 个字段未选择`)
-      return
-    }
-    if (unresolved.length > 0) {
-      toast.warning(`还有 ${unresolved.length} 个待确认假设未表态`)
-      return
-    }
-    const promoted: RC = {
-      ...card,
-      status: 'complete',
-      confirmed_at: null,
-    }
-    onChange(promoted)
-    onConfirm()
+  function handleReview() {
+    onChange({ ...card, status: 'complete', confirmed_at: null })
   }
 
+  function handleModify() {
+    onChange({ ...card, status: 'missing', confirmed_at: null })
+  }
+
+  const pill = card.status === 'missing' ? `需要补充 ${card.missing_fields.length} 项` : STATUS_PILL[card.status]
+
   return (
-    <div
-      style={{
-        background: 'var(--paper)',
-        border: '1px solid var(--line)',
-        borderRadius: 'var(--r-m)',
-        padding: 'var(--sp-l)',
-        boxShadow: 'var(--shadow-soft)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <Title
-          level={4}
-          style={{
-            fontFamily: 'var(--font-display)',
-            color: 'var(--ink)',
-            margin: 0,
-            fontSize: 18,
-          }}
-        >
-          需求卡
-        </Title>
-        <Tag tone={STATUS_COLOR[card.status]} style={{ fontWeight: 600 }}>
-          {card.status.toUpperCase()}
-        </Tag>
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted)' }}>
-          置信度 {(card.confidence * 100).toFixed(0)}%
-        </span>
+    <div className={`wb-requirement-card ${card.status} wb-reveal`}>
+      <div className="wb-req-head">
+        <div>
+          <div className="wb-req-kicker">AGENT REQUIREMENT BRIEF</div>
+          <h3 className="wb-req-title">需求解析与执行确认</h3>
+        </div>
+        <span className="wb-req-status">{pill}</span>
       </div>
 
-      <Paragraph
-        style={{ color: 'var(--ink-2)', fontSize: 13, marginBottom: 18, fontFamily: 'var(--font-display)' }}
-      >
-        {card.summary}
-      </Paragraph>
+      <div className="wb-req-summary">{card.summary}</div>
 
-      {card.missing_fields.length > 0 && (
-        <>
-          <SectionTitle>待补充 ({card.missing_fields.length})</SectionTitle>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, width: '100%' }}>
-            {card.missing_fields.map((mf) => (
-              <div key={mf.key}>
-                <div
-                  style={{
-                    fontSize: 11,
-                    letterSpacing: 1.2,
-                    color: 'var(--muted)',
-                    textTransform: 'uppercase',
-                    fontWeight: 700,
-                    marginBottom: 6,
-                  }}
-                >
-                  {mf.label}
-                </div>
-                {mf.kind === 'single' ? (
+      <div className="wb-req-body">
+        <div className="wb-req-grid">
+          <div>
+            <div className="wb-req-label">核心指标</div>
+            <div className="wb-chips">
+              {card.target_metrics.map((metric) => (
+                <span key={metric} className="wb-chip">{metric}</span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="wb-req-label">时间与范围</div>
+            <div className="wb-chips">
+              <span className="wb-chip">{card.time_range ?? '时间待补充'}</span>
+              {card.scope.length > 0
+                ? card.scope.map((item) => <span key={item} className="wb-chip">{item}</span>)
+                : <span className="wb-chip">范围待补充</span>}
+            </div>
+          </div>
+          <div>
+            <div className="wb-req-label">分析维度</div>
+            <div className="wb-chips">
+              {card.dimensions.map((dimension) => (
+                <span key={dimension} className="wb-chip">{dimension}</span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="wb-req-label">建议分析方法</div>
+            <div className="wb-chips">
+              {card.analysis_methods.map((method) => (
+                <span key={method} className="wb-chip method">{method}</span>
+              ))}
+            </div>
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <div className="wb-req-label">预计报告内容</div>
+            <div className="wb-chips">
+              {card.expected_blocks.map((block) => (
+                <span key={block} className="wb-chip block">{block}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {card.status === 'missing' && (card.missing_fields.length > 0 || card.assumptions.length > 0) && (
+          <div className="wb-missing-zone">
+            <div className="wb-missing-heading">
+              <span className="wb-missing-title">需要你确认的信息</span>
+              <span className="wb-missing-note">选项由后端根据当前问题返回</span>
+            </div>
+
+            {card.missing_fields.map((field) => (
+              <div key={field.key} className="wb-option-group">
+                <div className="wb-option-label">{field.label}</div>
+                {field.kind === 'single' ? (
                   <RadioGroup
                     kind="pill"
-                    options={mf.options.map((o) => ({ value: o.value, label: o.label }))}
-                    value={mf.selected_value as string | null}
-                    onChange={(val) => setSelectedValue(mf.key, val)}
+                    options={field.options.map((option) => ({ value: option.value, label: option.label }))}
+                    value={field.selected_value as string | null}
+                    onChange={(value) => setSelectedValue(field.key, value)}
                   />
                 ) : (
                   <CheckboxGroup
-                    options={mf.options.map((o) => ({ value: o.value, label: o.label }))}
-                    value={(mf.selected_value as string[] | undefined) ?? []}
-                    onChange={(vals) => setSelectedValue(mf.key, vals)}
+                    options={field.options.map((option) => ({ value: option.value, label: option.label }))}
+                    value={(field.selected_value as string[] | undefined) ?? []}
+                    onChange={(values) => setSelectedValue(field.key, values)}
                   />
                 )}
               </div>
             ))}
-          </div>
-        </>
-      )}
 
-      {card.assumptions.length > 0 && (
-        <>
-          <SectionTitle>待确认假设 ({card.assumptions.length})</SectionTitle>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
-            {card.assumptions.map((a) => (
-              <div
-                key={a.key}
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 10,
-                  padding: '8px 10px',
-                  background: a.accepted === true ? 'var(--teal-pale)' : a.accepted === false ? 'var(--red-soft)' : 'var(--canvas)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 6,
-                }}
-              >
-                <Button
-                  size="sm"
-                  variant={a.accepted === true ? 'primary' : 'default'}
-                  onClick={() => setAssumptionAccepted(a.key, true)}
-                >
-                  <CheckOutlined />
-                </Button>
-                <Button
-                  size="sm"
-                  variant={a.accepted === false ? 'primary' : 'danger'}
-                  onClick={() => setAssumptionAccepted(a.key, false)}
-                >
-                  <CloseOutlined />
-                </Button>
-                <span style={{ flex: 1, color: 'var(--ink-2)', fontSize: 12 }}>{a.text}</span>
+            {card.assumptions.map((assumption) => (
+              <div key={assumption.key} className="wb-assumption" style={{ marginBottom: 6 }}>
+                <span>Agent 暂时假设：{assumption.text}</span>
+                <span className="wb-assumption-actions">
+                  <button
+                    type="button"
+                    className={assumption.accepted === true ? 'wb-mini-btn accepted' : 'wb-mini-btn'}
+                    onClick={() => setAssumptionAccepted(assumption.key, true)}
+                  >
+                    {assumption.accepted === true ? '✓ 已接受' : '接受'}
+                  </button>
+                  {assumption.accepted !== true && (
+                    <button
+                      type="button"
+                      className="wb-mini-btn"
+                      onClick={() => setAssumptionAccepted(assumption.key, false)}
+                    >
+                      修改
+                    </button>
+                  )}
+                </span>
               </div>
             ))}
           </div>
-        </>
-      )}
-
-      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
-        <Button
-          variant="primary"
-          disabled={!canConfirm}
-          loading={confirming}
-          onClick={handleConfirm}
-        >
-          确认执行
-        </Button>
+        )}
       </div>
-    </div>
-  )
-}
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        fontSize: 10,
-        letterSpacing: 1.4,
-        color: 'var(--muted)',
-        textTransform: 'uppercase',
-        fontWeight: 700,
-        margin: '14px 0 8px',
-        borderTop: '1px solid var(--line)',
-        paddingTop: 10,
-      }}
-    >
-      {children}
+      {card.status !== 'locked' && (
+        <div className="wb-req-actions">
+          <span className="wb-req-hint">确认后 Agent 才会查询数据并生成报告</span>
+          <span className="wb-action-group">
+            {card.status === 'missing' ? (
+              <>
+                <button type="button" className="wb-secondary" onClick={onFocusComposer}>
+                  继续对话补充
+                </button>
+                <button type="button" className="wb-primary" disabled={!ready} onClick={handleReview}>
+                  补充完成，查看确认
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" className="wb-secondary" onClick={handleModify}>
+                  修改需求
+                </button>
+                <button type="button" className="wb-primary" onClick={onConfirm}>
+                  确认并生成报告
+                </button>
+              </>
+            )}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

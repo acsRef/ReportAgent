@@ -61,3 +61,16 @@ export function isRequirementReadyForConfirmation(
     requirement.assumptions.every((assumption) => assumption.accepted !== null)
   )
 }
+
+/**
+ * Whether a `missing` draft can advance to review: every missing field
+ * has a non-empty selected_value and every assumption got a verdict.
+ */
+export function isDraftReadyForReview(card: RequirementCard): boolean {
+  const allSelected = card.missing_fields.every((field) => {
+    const value = field.selected_value
+    return value !== null && value !== '' && !(Array.isArray(value) && value.length === 0)
+  })
+  const allResolved = card.assumptions.every((assumption) => assumption.accepted !== null)
+  return allSelected && allResolved
+}
