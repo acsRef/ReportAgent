@@ -1,16 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Text, Title, Paragraph } from '../components/atelier/Typography'
+import { Text, Paragraph } from '../components/atelier/Typography'
 import { LogoutOutlined, PlusOutlined } from '@ant-design/icons'
 import Button from '../components/atelier/Button'
-import Tag from '../components/atelier/Tag'
-import TextArea from '../components/atelier/TextArea'
 import Spinner from '../components/atelier/Spinner'
-import Empty from '../components/atelier/Empty'
 import Avatar from '../components/atelier/Avatar'
 import TopBar from '../components/atelier/TopBar'
 import Dropdown from '../components/atelier/Dropdown'
 import { useToast } from '../components/atelier/useToast'
+import Composer from '../components/workbench/Composer'
+import { UserBubble, AgentBubble } from '../components/workbench/MessageBubbles'
+import WorkbenchEmpty from '../components/workbench/WorkbenchEmpty'
+import ParsingCard from '../components/workbench/ParsingCard'
+import {
+  agentCopy,
+  canvasKicker,
+  chatModeForPhase,
+  composerPlaceholder,
+} from '../components/workbench/phaseText'
 import { useAnalysisStore } from '../stores/analysisStore'
 import { canRetryFailedAction, isBusyPhase } from '../stores/analysisReducer'
 import { useAuthStore } from '../stores/authStore'
@@ -49,6 +56,9 @@ export default function WorkbenchPage() {
   const [confirming, setConfirming] = useState(false)
   const busy = isBusyPhase(phase)
   const [focusMode, setFocusMode] = useState(false)
+  const [lastQuestion, setLastQuestion] = useState<string | null>(null)
+  const composerRef = useRef<HTMLInputElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -57,6 +67,13 @@ export default function WorkbenchPage() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // Smooth-scroll to the bottom when a report lands (prototype behavior).
+  useEffect(() => {
+    if (phase === 'report_ready' && scrollRef.current) {
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight })
+    }
+  }, [phase, reportVersions.length])
 
   useEffect(() => {
     let cancelled = false
@@ -103,19 +120,27 @@ export default function WorkbenchPage() {
   function handleNewAnalysis() {
     dispatch({ type: 'analysis/reset' })
     setComposer('')
+    setLastQuestion(null)
   }
 
-  function handleSend() {
-    const text = composer.trim()
+  function handleSend(textOverride?: string) {
+    const text = (textOverride ?? composer).trim()
     if (!text || sending) return
     setSending(true)
     setComposer('')
+    setLastQuestion(text)
     const sid = activeSessionId ?? crypto.randomUUID()
     if (!activeSessionId) {
       dispatch({ type: 'session/selected', sessionId: sid })
     }
+    const mode = chatModeForPhase(phase)
     openChat(
-      { user_query: text, mode: 'new', session_id: sid },
+      {
+        user_query: text,
+        mode,
+        session_id: sid,
+        base_report_version: mode === 'adjust' ? selectedReportVersion : undefined,
+      },
       (evt) => handleSSEEvent(evt, toast, setSending),
     )
     setTimeout(() => {
@@ -131,6 +156,10 @@ export default function WorkbenchPage() {
 
   function handleSelectSession(sessionId: string) {
     dispatch({ type: 'session/selected', sessionId })
+    setLastQuestion(
+      (sessions.find((s) => s.session_id === sessionId) as { first_message?: string } | undefined)
+        ?.first_message ?? null,
+    )
     void loadSessionSnapshot(sessionId, toast)
   }
 
@@ -306,64 +335,31 @@ export default function WorkbenchPage() {
 
         <main
           className="workbench-canvas"
-          style={{
-            padding: 'var(--sp-xl)',
-            overflow: 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 18,
-          }}
+          style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}
         >
-          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-            <Title
-              level={3}
-              style={{
-                fontFamily: 'var(--font-display)',
-                color: 'var(--ink)',
-                margin: 0,
-              }}
-            >
-              新分析
-            </Title>
-            <button
-              type="button"
-              className="wb-quiet-btn"
-              onClick={() => setFocusMode((current) => !current)}
-            >
-              {focusMode ? '退出聚焦' : '聚焦内容'}
-            </button>
-          </div>
-
-          <div
-            style={{
-              background: 'var(--paper)',
-              border: '1px solid var(--line)',
-              borderRadius: 'var(--r-m)',
-              padding: 'var(--sp-l)',
-              boxShadow: 'var(--shadow-soft)',
-            }}
-          >
-            <TextArea
-              placeholder="用一句话描述你想分析的问题，例如：今年华东销售趋势"
-              value={composer}
-              onChange={(e) => setComposer(e.target.value)}
-              disabled={sending}
-              style={{ marginBottom: 12 }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: 'var(--muted)', fontSize: 11 }}>
-                当前 phase: <Tag tone={phase === 'error' ? 'red' : phase === 'idle' ? 'default' : 'teal'}>{phase}</Tag>
-              </Text>
-              <Button
-                variant="primary"
-                loading={sending}
-                onClick={handleSend}
-                disabled={!composer.trim()}
+          <div className="wb-canvas-head">
+            <div>
+              <div className="wb-canvas-kicker">{canvasKicker(phase)}</div>
+              <div className="wb-canvas-title">
+                {sessions.find((s) => s.session_id === activeSessionId)?.title || '新分析'}
+              </div>
+            </div>
+            <div className="wb-head-actions">
+              <button
+                type="button"
+                className="wb-quiet-btn"
+                onClick={() => setFocusMode((current) => !current)}
               >
-                提交分析
-              </Button>
+                {focusMode ? '退出聚焦' : '聚焦内容'}
+              </button>
             </div>
           </div>
+
+          <div className="wb-scroll" ref={scrollRef}>
+            <div className="wb-content-inner">
+          {lastQuestion && phase !== 'idle' && <UserBubble text={lastQuestion} />}
+          {phase !== 'idle' && agentCopy(phase) && <AgentBubble markdown={agentCopy(phase)} />}
+          {phase === 'parsing' && <ParsingCard />}
 
           {canRetryFailedAction({ phase, error }) && (
             <div
@@ -458,31 +454,19 @@ export default function WorkbenchPage() {
           )}
 
           {!requirement && reportVersions.length === 0 && phase === 'idle' && (
-            <div
-              style={{
-                background: 'var(--paper)',
-                border: '1px dashed var(--line)',
-                borderRadius: 'var(--r-m)',
-                padding: 'var(--sp-2xl)',
-              }}
-            >
-              {activeSessionId && sessions.find((s) => s.session_id === activeSessionId)?.first_message ? (
-                <>
-                  <Text style={{ color: 'var(--muted)', fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: 700, display: 'block', marginBottom: 8 }}>
-                    该会话暂无分析记录
-                  </Text>
-                  <Paragraph style={{ color: 'var(--ink-2)', fontSize: 13, marginBottom: 12 }}>
-                    {sessions.find((s) => s.session_id === activeSessionId)?.first_message}
-                  </Paragraph>
-                  <Button variant="primary" onClick={handleNewAnalysis}>
-                    在此会话上开始分析
-                  </Button>
-                </>
-              ) : (
-                <Empty description="在上方输入框提出问题，agent 会自动生成需求卡" />
-              )}
-            </div>
+            <WorkbenchEmpty onPick={(text) => handleSend(text)} />
           )}
+            </div>
+          </div>
+
+          <Composer
+            ref={composerRef}
+            value={composer}
+            onChange={setComposer}
+            onSubmit={() => handleSend()}
+            disabled={busy || sending}
+            placeholder={composerPlaceholder(phase)}
+          />
         </main>
 
         <aside
