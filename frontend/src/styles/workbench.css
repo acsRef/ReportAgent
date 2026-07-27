@@ -10,10 +10,13 @@
   outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
 }
+/* font only — do NOT add `color: inherit` here: this selector's
+   specificity (class + element) would override component-level colors
+   like .atelier-popover__item, making dropdown menus inherit the dark
+   topbar's white text. */
 .workbench-shell button,
 .workbench-shell input {
   font: inherit;
-  color: inherit;
 }
 
 /* ---------- topbar ---------- */
@@ -59,23 +62,6 @@
   letter-spacing: 0.15em;
   text-transform: uppercase;
 }
-.wb-top-nav { height: 100%; gap: 24px; }
-.wb-nav-btn {
-  height: 100%;
-  padding: 0 2px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--nav-idle);
-  cursor: pointer;
-  font-size: 12px;
-}
-.wb-nav-btn:hover { color: var(--on-ink); }
-.wb-nav-btn.active {
-  color: var(--on-ink);
-  border-bottom-color: var(--nav-active);
-  font-weight: 700;
-}
 .wb-top-actions { gap: 16px; font-size: 11px; }
 .wb-connection { gap: 7px; color: var(--on-ink-soft); }
 .wb-live-dot {
@@ -104,15 +90,16 @@
   height: 38px;
   border: 0;
   border-radius: var(--r-m);
-  background: var(--ink);
+  background: var(--teal);
   color: var(--on-ink);
   cursor: pointer;
   font-size: 12px;
   font-weight: 700;
+  box-shadow: 0 6px 16px rgba(8, 127, 115, 0.28);
   transition: var(--t-fast);
 }
 .wb-new-btn:hover {
-  background: var(--ink-hover);
+  background: var(--teal-deep);
   transform: translateY(-1px);
 }
 .wb-session-scroll { flex: 1; overflow-y: auto; padding: 2px 9px 16px; }

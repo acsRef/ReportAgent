@@ -21,7 +21,7 @@
 | 前端 Vite | ✅ 200 OK（在 3000 上跑着） |
 | **真实端到端（chat→PATCH→confirm）** | ✅ **通过**（2026-07-27 修复验证）：e2e 断言真实 SQL + table 23 行 + bar chart + query_snapshot；失败路径发 SSE `error` 事件且不落垃圾报告 |
 | **浏览器 Playwright E2E** | ⚠️ 手动门：`browser_test_query.mjs`（需装 playwright + Edge）；Vite 代理已调优，未接入 CI |
-| **`文档智能分析工作台` UI 风格一致性** | ✅ 已统一到 `tokens.css` + `antdTheme.ts` |
+| **工作台 UI 与原型一致性** | ✅ 按 `docs/intelligent-analysis-workbench.html` 1:1 还原（Stage 0–8：底部浮动对话框、需求卡、进度/错误卡、右栏分析助手、左栏 version-box、报告壳）；`antd`/`@ant-design/icons` 已卸载，前端零 antd 引用（`c11a559`，2026-07-28） |
 
 **结论**：架构完成、契约定稿、测试通过率全绿；最致命的剩余问题是 **SQL 阶段不产出数据**（即使后端用户已 PATCH `complete`），浏览器冒烟卡在 Vite proxy buffer。
 

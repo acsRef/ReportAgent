@@ -223,17 +223,18 @@ Phases 0–7 of [docs/plans/2026-07-24-conversational-workbench.md](docs/plans/2
 - **Shared contract:** `RequirementCard` Pydantic at [backend/app/models/requirement.py](backend/app/models/requirement.py) + TS mirror at [frontend/src/types/requirement.ts](frontend/src/types/requirement.ts); field parity enforced by `backend/tests/contracts/test_requirement_card_mirror.py`.
 - **Frontend state:** `analysisReducer` is the single source of truth for the workbench UI. `useAnalysisStore` ([frontend/src/stores/analysisStore.ts](frontend/src/stores/analysisStore.ts)) dispatches via immer; React components never write `phase` directly. `useTemplateStore` ([frontend/src/stores/templateStore.ts](frontend/src/stores/templateStore.ts)) owns PG-backed templates and one-shot migration from the legacy `ragent_templates` localStorage key.
 - **User-id bug fixes:** the three pre-workbench call sites that confused `session_id` for `user_id` are corrected in [backend/app/main.py](backend/app/main.py) (line 159–161) and [backend/app/agent/parent_graph.py](backend/app/agent/parent_graph.py) (lines 139 and 434). `agent.session.user_id` and `memory.semantic_entry.user_id` were soft-migrated from VARCHAR to INT in `init_pg.sql`.
-- **Visual baseline:** design tokens at [frontend/src/styles/tokens.css](frontend/src/styles/tokens.css) and [frontend/src/theme/antdTheme.ts](frontend/src/theme/antdTheme.ts). Pages: [frontend/src/pages/WorkbenchPage.tsx](frontend/src/pages/WorkbenchPage.tsx), [TemplateLibraryPage.tsx](frontend/src/pages/TemplateLibraryPage.tsx), [SecureReportPage.tsx](frontend/src/pages/SecureReportPage.tsx), [LoginPage.tsx](frontend/src/pages/LoginPage.tsx). All AntD component tokens overridden; AntD default `#1677ff` is replaced by the teal family. The legacy `ChatPage` / `RunningView` / `ReportView` / `HistoryPage` / `TemplateCenter` / `Navbar` are still reachable under `/legacy/*` for one release; Phase 8 plans to remove them in a follow-up commit.
+- **Visual baseline:** the workbench is a 1:1 port of the approved prototype [docs/intelligent-analysis-workbench.html](docs/intelligent-analysis-workbench.html); design tokens live solely in [frontend/src/styles/tokens.css](frontend/src/styles/tokens.css) + [styles/workbench.css](frontend/src/styles/workbench.css) (all prototype colors promoted to tokens; no new hex outside tokens.css). Hand-drawn 16×16 stroke icons in [components/ui/Icons.tsx](frontend/src/components/ui/Icons.tsx). Pages: [frontend/src/pages/WorkbenchPage.tsx](frontend/src/pages/WorkbenchPage.tsx), [TemplateLibraryPage.tsx](frontend/src/pages/TemplateLibraryPage.tsx), [SecureReportPage.tsx](frontend/src/pages/SecureReportPage.tsx), [LoginPage.tsx](frontend/src/pages/LoginPage.tsx). **antd and @ant-design/icons are fully removed** (2026-07-28, commit `c11a559`): zero antd references in `frontend/src`, Forms replaced by local state validation, `theme/antdTheme.ts` deleted. Legacy `ChatPage` / `TemplateCenter` / `HistoryPage` / `views/*` remain reachable under `/legacy/*` and `/history` — rewritten antd-free with atelier components (kept, not deleted, per product decision).
 - **Guardrails for new work:** Pydantic v2 with full type annotations; all PG reads/writes scoped by `(user_id, session_id)` from JWT; reducers stay pure and immutable; `main.py` keeps to HTTP/SSE orchestration only; static diff review (contracts, state transitions, auth, transactions, error recovery, visual tokens) required per batch.
 
 ### Status (this branch)
 
 | Concern | State |
 | --- | --- |
-| pytest backend | 29/29 passing (smoke 8, contracts 7, persistence 8, graphs 6) |
-| vitest frontend | 31/31 passing (reducer 16, client 7, store 4, adapter 3) |
+| pytest backend | 61 passed / 1 skipped (e2e auto-skips without `REPORTAGENT_E2E`; graphs now covers SQL sanitize/retry-feedback/confirmed routing/planner/report-agent) |
+| vitest frontend | 224 passed / 37 files (workbench components, phase copy maps, report shell, pages) |
 | tsc -b | passes |
-| oxlint | 0 errors |
+| oxlint | 0 errors, 0 warnings |
+| antd dependency | removed (`c11a559`); frontend is 100% atelier components |
 | `mode=legacy` endpoint | retained on `/api/v1/chat?mode=legacy` for backward compatibility |
 
 ## Atelier · 工作室组件库

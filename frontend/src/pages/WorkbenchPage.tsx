@@ -256,66 +256,44 @@ export default function WorkbenchPage() {
   return (
     <div className="workbench-shell">
       <TopBar brand="ReportAgent" subtitle="工作台">
-        <nav style={{ display: 'flex', height: '100%', gap: 24 }}>
-          <button type="button" className="wb-nav-btn active">工作台</button>
-          <button
-            type="button"
-            className="wb-nav-btn"
-            onClick={() => navigate('/templates')}
-          >
+        <nav className="atelier-topbar__nav">
+          <button type="button" className="nav-btn is-active">工作台</button>
+          <button type="button" className="nav-btn" onClick={() => navigate('/templates')}>
             模板中心
           </button>
         </nav>
-        <div style={{ flex: 1 }} />
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            color: 'var(--on-ink-2)',
-            fontSize: 12,
-            fontFamily: 'var(--font-ui)',
-          }}
-        >
+        <div className="atelier-topbar__meta">
           <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: busy ? 'var(--amber)' : 'var(--green)',
-              display: 'inline-block',
-            }}
+            className="atelier-live"
+            style={busy ? { background: 'var(--amber)', boxShadow: 'none' } : undefined}
           />
-          {busy ? '处理中' : '已连接'}
-        </span>
-        <Dropdown
-          items={[
-            {
-              key: 'logout',
-              icon: <IconLogout />,
-              label: '退出登录',
-              onClick: handleLogout,
-            },
-          ]}
-          placement="bottom-end"
-        >
-          <span
-            style={{
-              marginLeft: 18,
-              color: 'var(--on-ink)',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              fontFamily: 'var(--font-ui)',
-              fontSize: 12,
-            }}
+          <span>{busy ? '处理中' : '已连接'}</span>
+          <Dropdown
+            items={[
+              {
+                key: 'logout',
+                icon: <IconLogout />,
+                label: '退出登录',
+                onClick: handleLogout,
+              },
+            ]}
+            placement="bottom-end"
           >
-            <Avatar size="sm">{auth.username?.[0]?.toUpperCase() ?? 'U'}</Avatar>
-            {auth.username ?? 'user'}
-            <span style={{ fontSize: 10 }}>▾</span>
-          </span>
-        </Dropdown>
+            <span
+              style={{
+                marginLeft: 8,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <Avatar size="sm">{auth.username?.[0]?.toUpperCase() ?? 'U'}</Avatar>
+              <span>{auth.username ?? 'user'}</span>
+              <span style={{ fontSize: 10 }}>▾</span>
+            </span>
+          </Dropdown>
+        </div>
       </TopBar>
 
       <div className={focusMode ? 'workbench-body focus' : 'workbench-body'}>

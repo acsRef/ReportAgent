@@ -46,12 +46,12 @@
 | `TemplateLibraryPage.tsx` | ✅ 阶段 C 完成（Modal/Popconfirm/Spinner/Tag/Empty 真实组件；Form 校验壳保留） | 中 | 阶段 C |
 | `SecureReportPage.tsx` | ✅ 阶段 C 完成（已无 antd） | 简单 | 阶段 C |
 | `HistoryPage.tsx` | ✅ 阶段 C 完成（色值 token 化；组件仍为 legacy，阶段 D 删除） | 简单 | 阶段 C |
-| `TemplateCenter.tsx` | Card + Row + Modal + Form | 中（legacy） | 阶段 D（Phase 8 删除时） |
-| `ChatPage.tsx` | Select + Modal + Form | 中（legacy） | 阶段 D |
-| `views/ChatView.tsx` | 大量 inline | 中（legacy） | 阶段 D |
-| `views/RunningView.tsx` | Spin + Text | 简单（legacy） | 阶段 D |
-| `views/ReportView.tsx` | Card + Skeleton + Typography | 简单（legacy） | 阶段 D |
-| `StandaloneReportPage.tsx` | Typography | 简单（legacy） | 阶段 D |
+| `TemplateCenter.tsx` | ✅ antd 已移除（Form → 本地校验，图标 → Icons.tsx；路由保留） | 中（legacy） | 阶段 D |
+| `ChatPage.tsx` | ✅ antd 已移除（Form → 本地校验，图标 → Icons.tsx；路由保留） | 中（legacy） | 阶段 D |
+| `views/ChatView.tsx` | ✅ 图标 → Icons.tsx | 中（legacy） | 阶段 D |
+| `views/RunningView.tsx` | ✅ 图标 → Icons.tsx | 简单（legacy） | 阶段 D |
+| `views/ReportView.tsx` | ✅ 图标 → Icons.tsx | 简单（legacy） | 阶段 D |
+| `StandaloneReportPage.tsx` | ✅ 无 antd | 简单（legacy） | 阶段 D |
 
 ## 3. 阶段 A：基础替换（LoginPage）
 
@@ -117,15 +117,15 @@
 
 每个阶段 commit 至少 1 个，并附 diff review：
 
-| 阶段 | 起始 commit | 主要改动 |
+| 阶段 | 提交 | 主要改动 |
 | --- | --- | --- |
-| A | TBD（已完成，待拆分提交） | `LoginPage` + `ToastProvider`/`useToast` + `TextField`/`Button` |
-| B | TBD（已完成，待拆分提交） | `WorkbenchPage` + `RequirementCardView` + `ReportPaper` + `TopBar`/`RadioGroup`/`CheckboxGroup`/`Dropdown`/`Avatar`/`ProgressCircle`/`Stepper` + confirm 失败重试横幅 |
-| C | TBD（已完成，待拆分提交） | `TemplateLibraryPage` + `SecureReportPage` + `HistoryPage` token 化 + `Modal`/`Popconfirm`/`Tooltip` + 删除 `adapters/antd/` 过渡层 |
-| D | TBD | 删除 legacy，删除 `antd` 依赖，Form 校验迁移 react-hook-form |
+| A | ✅ `e5246c5`（Stage 3） | `RequirementCardView` 按原型重建（左色条/kicker/状态 pill/chips/缺失区 pills/假设条/两步动作，无 spinner） |
+| B | ✅ `7c3e9d6`–`fb8c34a`（Stage 4–5） | 进度卡（4 阶段 + 停止生成）、错误卡（重试当前任务）、右栏分析助手 phase 驱动、左栏原型会话列表 + version-box、canvas-head + 底部浮动对话框（Stage 2 `7d1a…` 系列） |
+| C | ✅ `1bcc1a1`（Stage 6） | 报告壳 1:1（toolbar/REPORT 刊头/meta/核心发现/编号分节/平铺明细/脚注），真实载荷填充，无演示数据 |
+| D | ✅ `5d0d475`–`c11a559`（Stage 7–8，2026-07-28） | live 页 + legacy 页全部去 antd（Form → 本地校验，图标 → 手绘 Icons.tsx），删除 `adapters/antd/` 与 `antdTheme.ts`，`npm uninstall antd @ant-design/icons`。**按用户裁决：legacy 路由保留（控件换 atelier），不删页面**；Form 未迁 react-hook-form（直接改本地 state） |
 
 ## 10. 仍然依赖 antd 的部分（阶段 D 之前保留）
 
-- `Form.useForm + rules` 校验（仅在 LoginPage / TemplateLibraryPage 局部使用，阶段 D 全部迁移到 react-hook-form）
-- `DatePicker` / `TimePicker`（未在 atelier 范围；可继续用 antd + atelier 主题包装）
-- `Carousel` / `Cascader` / `TreeSelect`（atelier 已提供 HTML 骨架，antd 复杂行为可阶段 D 决策）
+- ~~`Form.useForm + rules` 校验~~ — ✅ 已全部改为本地 state 校验（LoginPage / TemplateLibraryPage / ChatPage / TemplateCenter），未引入 react-hook-form
+- `DatePicker` / `TimePicker` — 项目中未使用，无需处理
+- `antd` / `@ant-design/icons` 依赖 — ✅ 已卸载（`c11a559`，2026-07-28），`frontend/src` 零 antd 引用（grep 验证）
