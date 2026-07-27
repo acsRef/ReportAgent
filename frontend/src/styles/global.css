@@ -82,28 +82,37 @@ a:hover {
 
 .workbench-body {
   display: grid;
-  /* Center gets a 540px floor so the composer + requirement card never
-   * get squeezed; right rail caps at 320px (a bit wider for the
-   * "analysis hint" cards). The prototype uses 268 / minmax(580,1fr) /
-   * 300 with the same intent. */
-  grid-template-columns: 268px minmax(540px, 1fr) 320px;
+  /* Prototype columns (docs/intelligent-analysis-workbench.html
+   * .workspace): 268 / minmax(580,1fr) / 300. */
+  grid-template-columns: var(--left-rail-w) minmax(580px, 1fr) var(--right-rail-w);
   min-height: 0;
+  transition: grid-template-columns var(--t-rail);
+}
+
+/* Focus mode: both rails collapse to 0, content widens. */
+.workbench-body.focus {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+.workbench-body.focus .workbench-rail--left,
+.workbench-body.focus .workbench-rail--right {
+  border: 0;
 }
 
 @media (max-width: 1180px) {
   .workbench-body {
-    grid-template-columns: 248px minmax(0, 1fr);
+    grid-template-columns: 230px minmax(540px, 1fr) 0;
   }
   .workbench-rail--right {
-    display: none;
+    border: 0;
   }
 }
 
 @media (max-width: 880px) {
   .workbench-body {
-    grid-template-columns: 1fr;
+    grid-template-columns: 0 minmax(0, 1fr) 0;
   }
-  .workbench-rail--left {
-    display: none;
+  .workbench-rail--left,
+  .workbench-rail--right {
+    border: 0;
   }
 }

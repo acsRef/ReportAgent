@@ -26,6 +26,7 @@ import ReportPaper from '../components/workbench/ReportPaper'
 import type { AnalysisPhase, ReportVersionStatus } from '../types/analysis'
 import type { RequirementCard as RC } from '../types/requirement'
 import '../styles/global.css'
+import '../styles/workbench.css'
 
 const DONE_TIMEOUT_MS = 60_000
 
@@ -47,6 +48,15 @@ export default function WorkbenchPage() {
   const [patching, setPatching] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const busy = isBusyPhase(phase)
+  const [focusMode, setFocusMode] = useState(false)
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFocusMode(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -233,7 +243,7 @@ export default function WorkbenchPage() {
         </Dropdown>
       </TopBar>
 
-      <div className="workbench-body">
+      <div className={focusMode ? 'workbench-body focus' : 'workbench-body'}>
         <aside
           className="workbench-rail workbench-rail--left"
           style={{
@@ -304,16 +314,25 @@ export default function WorkbenchPage() {
             gap: 18,
           }}
         >
-          <Title
-            level={3}
-            style={{
-              fontFamily: 'var(--font-display)',
-              color: 'var(--ink)',
-              margin: 0,
-            }}
-          >
-            新分析
-          </Title>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+            <Title
+              level={3}
+              style={{
+                fontFamily: 'var(--font-display)',
+                color: 'var(--ink)',
+                margin: 0,
+              }}
+            >
+              新分析
+            </Title>
+            <button
+              type="button"
+              className="wb-quiet-btn"
+              onClick={() => setFocusMode((current) => !current)}
+            >
+              {focusMode ? '退出聚焦' : '聚焦内容'}
+            </button>
+          </div>
 
           <div
             style={{

@@ -55,21 +55,80 @@
   --shadow-topbar: 0 8px 30px rgba(16, 36, 62, 0.18);
   --shadow-focus: 0 0 0 3px rgba(8, 127, 115, 0.18);
 
-  /* Layout */
+  /* Layout (prototype: docs/intelligent-analysis-workbench.html) */
   --topbar-h: 58px;
-  --left-rail-w: 248px;
+  --left-rail-w: 268px;
   --right-rail-w: 300px;
-  --content-max: 1180px;
+  --content-max: 980px;
+  --content-max-focus: 1180px;
 
   /* Motion */
   --t-fast: 120ms ease;
   --t-base: 200ms ease;
   --t-slow: 320ms ease;
+  --t-rail: 280ms ease;
+  --t-reveal: 350ms ease;
+  --t-width: 250ms ease;
+
+  /* Focus ring (prototype uses outline, alpha .2) */
+  --focus-ring: rgba(8, 127, 115, 0.2);
 
   /* On-ink text (white text on dark backgrounds) */
   --on-ink: #fff;
   --on-ink-2: rgba(255, 255, 255, 0.85);
   --on-ink-3: rgba(255, 255, 255, 0.65);
+  --on-ink-strong: #f4f7f7;
+  --on-ink-soft: #c7d4dc;
+  --on-ink-chip: #edf3f5;
+
+  /* Radii used by the prototype (off the xs/s/m/l scale) */
+  --r-3: 3px;
+  --r-9: 9px;
+  --r-10: 10px;
+  --r-18: 18px;
+
+  /* Prototype neutrals (green-gray ramp) */
+  --paper-2: #fafbf8;
+  --phase-bg: #f7f9f6;
+  --tint: #f6f9f6;
+  --thead: #f0f2ef;
+  --pill: #edf0ed;
+  --chip: #edf1ee;
+  --stage: #f2f4f1;
+  --stage-faint: #8c9790;
+  --stage-ink: #8a570d;
+  --parse: #f3f6f3;
+  --parse-ink: #65746c;
+  --track: #e8ece8;
+  --track-2: #e2e7e3;
+  --locked-pill: #e7eee9;
+  --locked-ink: #4e6b60;
+  --finding-edge: #cfe5df;
+  --finding-mid: #f6faf8;
+  --row-line: #eceeeb;
+  --paper-edge: #d8dcd7;
+  --rail-edge: #d4dad5;
+  --rail-muted: #7c8880;
+  --rail-faint: #8e9992;
+  --version-line: #d4ddd8;
+  --amber-ink: #89550c;
+  --amber-brown: #6f552d;
+  --pill-ink: #718078;
+  --done-ink: #28715f;
+  --done-dot: #2a8e74;
+  --run-ink: #8b590f;
+  --dot: #93a09a;
+  --mini-line: #dec797;
+  --mini-bg: #fff8e9;
+  --mini-acc: #acd5cc;
+  --danger-edge: #e2b4b0;
+  --example-hover: #9cc8bf;
+  --nav-idle: #9eb0bf;
+  --nav-active: #4bd0b6;
+  --live: #41d1b4;
+  --live-halo: rgba(65, 209, 180, 0.12);
+  --brand-sub: #94aabc;
+  --ink-hover: #183657;
 
   /* Typography */
   --font-display: "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;
