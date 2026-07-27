@@ -702,11 +702,26 @@ async def confirm_session(
                 "error": None,
             }
             result = await graph.ainvoke(initial, config)
-            report_payload = result.get("report_payload") or {}
-            yield {
-                "event": "report",
-                "data": json.dumps(report_payload, ensure_ascii=False, default=str),
-            }
+            status = result.get("execution_status", "FAILED")
+            if status == "FAILED":
+                await session_manager.update_phase(
+                    session_id, "error", failed_action="confirm",
+                )
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "code": "QUERY_FAILED",
+                        "message": "查询未返回数据",
+                        "recoverable": True,
+                        "failed_action": "confirm",
+                    }, ensure_ascii=False),
+                }
+            else:
+                report_payload = result.get("report_payload") or {}
+                yield {
+                    "event": "report",
+                    "data": json.dumps(report_payload, ensure_ascii=False, default=str),
+                }
         except RequirementIncompleteError as exc:
             await session_manager.update_phase(
                 session_id, "error", failed_action="confirm",

@@ -12,6 +12,8 @@ import uuid
 
 import pytest
 
+pytestmark = pytest.mark.graphs
+
 from app.models.requirement import RequirementCard, RequirementAssumption
 
 

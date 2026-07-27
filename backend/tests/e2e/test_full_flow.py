@@ -29,12 +29,15 @@ Run from the repo root with the backend already running:
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.e2e
+
 import json
 import uuid
 from typing import Any, Iterator
 
 import httpx
-import pytest
 
 BASE = "http://127.0.0.1:8100"
 
@@ -116,7 +119,10 @@ def test_full_user_journey() -> None:
         filled = json.loads(json.dumps(card))
         for mf in filled["missing_fields"]:
             if mf["key"] == "time_range":
-                mf["selected_value"] = "今年"
+                # Seed data (seed_pg.sql) only covers 2020–2024; "今年"
+                # would legitimately return zero rows and fail the core
+                # assertion regardless of code correctness.
+                mf["selected_value"] = "2024年"
             elif mf["key"] == "scope":
                 mf["selected_value"] = ["ALL"] if "ALL" in [o["value"] for o in mf["options"]] else [mf["options"][0]["value"]] if mf["options"] else []
             elif mf["key"] == "metric":
@@ -138,7 +144,7 @@ def test_full_user_journey() -> None:
               f"time_range={saved['time_range']} scope={saved['scope']} "
               f"target_metrics={saved['target_metrics']}")
         assert saved["status"] == "complete"
-        assert saved["time_range"] == "今年"
+        assert saved["time_range"] == "2024年"
         assert len(saved["target_metrics"]) >= 1, f"target_metrics empty: {saved}"
 
         # ---- 5. POST /confirm → report v1 ----
@@ -188,28 +194,28 @@ def test_full_user_journey() -> None:
         table = answer.get("table")
         print(f"  payload.answer.chart = {json.dumps(chart, ensure_ascii=False)[:200]}")
         print(f"  payload.answer.table = {json.dumps(table, ensure_ascii=False)[:200]}")
-        # CORE ASSERTION: report_payload.answer must have a real chart OR
-        # table. The chart_advisor is required to run on the SQL
-        # graph output, even if SQL returned 0 rows. (When SQL is
-        # exhausted, the chart may fall back to {type: 'table',
-        # config: {}} — that is OK, the plumbing still worked.)
-        chart_present = bool(chart.get("type")) or bool(chart.get("config"))
-        table_present = table is not None
-        answer_present = chart_present or table_present
-        assert answer_present, (
-            f"report_payload.answer has no chart/table; "
-            f"chart={chart} table={table}"
-        )
-        # Snapshot is a STRONGER signal: the SQL was generated AND
-        # captured. We don't require it (LLM may fail to produce
-        # valid SQL in this run), but if present, log it.
+
+        # CORE ASSERTION: query_snapshot must have non-empty SQL
         snapshot = report.get("query_snapshot") or {}
-        if snapshot.get("sql"):
-            print(f"  ✓ snapshot sql: {snapshot.get('sql', '')[:120]}")
-            print(f"  ✓ snapshot rows: {len(snapshot.get('rows') or [])}")
-        else:
-            print("  (no query_snapshot — LLM may have failed to produce valid SQL this run)")
-        print(f"  ✓ answer present: chart={chart_present} table={table_present}")
+        assert snapshot.get("sql"), (
+            f"query_snapshot.sql is empty/absent — Stage 1 SQL fix regression; "
+            f"snapshot={snapshot}"
+        )
+        print(f"  ✓ snapshot sql: {snapshot.get('sql', '')[:120]}")
+        print(f"  ✓ snapshot rows: {len(snapshot.get('rows') or [])}")
+
+        # CORE ASSERTION: answer.table must be present with rows (no
+        # degenerate {type:table,config:{}} allowed)
+        assert table is not None, (
+            f"report_payload.answer.table is None — Stage 2 fix regression; "
+            f"chart={chart}"
+        )
+        rows = table.get("rows")
+        assert rows and len(rows) > 0, (
+            f"report_payload.answer.table has no rows — SQL produced no data; "
+            f"table={table}"
+        )
+        print(f"  ✓ answer.table rows: {len(rows)}")
 
         # ---- 9. TEMPLATE FLOW ----
         print("\n[9] Template CRUD")

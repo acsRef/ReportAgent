@@ -8,6 +8,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+pytestmark = pytest.mark.smoke
+
 from app.models.requirement import (
     RequirementAssumption,
     RequirementCard,
@@ -23,33 +25,34 @@ def _base() -> dict:
     }
 
 
-def test_missing_status_requires_missing_fields() -> None:
-    with pytest.raises(ValidationError) as exc:
-        RequirementCard(
-            **_base(),
-            status="missing",
-            missing_fields=[],
-        )
-    assert "missing requirement must contain missing fields" in str(exc.value)
+def test_missing_status_allows_empty_missing_fields() -> None:
+    """Validator relaxed: status/form consistency enforced at service layer."""
+    card = RequirementCard(
+        **_base(),
+        status="missing",
+        missing_fields=[],
+    )
+    assert card.status == "missing"
+    assert card.missing_fields == []
 
 
-def test_complete_status_must_not_have_missing_fields() -> None:
-    with pytest.raises(ValidationError) as exc:
-        RequirementCard(
-            **_base(),
-            status="complete",
-            missing_fields=[
-                RequirementMissingField(
-                    key="time_range",
-                    label="时间范围",
-                    options=[RequirementOption(label="本月", value="本月")],
-                )
-            ],
-            assumptions=[
-                RequirementAssumption(key="a1", text="默认华东", accepted=True),
-            ],
-        )
-    assert "complete requirement cannot contain missing fields" in str(exc.value)
+def test_complete_status_allows_missing_fields() -> None:
+    """Validator relaxed: status/form consistency enforced at service layer."""
+    card = RequirementCard(
+        **_base(),
+        status="complete",
+        missing_fields=[
+            RequirementMissingField(
+                key="time_range",
+                label="时间范围",
+                options=[RequirementOption(label="本月", value="本月")],
+            )
+        ],
+        assumptions=[
+            RequirementAssumption(key="a1", text="默认华东", accepted=True),
+        ],
+    )
+    assert card.status == "complete"
 
 
 def test_locked_status_requires_confirmed_at() -> None:
@@ -64,15 +67,16 @@ def test_locked_status_requires_confirmed_at() -> None:
     assert "locked requirement requires confirmed_at" in str(exc.value)
 
 
-def test_complete_status_must_resolve_all_assumptions() -> None:
-    with pytest.raises(ValidationError) as exc:
-        RequirementCard(
-            **_base(),
-            status="complete",
-            missing_fields=[],
-            assumptions=[RequirementAssumption(key="a1", text="默认", accepted=None)],
-        )
-    assert "complete requirement has unresolved assumptions" in str(exc.value)
+def test_complete_status_allows_unresolved_assumptions() -> None:
+    """Validator relaxed: assumption resolution enforced at service layer."""
+    card = RequirementCard(
+        **_base(),
+        status="complete",
+        missing_fields=[],
+        assumptions=[RequirementAssumption(key="a1", text="默认", accepted=None)],
+    )
+    assert card.status == "complete"
+    assert card.assumptions[0].accepted is None
 
 
 def test_valid_missing_card_passes() -> None:

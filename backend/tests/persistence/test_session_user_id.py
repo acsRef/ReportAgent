@@ -143,6 +143,62 @@ def test_create_and_get_latest_draft() -> None:
     _run(body())
 
 
+def test_lock_for_execution_recovers_stale_lock() -> None:
+    """lock_for_execution 应自动恢复陈旧锁（locked 但无 report_version）。"""
+    from app.infra.db import requirement_repository
+    from app.infra.db.postgres import get_pool
+    from app.infra.checkpoint.session import session_manager
+    from app.models.requirement import RequirementAssumption, RequirementCard
+    from app.services.requirement_service import lock_for_execution
+
+    sid = f"test-{uuid.uuid4()}"
+
+    async def body():
+        try:
+            pool = get_pool()
+            # 创建 session + 一个 complete 草稿
+            await session_manager.create_session(sid, user_id=1)
+            card = RequirementCard(
+                id="draft-stale",
+                status="complete", summary="test",
+                target_metrics=["销售额"], missing_fields=[],
+                assumptions=[RequirementAssumption(key="a1", text="默认", accepted=True)],
+            )
+            async with pool.acquire() as conn:
+                draft_id = await requirement_repository.create_draft(
+                    conn, session_id=sid, user_id=1, user_query="销售", card=card,
+                )
+                # 模拟崩溃场景：直接把草稿标记为 locked，但无 report_version
+                await conn.execute(
+                    """UPDATE agent.requirement_draft
+                          SET status = 'locked', confirmed_at = NOW(), updated_at = NOW()
+                        WHERE id = $1""",
+                    draft_id,
+                )
+            # lock_for_execution 应检测到陈旧锁并恢复
+            row = await lock_for_execution(
+                session_id=sid, user_id=1, draft_id=draft_id,
+            )
+            assert row is not None
+            assert row["status"] == "locked"
+            assert row["id"] == draft_id
+            assert row["confirmed_at"] is not None
+        finally:
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE agent.session SET latest_requirement_draft_id = NULL WHERE thread_id = $1", sid,
+                )
+                await conn.execute(
+                    "DELETE FROM agent.requirement_draft WHERE session_id = $1", sid,
+                )
+                await conn.execute(
+                    "DELETE FROM agent.session WHERE thread_id = $1", sid,
+                )
+
+    _run(body())
+
+
 def test_lock_draft_rejects_incomplete() -> None:
     from app.infra.db import requirement_repository
     from app.infra.db.postgres import get_pool

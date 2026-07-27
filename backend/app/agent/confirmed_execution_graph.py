@@ -156,9 +156,16 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
     card = state.get("requirement_card")
     confirmed_requirement = _format_confirmed_requirement(card)
 
+    # Synthesize a non-empty user_query from the confirmed card when
+    # the original is empty (confirm flow via POST /confirm). Without
+    # this, _plan receives `user_query=""` and produces no signal.
+    user_query = state["user_query"]
+    if not user_query.strip() and confirmed_requirement:
+        user_query = f"Generate report: {confirmed_requirement}"
+
     ss = await sql_graph.ainvoke({
         "schema_context": schema_input,
-        "user_query": state["user_query"],
+        "user_query": user_query,
         "query_plan": None,
         "generated_sql": "",
         "validation_result": {},
@@ -221,17 +228,33 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
         "assemble_results": [],
         "trace_id": state.get("trace_id", ""),
     })
+
+    qr = state.get("query_result")
+    table = None
+    has_data = False
+    if qr and isinstance(qr, dict):
+        rows = qr.get("rows") or []
+        if rows:
+            has_data = True
+            cols = []
+            for c in (qr.get("columns") or []):
+                name = c.get("name") if isinstance(c, dict) else str(c)
+                cols.append({"key": name, "title": name})
+            table = {"columns": cols, "rows": rows}
+
+    status = "SUCCESS" if has_data else "FAILED"
+
     return {
         "report_payload": {
             "answer": {
                 "text": "查询完成",
-                "table": None,
+                "table": table,
                 "chart": rs.get("chart_config") or None,
                 "insight": rs.get("insight_text") or None,
             },
             "trace": [],
         },
-        "execution_status": "SUCCESS",
+        "execution_status": status,
     }
 
 
@@ -340,7 +363,20 @@ def build_confirmed_execution_graph():
     workflow.add_edge("sql_gate", "data_agent")
     workflow.add_edge("data_agent", "sql_agent")
     workflow.add_edge("sql_agent", "report_agent")
-    workflow.add_edge("report_agent", "persist_report")
+
+    def _route_after_report(state: ConfirmedExecutionState) -> str:
+        # FAILED reports (no data) must NOT be persisted. Skipping
+        # persist_report keeps execution_status="FAILED" in the final
+        # state, so main.py's /confirm SSE handler emits an `error`
+        # event and stamps session.phase='error' with
+        # last_failed_action='confirm' (enabling POST /retry).
+        return "persist_report" if state.get("execution_status") == "SUCCESS" else END
+
+    workflow.add_conditional_edges(
+        "report_agent",
+        _route_after_report,
+        {"persist_report": "persist_report", END: END},
+    )
     workflow.add_edge("persist_report", END)
 
     return workflow.compile(checkpointer=MemorySaver())

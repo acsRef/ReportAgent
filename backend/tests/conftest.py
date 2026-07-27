@@ -27,13 +27,16 @@ if _ENV_PATH.exists():
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip persistence tests when DATABASE_URL is missing."""
-    if os.getenv("DATABASE_URL"):
-        return
+    """Auto-skip persistence/e2e tests when required env vars are missing."""
+    has_pg = bool(os.getenv("DATABASE_URL"))
+    has_e2e = bool(os.getenv("REPORTAGENT_E2E"))
     skip_pg = pytest.mark.skip(reason="DATABASE_URL not set; skipping persistence test")
+    skip_e2e = pytest.mark.skip(reason="REPORTAGENT_E2E not set; skipping e2e test")
     for item in items:
-        if "persistence" in item.keywords:
+        if "persistence" in item.keywords and not has_pg:
             item.add_marker(skip_pg)
+        if "e2e" in item.keywords and not has_e2e:
+            item.add_marker(skip_e2e)
 
 
 @pytest.fixture

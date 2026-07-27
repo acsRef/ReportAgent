@@ -63,19 +63,15 @@ class RequirementCard(BaseModel):
 
     @model_validator(mode="after")
     def validate_status_consistency(self) -> RequirementCard:
-        # A 'missing' card must EITHER have explicit missing fields OR
-        # have at least one unresolved assumption (the user must accept
-        # the assumption before /confirm is allowed).
-        if self.status == "missing" and not self.missing_fields:
-            has_unresolved = any(a.accepted is None for a in self.assumptions)
-            if not has_unresolved:
-                raise ValueError("missing requirement must contain missing fields")
-        if self.status in {"complete", "locked"} and self.missing_fields:
-            raise ValueError("complete requirement cannot contain missing fields")
-        if self.status in {"complete", "locked"} and any(
-            assumption.accepted is None for assumption in self.assumptions
-        ):
-            raise ValueError("complete requirement has unresolved assumptions")
+        # NOTE: status/form-state consistency used to be enforced here.
+        # We relaxed it because PATCH bodies carry whatever `status` the
+        # server issued at analysis time, even after the user filled the
+        # form. The hard invariants are now enforced by
+        # `service.requirement_service.patch_requirement`, which
+        # normalizes the card before persisting it. This validator now
+        # only enforces the `locked` invariants, which are still strict
+        # because locked cards come from server-side execution, never
+        # from the client.
         if self.status == "locked" and self.confirmed_at is None:
             raise ValueError("locked requirement requires confirmed_at")
         if self.status != "locked" and self.confirmed_at is not None:

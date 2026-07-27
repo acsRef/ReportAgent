@@ -10,6 +10,10 @@ update both files in the same commit and re-run this test.
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.contracts
+
 from app.models.requirement import (
     RequirementFieldKey,
     RequirementStatus,

@@ -57,7 +57,7 @@ def _plan_analysis(state: ReportAgentState) -> dict:
 格式：
 {{"steps": [{{"tool": "...", "args": {{}}, "description": "..."}}], "reasoning": "..."}}"""
 
-    plan_text = call_llm(prompt, max_tokens=500)
+    plan_text = call_llm(prompt, max_tokens=1500)
 
     plan = safe_json_parse(plan_text)
     if isinstance(plan, dict):

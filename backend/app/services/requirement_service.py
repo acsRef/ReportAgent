@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from app.infra.db import requirement_repository
+from app.infra.db.requirement_repository import LockError
 from app.infra.db.postgres import get_pool
 from app.models.requirement import RequirementCard, RequirementMissingField
 
@@ -66,13 +67,22 @@ async def patch_requirement(
         # else: drop from missing_fields (filled)
     card_dict["missing_fields"] = remaining_missing
 
-    # Step 2: recompute status.
+    # Step 2: recompute status BEFORE re-validating. The incoming card
+    # may carry `status="missing"` from the server-side analysis, even
+    # though the user has now filled every missing_field and accepted
+    # every assumption. Pydantic's model_validator would reject that
+    # combination as "missing requirement must contain missing fields",
+    # which used to surface as a silent 422 → confirm-button-does-
+    # nothing failure. We normalize status from form state first.
     unresolved = [a for a in card_dict.get("assumptions", []) if a.get("accepted") is None]
     if remaining_missing or unresolved:
         new_status = "missing"
     else:
         new_status = "complete"
     card_dict["status"] = new_status
+    # confirmed_at is reserved for `locked`; strip it on incomplete cards.
+    if new_status != "locked":
+        card_dict["confirmed_at"] = None
 
     # Re-validate (Pydantic will raise on inconsistent states).
     new_card = RequirementCard.model_validate(card_dict)
@@ -126,13 +136,54 @@ async def lock_for_execution(
     user_id: int,
     draft_id: int,
 ) -> dict:
-    """Lock a draft and stamp the session phase. Returns the updated row."""
+    """Lock a draft and stamp the session phase. Returns the updated row.
+
+    Recovery: if the draft is already in `locked` state but the session
+    has no report_version row, this means a previous confirm run failed
+    mid-execution (after lock but before persist). Reset the draft to
+    `complete` and try again so the user doesn't have to manually
+    re-PATCH to recover.
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            row = await requirement_repository.lock_draft(
-                conn, draft_id=draft_id, user_id=user_id,
-            )
+            try:
+                row = await requirement_repository.lock_draft(
+                    conn, draft_id=draft_id, user_id=user_id,
+                )
+            except LockError:
+                # lock_draft raises LockError when the draft is not in
+                # 'complete' state. If it was already locked AND no
+                # report_version exists, this is a stale lock from a
+                # previous failed run — reset and retry.
+                existing = await conn.fetchrow(
+                    """SELECT d.status
+                          FROM agent.requirement_draft d
+                         WHERE d.id = $1 AND d.user_id = $2""",
+                    draft_id, user_id,
+                )
+                if existing and existing["status"] == "locked":
+                    has_v = await conn.fetchval(
+                        """SELECT 1 FROM agent.report_version
+                            WHERE session_id = $1 AND user_id = $2 LIMIT 1""",
+                        session_id, user_id,
+                    )
+                    if not has_v:
+                        await conn.execute(
+                            """UPDATE agent.requirement_draft
+                                  SET status = 'complete',
+                                      confirmed_at = NULL,
+                                      updated_at = NOW()
+                                WHERE id = $1""",
+                            draft_id,
+                        )
+                        row = await requirement_repository.lock_draft(
+                            conn, draft_id=draft_id, user_id=user_id,
+                        )
+                    else:
+                        raise
+                else:
+                    raise
             await conn.execute(
                 """UPDATE agent.session
                        SET latest_requirement_draft_id = $2,

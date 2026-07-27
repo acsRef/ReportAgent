@@ -3,6 +3,35 @@
 from __future__ import annotations
 
 import json
+import re
+
+
+def strip_think(text: str) -> str:
+    """Remove <think>...</think> blocks from LLM output.
+
+    Handles closed blocks (<think>...</think>) — removes everything
+    between the tags. Unclosed blocks (no </think>) are left in place
+    so extract_sql can find any trailing SQL content.
+    """
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def extract_sql(text: str) -> str:
+    """Extract SQL from LLM output.
+
+    Strips <think> blocks, markdown fences, and leading non-SQL text.
+    Returns empty string if no SELECT statement is found.
+    """
+    if not text:
+        return ""
+    text = strip_think(text)
+    text = strip_markdown_fence(text)
+    if "select" not in text.lower():
+        return ""
+    idx = text.lower().find("select")
+    if idx > 0:
+        text = text[idx:]
+    return text.strip()
 
 
 def strip_markdown_fence(text: str) -> str:

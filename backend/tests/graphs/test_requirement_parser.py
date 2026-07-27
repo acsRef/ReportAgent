@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.graphs
+
 
 def _patch_llm(monkeypatch: pytest.MonkeyPatch, payload: dict | str) -> None:
     """Force `app.llm.call_llm` to return a fixed string."""

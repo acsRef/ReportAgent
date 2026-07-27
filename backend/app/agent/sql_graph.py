@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.llm import call_llm, _format_tools_for_prompt
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
-from app.utils.text import safe_json_parse, strip_markdown_fence
+from app.utils.text import extract_sql, safe_json_parse, strip_markdown_fence
 from app.infra.trace.sdk import traced_node
 from app.tools.sql_tools import validate_sql, execute_sql
 
@@ -146,7 +146,7 @@ def _intent_analyze(state: SQLAgentState) -> dict:
 - needs_options_group: 当 query 仍有数据维度(时间范围/区域范围/Top N 等)未明确时填 true;完全清晰可直跑时填 false
 """
 
-    raw = call_llm(prompt, max_tokens=600)
+    raw = call_llm(prompt, max_tokens=1500)
     parsed = safe_json_parse(raw)
 
     fallback_options = [
@@ -279,7 +279,7 @@ def _plan(state: SQLAgentState) -> dict:
 
 {_PLAN_FEWSHOT}"""
 
-    plan_text = call_llm(prompt, max_tokens=600)
+    plan_text = call_llm(prompt, max_tokens=1500)
 
     plan_dict = safe_json_parse(plan_text)
     fallback_decision = ClarifyDecision(
@@ -342,10 +342,24 @@ def _generate_sql(state: SQLAgentState) -> dict:
 - 使用中文别名（例如「销售额」「年份」）
 - 只输出纯 SQL，禁止解释，禁止 markdown 代码块"""
 
-    sql = call_llm([{"role": "user", "content": prompt}], max_tokens=800)
+    # Retry feedback loop: when regenerating after a validation failure,
+    # feed the failed SQL and its error back to the LLM. Without this the
+    # retry loop is blind — the same prompt reproduces the same invalid
+    # SQL (e.g. a hallucinated column) until retries are exhausted.
+    prev_validation = state.get("validation_result") or {}
+    prev_sql = (state.get("generated_sql") or "").strip()
+    if prev_sql and prev_validation.get("valid") is False:
+        prompt += f"""
 
-    sql = strip_markdown_fence(sql)
-    sql = sql.strip()
+【上一次生成失败，必须修正】
+上一次的 SQL：
+{prev_sql}
+校验错误：{prev_validation.get("error", "")}
+请针对该错误修正 SQL：只使用上面「可用表结构」中真实存在的表名和列名，不要臆造列。"""
+
+    sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
+
+    sql = extract_sql(sql)
 
     retry = state.get("retry_counters", {})
     retry["sql_generation"] = retry.get("sql_generation", 0) + 1
