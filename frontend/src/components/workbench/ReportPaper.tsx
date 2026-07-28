@@ -110,9 +110,38 @@ export default function ReportPaper({
           <button
             type="button"
             className="wb-quiet-btn"
-            onClick={() => toast.info('正在准备导出文件 · 原型演示')}
+            onClick={() => {
+              // /api/v1/sessions/{sid}/reports/{v}/export.xlsx —— 后端用
+              // openpyxl 把 query_snapshot（不受 5000 行展示上限影响）写成
+              // xlsx，浏览器自动用 JWT cookie 发起下载。
+              const url = `/api/v1/sessions/${sessionId}/reports/${detail.version}/export.xlsx`
+              window.open(url, '_blank')
+            }}
           >
-            导出
+            导出 Excel
+          </button>
+          <button
+            type="button"
+            className="wb-quiet-btn"
+            onClick={() => {
+              if (typeof window !== 'undefined' && detail) {
+                // HTML 备选：纯前端生成、只截前 50 行（轻量分享场景）。
+                import('../../utils/export').then(({ exportReportHTML }) => {
+                  exportReportHTML({
+                    id: `r-${detail.version}`,
+                    version: detail.version,
+                    title: detail.title ?? '报告',
+                    query: '',
+                    blocks: [],
+                    steps: [],
+                    timestamp: detail.created_at ?? Date.now(),
+                    status: 'done',
+                  })
+                })
+              }
+            }}
+          >
+            导出 HTML
           </button>
           {onAdjust && (
             <button

@@ -831,3 +831,69 @@ async def get_report_version(
     if row.get("created_at"):
         row["created_at"] = row["created_at"].isoformat()
     return {"report": row}
+
+
+@app.get("/api/v1/sessions/{session_id}/reports/{version}/export.xlsx")
+async def export_report_xlsx(
+    session_id: str,
+    version: int,
+    user: dict = Depends(get_current_user),
+):
+    """Download the report's underlying query result as an xlsx workbook.
+
+    Reads the full `query_snapshot` (not the runtime-capped 5000 rows), so
+    the export is the dataset the user actually ran, not a UI preview.
+    Workbook layout: one sheet named "data", row 1 = column headers from
+    `query_snapshot.columns[*].name`, rows 2..N = the saved rows. Numeric
+    cells stay numeric so xlsx clients can sort/filter.
+    """
+    import io
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+
+    from app.infra.db.postgres import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await report_version_repository.get_version(
+            conn,
+            session_id=session_id,
+            user_id=user["id"],
+            version=version,
+        )
+    if row is None:
+        raise HTTPException(status_code=404, detail="VERSION_NOT_FOUND")
+    snapshot = row.get("query_snapshot")
+    if isinstance(snapshot, str):
+        import json as _json
+        snapshot = _json.loads(snapshot)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="NO_QUERY_SNAPSHOT")
+    columns = snapshot.get("columns") or []
+    rows = snapshot.get("rows") or []
+    # columns entries are {"name": "...", "type": "..."}; fall back to row keys.
+    if columns and isinstance(columns[0], dict):
+        headers = [c.get("name", "") for c in columns]
+    else:
+        headers = list(columns)
+    if not headers and rows:
+        headers = list(rows[0].keys())
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "data"
+    ws.append(headers)
+    for row in rows:
+        ws.append([row.get(h) for h in headers])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="report-{session_id[:8]}-v{version}.xlsx"'
+            )
+        },
+    )

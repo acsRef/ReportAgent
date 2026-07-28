@@ -2,20 +2,67 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import sqlglot
 from sqlglot import exp as sql_exp
 import psycopg2
+import psycopg2.errors
 import psycopg2.extras
 
 from decimal import Decimal
 
 PG_DSN = os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent")
 
+# 硬上限：单条 SQL 最多返回 5000 行；超出时通过 total_rows + truncated 字段告知 LLM。
+# 1M 行的查询不再把全部行塞进 JSON / SSE / JSONB。
+MAX_RESULT_ROWS = 5000
+
+# 连接 / 查询硬超时。PG 端 statement_timeout 按 ms 计（这里 30s）。
+# 客户端 connect_timeout 10s 防 PG 不可达时无限制挂着。
+CONNECT_TIMEOUT_S = 10
+STATEMENT_TIMEOUT_MS = 30_000
+
+ErrorKind = str  # "timeout" | "syntax" | "object" | "connection" | "permission" | "other"
+
+
+def _classify_psycopg2_error(exc: BaseException) -> ErrorKind:
+    """把 psycopg2 异常分类为 6 个枚举之一，供上层决定重试策略。
+
+    边界：timeout / connection / permission 不进入 LLM 重试（盲重试无意义，
+    让用户直接收到 FAILED 友好提示）；syntax / object 走原重试；other 兜底。
+    """
+    if isinstance(exc, (psycopg2.errors.QueryCanceled, psycopg2.errors.AdminShutdown, psycopg2.errors.CrashShutdown)):
+        return "timeout"
+    if isinstance(exc, psycopg2.OperationalError):
+        return "connection"
+    if isinstance(exc, psycopg2.ProgrammingError):
+        # ProgrammingError 涵盖语法错（sqlglot AST 通常已拦下）和权限不足；
+        # 权限类走 permission，其它走 syntax。
+        msg = str(exc).lower()
+        if "permission" in msg or "denied" in msg:
+            return "permission"
+        if "syntax" in msg or "parse" in msg:
+            return "syntax"
+        return "object"
+    if isinstance(exc, psycopg2.errors.SyntaxError):
+        return "syntax"
+    if isinstance(exc, psycopg2.errors.UndefinedColumn):
+        return "object"
+    if isinstance(exc, psycopg2.errors.UndefinedTable):
+        return "object"
+    if isinstance(exc, psycopg2.errors.UndefinedFunction):
+        return "object"
+    return "other"
+
 
 def _get_pg_conn():
-    """创建同步 PostgreSQL 连接用于分析查询。"""
-    return psycopg2.connect(PG_DSN)
+    """创建同步 PG 连接——带 connect_timeout 与 statement_timeout。"""
+    return psycopg2.connect(
+        PG_DSN,
+        connect_timeout=CONNECT_TIMEOUT_S,
+        options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+    )
 
 
 DANGEROUS_KEYWORDS = [
@@ -68,7 +115,14 @@ def validate_sql(sql: str) -> str:
             cur.execute(f"EXPLAIN {sql}")
         return json.dumps({"valid": True, "error": ""}, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"valid": False, "error": str(exc)}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "valid": False,
+                "error": str(exc)[:300],
+                "error_kind": _classify_psycopg2_error(exc),
+            },
+            ensure_ascii=False,
+        )
     finally:
         conn.close()
 
@@ -91,19 +145,48 @@ def execute_sql(sql: str) -> str:
     conn = _get_pg_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql)
-            columns = [{"name": desc.name, "type": str(desc.type_code)} for desc in cur.description]
+            # 用 CTE 一次往返拿「全部行数 + 截断后的行集」：单次 query 内 count
+            # 不会因并发而漂移，索引走主键的查询无显著成本。MAX_RESULT_ROWS+1
+            # 让 count>MAX 时仍能区分是否被截断。
+            cur.execute(
+                "WITH src AS (" + sql.rstrip().rstrip(";") + f") "
+                f"SELECT *, (SELECT count(*) FROM src) AS _total FROM src LIMIT {MAX_RESULT_ROWS + 1}"
+            )
+            columns = [{"name": desc.name, "type": str(desc.type_code)} for desc in cur.description if desc.name != "_total"]
             raw_rows = cur.fetchall()
-            rows = []
+            total = int(raw_rows[0]["_total"]) if raw_rows else 0
+            rows: list[dict[str, Any]] = []
             for row in raw_rows:
-                row_dict = dict(row)
-                for k, v in row_dict.items():
+                row_dict = {k: v for k, v in dict(row).items() if k != "_total"}
+                for k, v in list(row_dict.items()):
                     if isinstance(v, Decimal):
                         row_dict[k] = float(v)
                 rows.append(row_dict)
-            return json.dumps({"columns": columns, "rows": rows}, ensure_ascii=False, default=str)
+            truncated = total > MAX_RESULT_ROWS or len(rows) > MAX_RESULT_ROWS
+            if truncated and len(rows) > MAX_RESULT_ROWS:
+                rows = rows[:MAX_RESULT_ROWS]
+            return json.dumps(
+                {
+                    "columns": columns,
+                    "rows": rows,
+                    "row_count": total,
+                    "truncated": truncated,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
     except Exception as exc:
-        return json.dumps({"error": str(exc), "columns": [], "rows": []}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "error": str(exc)[:300],
+                "columns": [],
+                "rows": [],
+                "row_count": 0,
+                "truncated": False,
+                "error_kind": _classify_psycopg2_error(exc),
+            },
+            ensure_ascii=False,
+        )
     finally:
         conn.close()
 

@@ -414,7 +414,21 @@ def _evaluate(state: SQLAgentState) -> dict:
         retry = state.get("retry_counters", {})
         sql_retries = retry.get("sql_generation", 0)
         plan_retries = retry.get("plan", 0)
+        kind = result.get("error_kind") or "other"
 
+        # timeout / connection / permission：盲重试没意义，直接失败让用户调整。
+        if kind in ("timeout", "connection", "permission"):
+            message = {
+                "timeout": "查询超时，请缩小时间范围或维度后重试",
+                "connection": "数据库连接失败，请稍后重试",
+                "permission": "权限不足，无法执行该查询",
+            }[kind]
+            return {
+                "execution_status": "FAILED",
+                "error": f"{message}：{result.get('error', '')}",
+            }
+
+        # syntax / object / other：维持原重试逻辑
         if sql_retries < 3:
             return {"execution_status": "SQL_SYNTAX_ERROR"}
         elif plan_retries < 1:

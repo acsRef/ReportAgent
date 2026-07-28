@@ -24,6 +24,9 @@ class TableSchema(BaseModel):
 class ErrorDetail(BaseModel):
     code: str
     message: str
+    # 错误类别（psycopg2 → 上层决策）。None = 未知（沿用旧路径）。
+    # 取值：timeout / syntax / object / connection / permission / other
+    kind: Optional[str] = None
 
 
 class SchemaContext(BaseModel):
@@ -52,6 +55,10 @@ class QueryResult(BaseModel):
     row_count: int = 0
     status: Literal["SUCCESS", "FAILED", "EMPTY"] = "SUCCESS"
     error: Optional[ErrorDetail] = None
+    # True when rows were truncated by execute_sql's MAX_RESULT_ROWS cap;
+    # total/true lets the LLM ask the user to narrow scope instead of
+    # silently dropping the tail.
+    truncated: bool = False
 
 
 class ComponentSpec(BaseModel):

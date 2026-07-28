@@ -1,0 +1,190 @@
+"""SQL 工具防护层测试：行数上限 + 超时 + 错误分类。
+
+execute_sql 与 validate_sql 必须：
+- 返回 error_kind 字段供上游分类
+- 返回 truncated/row_count 让 LLM 知道结果被截
+- 永远不会把 conn.close 漏掉导致连接泄露
+"""
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+pytestmark = pytest.mark.smoke
+
+
+# --- _classify_psycopg2_error ---------------------------------------------------
+
+def _exc(kind):
+    """Construct a fake psycopg2 exception with the right MRO so isinstance works."""
+    base = type("FakeExc", (), {}) if kind == "other" else None
+    # psycopg2 的异常类用 isinstance 匹配；为不依赖 psycopg2 实际安装路径，
+    # 我们用 type 构造一个与目标类同名的类，继承 psycopg2 对应异常。
+    import psycopg2.errors
+    cls = getattr(psycopg2.errors, kind, None) or psycopg2.Error
+    return cls("test")
+
+
+def test_classify_timeout():
+    from app.tools.sql_tools import _classify_psycopg2_error
+    import psycopg2.errors
+    e = psycopg2.errors.QueryCanceled("canceling statement due to statement timeout")
+    assert _classify_psycopg2_error(e) == "timeout"
+
+
+def test_classify_connection():
+    from app.tools.sql_tools import _classify_psycopg2_error
+    import psycopg2.errors
+    e = psycopg2.errors.OperationalError("server closed the connection unexpectedly")
+    assert _classify_psycopg2_error(e) == "connection"
+
+
+def test_classify_syntax():
+    from app.tools.sql_tools import _classify_psycopg2_error
+    import psycopg2.errors
+    e = psycopg2.errors.SyntaxError("syntax error at or near \"FROM\"")
+    assert _classify_psycopg2_error(e) == "syntax"
+
+
+def test_classify_undefined_column_is_object():
+    from app.tools.sql_tools import _classify_psycopg2_error
+    import psycopg2.errors
+    e = psycopg2.errors.UndefinedColumn('column "x" does not exist')
+    assert _classify_psycopg2_error(e) == "object"
+
+
+def test_classify_permission_in_programmingerror():
+    from app.tools.sql_tools import _classify_psycopg2_error
+    import psycopg2.errors
+    e = psycopg2.ProgrammingError("permission denied for table fact_sales")
+    assert _classify_psycopg2_error(e) == "permission"
+
+
+# --- execute_sql truncation / error envelope ------------------------------------
+
+def test_execute_sql_truncates_at_5000_rows(monkeypatch):
+    from app.tools import sql_tools
+
+    fake_rows = [{"id": i, "v": i * 1.0, "_total": 5001} for i in range(5001)]
+
+    class FakeCursor:
+        description = [SimpleNamespace(name="id", type_code=23), SimpleNamespace(name="v", type_code=1700)]
+
+        def execute(self, sql):
+            pass
+
+        def fetchall(self):
+            # 最后一行是 _total
+            return fake_rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class FakeConn:
+        def cursor(self, cursor_factory=None):
+            return FakeCursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
+
+    result = json.loads(sql_tools.execute_sql("SELECT * FROM big"))
+    assert result["truncated"] is True
+    assert result["row_count"] == 5001
+    assert len(result["rows"]) == 5000
+
+
+def test_execute_sql_untruncated_when_under_cap(monkeypatch):
+    from app.tools import sql_tools
+
+    class FakeCursor:
+        description = [SimpleNamespace(name="id", type_code=23)]
+
+        def execute(self, sql): pass
+        def fetchall(self):
+            return [{"id": 1, "_total": 6}, {"id": 2, "_total": 6}, {"id": 3, "_total": 6},
+                    {"id": 4, "_total": 6}, {"id": 5, "_total": 6}, {"id": 6, "_total": 6}]
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class FakeConn:
+        def cursor(self, cursor_factory=None): return FakeCursor()
+        def close(self): pass
+
+    monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
+    result = json.loads(sql_tools.execute_sql("SELECT * FROM t"))
+    assert result["truncated"] is False
+    assert result["row_count"] == 6
+    assert len(result["rows"]) == 6
+
+
+def test_execute_sql_timeout_returns_classified_error(monkeypatch):
+    from app.tools import sql_tools
+    import psycopg2.errors
+
+    class FakeCursor:
+        description = None
+
+        def execute(self, sql):
+            raise psycopg2.errors.QueryCanceled("canceling statement due to statement timeout")
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class FakeConn:
+        def cursor(self, cursor_factory=None): return FakeCursor()
+        def close(self): pass
+
+    monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
+    result = json.loads(sql_tools.execute_sql("SELECT pg_sleep(999)"))
+    assert result["error_kind"] == "timeout"
+    assert result["row_count"] == 0
+    assert result["rows"] == []
+    assert "timeout" in result["error"] or "cancel" in result["error"]
+
+
+def test_execute_sql_connection_error_classified(monkeypatch):
+    from app.tools import sql_tools
+    import psycopg2.errors
+
+    class FakeCursor:
+        description = None
+        def execute(self, sql):
+            raise psycopg2.errors.OperationalError("server closed the connection")
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    class FakeConn:
+        def cursor(self, cursor_factory=None): return FakeCursor()
+        def close(self): pass
+
+    monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
+    result = json.loads(sql_tools.execute_sql("SELECT 1"))
+    assert result["error_kind"] == "connection"
+
+
+def test_validate_sql_sets_error_kind_too(monkeypatch):
+    from app.tools import sql_tools
+    import psycopg2.errors
+
+    class FakeCursor:
+        def execute(self, sql):
+            raise psycopg2.errors.SyntaxError("syntax error")
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class FakeConn:
+        def cursor(self): return FakeCursor()
+        def close(self): pass
+
+    monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
+    result = json.loads(sql_tools.validate_sql("SELECT"))
+    assert result["valid"] is False
+    assert result["error_kind"] == "syntax"
