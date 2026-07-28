@@ -5,7 +5,15 @@ import statistics
 
 
 def trend_analysis(data_json: str) -> str:
-    """分析数据趋势。"""
+    """判断时间序列数据的整体趋势方向（上升/下降/平稳）及变化幅度。
+    用途：数据包含按时间排序的数值列时，自动判断是涨了还是跌了。
+    输入：data_json（execute_sql 返回的 JSON），会自动取第一个数值列
+    输出：趋势文本，如 "整体呈上升趋势，后半段增长 23.5%"
+    判断方式：数据切半，比较前后半段均值。
+      后半段均值 > 前半段 110% → 上升趋势
+      前半段均值 > 后半段 110% → 下降趋势
+      否则 → 平稳
+    限制：数据少于 2 行时无法分析。不做分组对比（用 group_compare）。不做异常检测（用 detect_anomaly）。"""
     data = json.loads(data_json)
     rows = data.get("rows", [])
     if len(rows) < 2:
@@ -32,7 +40,17 @@ def trend_analysis(data_json: str) -> str:
 
 
 def group_compare(data_json: str, group_col: str = "", value_col: str = "") -> str:
-    """按维度分组对比。"""
+    """按指定维度分组，汇总数值合计，对比哪个组表现最好/最差。
+    用途：横向对比不同区域/产品/客户等维度的数值差异，输出排名。
+    输入：
+      data_json（execute_sql 返回的 JSON）
+      group_col（分组字段，可选。不指定时自动选第一个非数值列）
+      value_col（数值字段，可选。不指定时自动选第一个数值列）
+    输出：多行文本，每行 "分组名: 合计=数值"，按合计降序排列
+    示例输入：
+      group_col='region_name', value_col='total_amount'
+      → 返回 "华东: 合计=1,234,567.00\n华南: 合计=987,654.00"
+    不要用来：不执行 SQL 查询。不需要分组对比时不用。需要图表可视化时用 chart_advisor。"""
     data = json.loads(data_json)
     rows = data.get("rows", [])
     if not rows:
@@ -60,7 +78,17 @@ def group_compare(data_json: str, group_col: str = "", value_col: str = "") -> s
 
 
 def detect_anomaly(data_json: str, value_col: str = "") -> str:
-    """检测数据中的异常值。"""
+    """用标准差方法检测数据中的异常高/低值（偏离均值超过 2 倍标准差）。
+    用途：数据质量检查，找"哪个数据点不正常"。
+    输入：
+      data_json（execute_sql 返回的 JSON）
+      value_col（数值字段名，可选。不指定时自动选第一个数值列）
+    输出：异常值列表文本，如 "发现 2 个异常值: 华东: 1,234.56; 华南: 987.65"
+        未发现异常时返回 "未发现明显异常值"
+    限制：
+      - 数据至少需要 3 行才能计算标准差
+      - 只检测单个数值列的异常，不跨列关联
+      - 不做趋势分析（用 trend_analysis）。不做分组对比（用 group_compare）。"""
     data = json.loads(data_json)
     rows = data.get("rows", [])
     if not rows:

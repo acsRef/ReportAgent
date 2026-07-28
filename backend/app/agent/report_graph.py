@@ -6,7 +6,7 @@ from typing import Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from app.llm import call_llm
+from app.llm import call_llm, _format_tools_for_prompt
 from app.models.contracts import ComponentSpec, QueryResult, ReportSpec
 from app.tools.sql_tools import chart_advisor, insight_analyst
 from app.utils.text import safe_json_parse, strip_markdown_fence
@@ -47,11 +47,8 @@ def _plan_analysis(state: ReportAgentState) -> dict:
 列: {', '.join(col_names)}
 行数: {qr.row_count}
 
-可用分析：
-1. chart_advisor(data) — 推荐图表
-2. trend_analysis(data) — 趋势分析
-3. group_compare(data, group_col, value_col) — 分组对比
-4. detect_anomaly(data, value_col) — 异常检测
+可用分析工具（五个工具各管一件事，按描述里的「适用/不要用来」选择，tool 名必须逐字使用）：
+{_format_tools_for_prompt()}
 
 只输出JSON，禁止解释，禁止markdown，禁止思考过程。
 格式：
@@ -106,6 +103,9 @@ def _run_step(state: ReportAgentState) -> dict:
     elif tool_name == "detect_anomaly":
         text = _call_tool(["detect_anomaly"], data_json,
                           step.get("args", {}).get("value_col", ""))
+    elif tool_name == "insight_analyst":
+        # 菜单与分发必须一致：模型能选的工具必须能执行
+        text = insight_analyst(data_json)
     else:
         text = chart_advisor(data_json)
 

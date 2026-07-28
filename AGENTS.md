@@ -30,14 +30,15 @@ User ←SSE→ React+Vite (:3000) → proxy /api → FastAPI+LangGraph (:8100)
 | Frontend build | `cd frontend && npm run build` (tsc -b && vite build) |
 | Frontend lint | `cd frontend && npm run lint` (oxlint, not eslint) |
 | Frontend preview | `cd frontend && npm run preview` |
+| Frontend typecheck | `cd frontend && npx tsc -b` |
 
 ## Testing
 
-**Backend (pytest):** Run from `backend/`. `asyncio_mode=auto`, `testpaths=tests`, strict markers.
+**Backend (pytest):** Run from `backend/`. `asyncio_mode=auto`, `asyncio_default_fixture_loop_scope=session`, `testpaths=tests`, strict markers.
 
 | Command | Purpose |
 |---------|---------|
-| `pytest` | Full suite |
+| `pytest` | Full offline suite |
 | `pytest -m smoke` | Smoke tests only |
 | `pytest -m contracts` | Frontend/backend contract parity |
 | `pytest -m graphs` | LangGraph tests |
@@ -45,9 +46,9 @@ User ←SSE→ React+Vite (:3000) → proxy /api → FastAPI+LangGraph (:8100)
 | `pytest tests/smoke/test_models.py -k "keyword"` | Single file + keyword filter |
 | `python -m pytest tests/e2e/test_full_flow.py -s` | E2E (requires full stack) |
 
-Markers defined in `backend/pytest.ini`: `smoke`, `persistence`, `graphs`, `contracts`, `api`, `e2e`.
+Markers in `backend/pytest.ini`: `smoke`, `persistence`, `graphs`, `contracts`, `api`, `e2e`.
 
-**Frontend (vitest):** Run from `frontend/`. jsdom environment, `src/**/__tests__/` directory.
+**Frontend (vitest):** Run from `frontend/`. jsdom environment, `src/**/__tests__/` dir.
 
 | Command | Purpose |
 |---------|---------|
@@ -55,7 +56,7 @@ Markers defined in `backend/pytest.ini`: `smoke`, `persistence`, `graphs`, `cont
 | `npm run test` | Vitest watch mode |
 | `npx vitest --run src/stores/__tests__/analysisReducer.test.ts -t "test name"` | Single file + test name |
 
-**Manual test:**
+**Manual API test:**
 ```bash
 curl -X POST http://localhost:8100/api/v1/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'
 curl -X POST http://localhost:8100/api/v1/chat -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"user_query":"今年华东销售趋势","session_id":"test-1"}'
@@ -64,24 +65,31 @@ curl http://localhost:8100/health
 
 ## Code Style — Python (Backend)
 
-- **Imports:** stdlib first, then third-party, then local. Group with blank lines. `from __future__ import annotations` at the top.
-- **Types:** Always annotate function signatures. Use `X | None` not `Optional[X]`. Use Pydantic v2 `BaseModel` + `Field` + `model_validator`.
+- **`from __future__ import annotations`** at the very top of every file (line 1), before all other imports.
+- **Imports:** stdlib first, then third-party, then local. Group with blank lines between blocks.
+- **Types:** Always annotate function signatures. Prefer `X | None` over `Optional[X]`. Use `TypedDict` for graph state, Pydantic `BaseModel` for data contracts. Use `Literal` for status/phase constants.
+- **Pydantic v2:** `Field(default_factory=...)` for mutable defaults. `@model_validator(mode="after")` for cross-field validation. Use `.model_dump(mode="json")` and `.model_validate()` for serialization.
 - **Naming:** `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE` for constants. Private helpers prefixed with `_`.
-- **Error handling:** Catch specific exceptions; `logger.warning` for recoverable, `raise` for fatal. Log with `%s` formatting, not f-strings. Avoid bare `except:`.
-- **Patterns:** Module-level lazy singletons with explicit getter (e.g. `get_connection()`). Globals OK for connections.
-- **Database:** `asyncpg` queries must use `$1` parameter binding (no string concatenation). All writes scoped by `(user_id, session_id)` from JWT context (never request body). Writes belong in a single `async with pool.acquire()` transaction.
-- **Lint:** `ruff check` equivalent.
+- **Error handling:** Catch specific exceptions; never bare `except:`. Use `raise ... from exc` for chaining. Define custom exceptions as module-level classes. `logger.warning` for recoverable, `logger.error` + `raise` for fatal. Use `%s` formatting in logger calls (never f-strings).
+- **Async:** All I/O-bound functions are `async def`. Use `async with pool.acquire() as conn: async with conn.transaction():` for DB writes. Pure transformations remain sync.
+- **Logger:** Module-level `logger = logging.getLogger(__name__)`. Log with `%s` formatting (e.g. `logger.info("msg %s", var)`), not f-strings.
+- **Database:** `asyncpg` uses `$1` parameter binding. All writes scoped by `(user_id, session_id)` from JWT context (never request body). Services use keyword-only args with `*`.
+- **Lint:** `ruff check` equivalent (no config file present; code manually formatted to consistent 4-space indent, ~100-120 char lines).
+- **Docstrings:** Module-level triple-quoted docstrings on most files. Function docstrings for non-trivial logic. Inline `# NOTE:` and `# --- Section ---` markers for organization.
+- **`__init__.py`:** All intentionally 0 bytes (namespace packages).
 
 ## Code Style — TypeScript/React (Frontend)
 
-- **Imports:** React/external first, then local relative. Use `import type` for type-only imports. `verbatimModuleSyntax` enabled.
-- **Types:** Prefer `interface` for Props/State, `type` for unions/utilities. Use discriminated unions over `Record<string, unknown>`. SSE type guards required; no `unknown` into reducer.
-- **Components:** Default export function components. Props interface named `Props` (local per file). No class components.
-- **State:** Zustand stores with pure reducers. `analysisReducer` is the single source of truth — React components never write `phase` directly. Use immer middleware.
-- **Styling:** Use CSS variables from `src/styles/tokens.css` + `src/styles/workbench.css` (the approved prototype `docs/intelligent-analysis-workbench.html` is the visual source of truth; all prototype colors are promoted to tokens). antd is fully removed — components come from `src/components/atelier/` and icons from `src/components/ui/Icons.tsx`. No new hex values outside tokens.css. No `!important`.
-- **Design tokens** (single source of truth in `tokens.css`): `--ink`, `--teal`, `--paper`, `--canvas`, `--rail`, `--muted`, `--amber`, `--red`, `--green`, `--font-display`, `--font-ui`, `--font-mono`. AntD theme mirrors these exactly.
+- **Imports:** React/external first, then local relative. No `@/` alias — all imports are relative paths. `verbatimModuleSyntax: true` in tsconfig, so use `import type` for type-only imports.
+- **Types:** `interface` for Props, State, and data shapes. `type` for unions, string literals, and type aliases. Discriminated unions on `type` field for actions and SSE events. Use `ReadonlySet` for validation constants. Prefer `X | null` over `Optional`.
+- **Components:** Default export function components. Props interface named `Props` (local per file, not exported). No class components. `forwardRef` uses named function expressions.
+- **State:** Zustand with `immer` middleware. Pure `analysisReducer` function is the single source of truth — React components never write `phase` directly. Actions are discriminated unions with `type: 'domain/verb'` (e.g. `'phase/received'`, `'report/received'`). Auth store uses `zustand/middleware/persist` to `localStorage` key `ragent_auth`.
+- **Styling:** CSS custom properties from `src/styles/tokens.css` + `src/styles/workbench.css`. BEM-like naming: `atelier-*` for shared UI kit, `wb-*` for workbench. No hardcoded hex values outside tokens.css. No `!important`. Inline `style` only for truly dynamic values.
+- **Design tokens** (single source of truth in `tokens.css`): `--ink`, `--teal`, `--paper`, `--canvas`, `--rail`, `--muted`, `--amber`, `--red`, `--green`, `--font-display`, `--font-ui`, `--font-mono`, `--sp-*` spacing scale.
 - **State machine:** `AnalysisPhase` transitions live in both backend and frontend reducer. Frontend mirrors backend SSE `phase` events.
-- **Lint:** oxlint (not eslint). `react/rules-of-hooks: error`, `react/only-export-components: warn`.
+- **Lint:** oxlint (not eslint). Rules in `.oxlintrc.json`: `react/rules-of-hooks: error`, `react/only-export-components: warn`.
+- **Naming conventions:** `use{Name}Store` for hooks, `{Name}Store` for store interfaces, `{Name}State` for state interfaces, `initial{Name}State` for initial state, `is{TypeName}` for type guards, `{domain}Reducer` for reducer functions. Test files colocated in `src/**/__tests__/` with `.test.ts`/`.test.tsx` extension.
+- **TypeScript config:** `tsconfig.app.json` has `noUnusedLocals: true`, `noUnusedParameters: true`, `erasableSyntaxOnly: true`, `verbatimModuleSyntax: true`.
 
 ## SSE Event Protocol
 
@@ -120,6 +128,11 @@ User Query → security_guard (score ≥ 3 → block)
 2. AST: `sqlglot` verifies parsed result is `Select`
 3. EXPLAIN: run `EXPLAIN <sql>` before execution
 
+## Git Conventions
+
+- Conventional Commits: `feat(scope): msg`, `fix(scope): msg`, `docs: msg`, `chore(scope): msg`, `test(scope): msg`, `refactor: msg`, `style(scope): msg`.
+- English messages, lowercase after colon, no period at end.
+
 ## Known Quirks
 
 - `__init__.py` files are intentionally 0 bytes (namespace packages)
@@ -131,3 +144,6 @@ User Query → security_guard (score ≥ 3 → block)
 - Embedding uses SiliconFlow API (`.env`: `SILICONFLOW_API_KEY`), separate from LLM (MiniMax). Falls back to `ILIKE ANY($1::text[])` on failure.
 - `.env` must set `EMBEDDING_DIM=1536` to match `VECTOR(1536)` in `init_pg.sql`
 - Startup verifies embedding dimension; failure degrades to keyword matching (non-blocking)
+- No `pyproject.toml`, `Makefile`, `docker-compose.yml`, or CI configs exist
+- test files use module-level `pytestmark = pytest.mark.<marker_name>` and fixtures in `tests/conftest.py` (dummy_jwt_user, mock_pool, pg_pool)
+- `backend/app/__init__.py` is 0 bytes

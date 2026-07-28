@@ -156,12 +156,11 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
     card = state.get("requirement_card")
     confirmed_requirement = _format_confirmed_requirement(card)
 
-    # Synthesize a non-empty user_query from the confirmed card when
-    # the original is empty (confirm flow via POST /confirm). Without
-    # this, _plan receives `user_query=""` and produces no signal.
+    # confirm 流（POST /confirm）的 user_query 为空时，用确认卡合成
+    # 一个非空查询，否则 _plan 拿到空串、产不出任何信号。
     user_query = state["user_query"]
     if not user_query.strip() and confirmed_requirement:
-        user_query = f"Generate report: {confirmed_requirement}"
+        user_query = f"生成报告：{confirmed_requirement}"
 
     ss = await sql_graph.ainvoke({
         "schema_context": schema_input,
@@ -185,28 +184,28 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
 
 
 def _format_confirmed_requirement(card) -> str | None:
-    """Serialize the PATCHed RequirementCard into the structured string
-    the SQL plan prompt consumes. Returns None when no card is loaded
-    (the plan falls back to inferring from `user_query`).
+    """把 PATCH 确认后的 RequirementCard 序列化成 SQL plan prompt
+    消费的结构化字符串（中文字段标签）。无卡时返回 None，plan
+    退回从自由文本 user_query 推断。
     """
     if card is None:
         return None
     parts: list[str] = []
     if card.time_range:
-        parts.append(f"time_range = {card.time_range}")
+        parts.append(f"时间范围 = {card.time_range}")
     if card.scope:
-        parts.append(f"scope = [{', '.join(card.scope)}]")
+        parts.append(f"数据范围 = [{', '.join(card.scope)}]")
     if card.target_metrics:
-        parts.append(f"metrics = [{', '.join(card.target_metrics)}]")
+        parts.append(f"核心指标 = [{', '.join(card.target_metrics)}]")
     if card.dimensions:
-        parts.append(f"dimensions = [{', '.join(card.dimensions)}]")
+        parts.append(f"分析维度 = [{', '.join(card.dimensions)}]")
     if card.analysis_methods:
-        parts.append(f"analysis_methods = [{', '.join(card.analysis_methods)}]")
+        parts.append(f"分析方法 = [{', '.join(card.analysis_methods)}]")
     if card.assumptions:
         accepted = [a for a in card.assumptions if a.accepted is True]
         if accepted:
             parts.append(
-                "user-accepted assumptions = [" + "; ".join(a.text for a in accepted) + "]"
+                "用户已接受的假设 = [" + "; ".join(a.text for a in accepted) + "]"
             )
     if not parts:
         return None

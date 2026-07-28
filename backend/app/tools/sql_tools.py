@@ -49,7 +49,15 @@ def check_sql_safety(sql: str) -> tuple[bool, str]:
 
 
 def validate_sql(sql: str) -> str:
-    """验证 SQL 语法和安全性。"""
+    """三重校验 SQL 语法和安全性，不执行查询。
+    用途：每次 execute_sql 前的安全检查。必须校验通过后才能执行。
+    校验链：(1) 黑名单检查（禁止 INSERT/UPDATE/DELETE/DROP 等 DDL/DML）
+           (2) AST 解析（sqlglot 验证是标准 SELECT）
+           (3) EXPLAIN 执行（在实际 PG 连接上跑 EXPLAIN 捕获语法错误）
+    输入：sql（要校验的 SQL 文本）
+    输出：{"valid": bool, "error": string}
+    约束：只接受 SELECT 语句。校验通过不代表逻辑正确，只代表安全可执行。
+    不要用来：不要用它执行查询或获取数据。"""
     safe, msg = check_sql_safety(sql)
     if not safe:
         return json.dumps({"valid": False, "error": msg}, ensure_ascii=False)
@@ -66,7 +74,16 @@ def validate_sql(sql: str) -> str:
 
 
 def execute_sql(sql: str) -> str:
-    """执行只读 SQL 查询。"""
+    """执行只读 SELECT 查询，返回列结构和行数据。
+    前置条件：必须先调 validate_sql 且返回 {"valid": true}
+    安全限制：只接受 SELECT 语句。任何 DDL/DML 都会被拒绝。
+    输入：sql（合法 SELECT，字段名必须引用已确认的表结构）
+    输出：{"columns": [{name, type}], "rows": [{col: value}], "error": string}
+      - error 为空字符串表示成功
+      - error 有内容表示执行失败（如字段不存在、语法错误）
+    重试策略：失败最多重试 3 次，每次携带错误信息回 LLM 修正 SQL。
+              3 次全失败则转 clarify 节点要求用户澄清。
+    注意：连接的是只读 PostgreSQL 副本，无法修改数据。"""
     safe, msg = check_sql_safety(sql)
     if not safe:
         return json.dumps({"error": msg, "columns": [], "rows": []}, ensure_ascii=False)
@@ -92,7 +109,15 @@ def execute_sql(sql: str) -> str:
 
 
 def chart_advisor(sql_result: str) -> str:
-    """根据 SQL 查询结果推荐图表类型。"""
+    """根据已执行的查询结果推荐图表类型和配置。
+    用途：SQL 执行成功并返回数据后，决定如何可视化。
+    输入：sql_result（execute_sql 返回的完整 JSON，含 columns 和 rows）
+    输出：{"type": "pie"|"bar"|"table", "config": {data, dimensions}}
+    判断逻辑：
+      - 1 个分类字段 + 1 个数值字段，行数 ≤ 8 → 饼图
+      - 1 个分类字段 + 1 个数值字段，行数 > 8 → 柱状图
+      - 无合适维度组合 → 纯表格
+    不要用来：不执行 SQL 查询、不修改数据、不生成数值摘要（用 insight_analyst）。"""
     data = json.loads(sql_result)
     columns_raw = data.get("columns", [])
     rows = data.get("rows", [])
@@ -123,7 +148,12 @@ def chart_advisor(sql_result: str) -> str:
 
 
 def insight_analyst(sql_result: str) -> str:
-    """分析 SQL 查询结果，生成数值洞察。"""
+    """对查询结果的数值列生成统计摘要（合计、均值、最大、最小）。
+    用途：SQL 执行成功并返回数据后，提炼数值维度的核心指标。
+    输入：sql_result（execute_sql 返回的完整 JSON，含 columns 和 rows）
+    输出：多行文本，每行对应一个数值列的统计，如 "销售额: 合计=1,234,567.00, 平均=102,880.58, 最大=999,999.00, 最小=1.00"
+    处理方式：对前 3 个数值列分别计算。空数据返回提示文本。
+    不要用来：不执行 SQL 查询、不生成图表配置（用 chart_advisor）、不做趋势预测。"""
     data = json.loads(sql_result)
     rows = data.get("rows", [])
     columns_raw = data.get("columns", [])

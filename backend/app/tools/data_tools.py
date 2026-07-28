@@ -20,7 +20,7 @@ _TABLES: list[dict] = [
             {"name": "day_name", "type": "VARCHAR"},
             {"name": "is_holiday", "type": "BOOLEAN"},
         ],
-        "description": "日期维度表，包含年/季度/月/周以及节假日标记",
+        "description": "日期维度表，包含年/季度/月/周以及节假日标记。典型问题：按 2024年/Q1/本月 过滤时间，或按年/季度粒度分组",
     },
     {
         "table_name": "dim_region",
@@ -31,7 +31,7 @@ _TABLES: list[dict] = [
             {"name": "city", "type": "VARCHAR"},
             {"name": "tier", "type": "VARCHAR"},
         ],
-        "description": "区域和城市映射表，包含华北/华东/华南/西南等大区及对应城市",
+        "description": "区域和城市映射表，包含华北/华东/华南/西南等大区及对应城市。典型问题：各区域销售、华东华南对比、省份排名",
     },
     {
         "table_name": "dim_product",
@@ -45,7 +45,7 @@ _TABLES: list[dict] = [
             {"name": "cost_price", "type": "DECIMAL(10,2)"},
             {"name": "supplier", "type": "VARCHAR"},
         ],
-        "description": "产品信息表，包含产品名称、所属品类、子品类、品牌和单价",
+        "description": "产品信息表，包含产品名称、所属品类、子品类、品牌和单价。典型问题：品类销售排名、品牌对比、单价与成本",
     },
     {
         "table_name": "dim_customer",
@@ -57,7 +57,7 @@ _TABLES: list[dict] = [
             {"name": "city", "type": "VARCHAR"},
             {"name": "register_date", "type": "DATE"},
         ],
-        "description": "客户维度表，包含客户名称、等级、行业和注册日期",
+        "description": "客户维度表，包含客户名称、等级、行业和注册日期。典型问题：客户等级贡献、行业对比、大客户 Top N",
     },
     {
         "table_name": "dim_warehouse",
@@ -67,7 +67,7 @@ _TABLES: list[dict] = [
             {"name": "city", "type": "VARCHAR"},
             {"name": "capacity", "type": "INTEGER"},
         ],
-        "description": "仓库维度表，包含仓库名称、所在城市和容量",
+        "description": "仓库维度表，包含仓库名称、所在城市和容量。典型问题：各仓库库存、容量分布",
     },
     {
         "table_name": "dim_employee",
@@ -79,7 +79,7 @@ _TABLES: list[dict] = [
             {"name": "city", "type": "VARCHAR"},
             {"name": "hire_date", "type": "DATE"},
         ],
-        "description": "员工维度表，包含部门、岗位和入职日期",
+        "description": "员工维度表，包含部门、岗位和入职日期。典型问题：各部门考勤、岗位人数统计",
     },
     {
         "table_name": "fact_sales",
@@ -97,7 +97,7 @@ _TABLES: list[dict] = [
             {"name": "cost_amount", "type": "DECIMAL(12,2)"},
             {"name": "profit", "type": "DECIMAL(12,2)"},
         ],
-        "description": "销售记录事实表，含区域、产品、客户、数量、金额、折扣、成本和利润",
+        "description": "销售记录事实表，含区域、产品、客户、数量、金额、折扣、成本和利润。典型问题：销售额/销量排名、区域对比、月度趋势、毛利分析",
     },
     {
         "table_name": "fact_returns",
@@ -111,7 +111,7 @@ _TABLES: list[dict] = [
             {"name": "return_reason", "type": "VARCHAR"},
             {"name": "handling", "type": "VARCHAR"},
         ],
-        "description": "退货记录事实表，关联销售记录，包含退货原因和处理方式",
+        "description": "退货记录事实表，关联销售记录，包含退货原因和处理方式。典型问题：退货原因分析、产品退货率、区域退货对比",
     },
     {
         "table_name": "fact_inventory",
@@ -124,7 +124,7 @@ _TABLES: list[dict] = [
             {"name": "quantity_reserved", "type": "INTEGER"},
             {"name": "quantity_available", "type": "INTEGER"},
         ],
-        "description": "库存记录事实表，按产品+仓库+日期记录库存量、预留量和可售量",
+        "description": "库存记录事实表，按产品+仓库+日期记录库存量、预留量和可售量。典型问题：当前库存、可售量、库存周转",
     },
     {
         "table_name": "fact_attendance",
@@ -135,7 +135,7 @@ _TABLES: list[dict] = [
             {"name": "status", "type": "VARCHAR"},
             {"name": "work_hours", "type": "DECIMAL(4,1)"},
         ],
-        "description": "考勤记录事实表，关联员工，包含考勤状态和工时",
+        "description": "考勤记录事实表，关联员工，包含考勤状态和工时。典型问题：出勤率统计、加班工时、部门考勤对比",
     },
 ]
 
@@ -177,8 +177,13 @@ def _build_ddl(tname: str, columns: list[dict]) -> str:
 
 @tool
 def search_tables(query: str, top_k: int = 3) -> str:
-    """语义搜索数据库表：输入自然语言查询，返回最相关的表和字段结构。
-    例：search_tables('退货率趋势') → 返回 returns, sales 表"""
+    """根据中文业务关键词搜索数据库表，返回表名、字段列表、DDL 和描述。
+    用途：不知道数据在哪个表时用来「找表」。
+    场景：用户提问含销售额/退货率/库存/趋势等业务概念，需要先定位表。
+    反例：已经知道表名（如 fact_sales），只是要看它的字段 → 用 get_table_ddl。
+    输入：query（中文描述），top_k（返回条数，默认 3）
+    输出：JSON 数组，每项 {table_name, columns[{name,type}], ddl, description, score}
+    示例：search_tables('退货原因') → 优先返回 fact_returns（退货事实表）"""
     all_results = []
     for t in _TABLES:
         all_results.append({
@@ -231,7 +236,13 @@ def search_tables(query: str, top_k: int = 3) -> str:
 
 @tool
 def get_table_ddl(table_name: str) -> str:
-    """获取某张表的完整 CREATE TABLE DDL，包含所有字段名和类型。"""
+    """获取指定单张表的完整 CREATE TABLE DDL（字段名、类型、精度）。
+    用途：确定了目标表后，看精确字段名和类型用于写 SQL。
+    前置：不确定表名时先用 search_tables 搜索，不要猜表名。
+    输入：table_name（英文下划线格式，如 'fact_sales'、'dim_product'）
+    输出：CREATE TABLE 文本
+    示例：get_table_ddl('dim_region') → 返回含 region_name、province、city 的建表语句
+    失败：表不存在时返回 'Table xxx not found'"""
     for t in _TABLES:
         if t["table_name"] == table_name:
             return _build_ddl(table_name, t["columns"])
@@ -240,7 +251,11 @@ def get_table_ddl(table_name: str) -> str:
 
 @tool
 def list_tables() -> str:
-    """列出数据库中所有可用的表及其简要描述。"""
+    """列出数据库全部可用表（表名、中文描述、字段数），用于总览数据库全貌。
+    用途：首次接入系统不了解结构时调用，或 search_tables 未返回理想结果时兜底。
+    输入：无参数。
+    输出：JSON 数组，每项 {table_name, description, column_count}
+    限制：不返回字段详情。需要字段结构用 get_table_ddl。需要语义搜索用 search_tables。"""
     results = [
         {
             "table_name": t["table_name"],

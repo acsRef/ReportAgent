@@ -39,11 +39,11 @@ def test_format_confirmed_requirement_all_fields() -> None:
     )
     result = _format_confirmed_requirement(card)
     assert result is not None
-    assert "time_range = 今年" in result
-    assert "scope = [华东]" in result
-    assert "metrics = [销售额]" in result
-    assert "dimensions = [区域, 时间]" in result
-    assert "analysis_methods = [同比, 环比]" in result
+    assert "时间范围 = 今年" in result
+    assert "数据范围 = [华东]" in result
+    assert "核心指标 = [销售额]" in result
+    assert "分析维度 = [区域, 时间]" in result
+    assert "分析方法 = [同比, 环比]" in result
     assert "默认华东" in result
 
 
@@ -51,7 +51,7 @@ def test_format_confirmed_requirement_minimal() -> None:
     from app.agent.confirmed_execution_graph import _format_confirmed_requirement
     result = _format_confirmed_requirement(_complete_card(time_range="本月"))
     assert result is not None
-    assert "time_range = 本月" in result
+    assert "时间范围 = 本月" in result
 
 
 def test_format_confirmed_requirement_none_card() -> None:

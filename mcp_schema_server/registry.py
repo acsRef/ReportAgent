@@ -18,7 +18,7 @@ _TABLES: list[dict] = [
             {"name": "is_holiday", "type": "BOOLEAN"},
         ],
         "ddl": None,  # generated on init
-        "description": "日期维度表，包含年/季度/月/周以及节假日标记",
+        "description": "日期维度表，包含年/季度/月/周以及节假日标记。典型问题：按 2024年/Q1/本月 过滤时间，或按年/季度粒度分组",
     },
     {
         "table_name": "dim_region",
@@ -30,7 +30,7 @@ _TABLES: list[dict] = [
             {"name": "tier", "type": "VARCHAR"},
         ],
         "ddl": None,
-        "description": "区域和城市映射表，包含华北/华东/华南/西南等大区及对应城市",
+        "description": "区域和城市映射表，包含华北/华东/华南/西南等大区及对应城市。典型问题：各区域销售、华东华南对比、省份排名",
     },
     {
         "table_name": "dim_product",
@@ -45,7 +45,7 @@ _TABLES: list[dict] = [
             {"name": "supplier", "type": "VARCHAR"},
         ],
         "ddl": None,
-        "description": "产品信息表，包含产品名称、所属品类、子品类、品牌和单价",
+        "description": "产品信息表，包含产品名称、所属品类、子品类、品牌和单价。典型问题：品类销售排名、品牌对比、单价与成本",
     },
     {
         "table_name": "dim_customer",
@@ -58,7 +58,7 @@ _TABLES: list[dict] = [
             {"name": "register_date", "type": "DATE"},
         ],
         "ddl": None,
-        "description": "客户维度表，包含客户名称、等级、行业和注册日期",
+        "description": "客户维度表，包含客户名称、等级、行业和注册日期。典型问题：客户等级贡献、行业对比、大客户 Top N",
     },
     {
         "table_name": "dim_warehouse",
@@ -69,7 +69,7 @@ _TABLES: list[dict] = [
             {"name": "capacity", "type": "INTEGER"},
         ],
         "ddl": None,
-        "description": "仓库维度表，包含仓库名称、所在城市和容量",
+        "description": "仓库维度表，包含仓库名称、所在城市和容量。典型问题：各仓库库存、容量分布",
     },
     {
         "table_name": "dim_employee",
@@ -82,7 +82,7 @@ _TABLES: list[dict] = [
             {"name": "hire_date", "type": "DATE"},
         ],
         "ddl": None,
-        "description": "员工维度表，包含部门、岗位和入职日期",
+        "description": "员工维度表，包含部门、岗位和入职日期。典型问题：各部门考勤、岗位人数统计",
     },
     {
         "table_name": "fact_sales",
@@ -101,7 +101,7 @@ _TABLES: list[dict] = [
             {"name": "profit", "type": "DECIMAL(12,2)"},
         ],
         "ddl": None,
-        "description": "销售记录事实表，含区域、产品、客户、数量、金额、折扣、成本和利润",
+        "description": "销售记录事实表，含区域、产品、客户、数量、金额、折扣、成本和利润。典型问题：销售额/销量排名、区域对比、月度趋势、毛利分析",
     },
     {
         "table_name": "fact_returns",
@@ -116,7 +116,7 @@ _TABLES: list[dict] = [
             {"name": "handling", "type": "VARCHAR"},
         ],
         "ddl": None,
-        "description": "退货记录事实表，关联销售记录，包含退货原因和处理方式",
+        "description": "退货记录事实表，关联销售记录，包含退货原因和处理方式。典型问题：退货原因分析、产品退货率、区域退货对比",
     },
     {
         "table_name": "fact_inventory",
@@ -130,7 +130,7 @@ _TABLES: list[dict] = [
             {"name": "quantity_available", "type": "INTEGER"},
         ],
         "ddl": None,
-        "description": "库存记录事实表，按产品+仓库+日期记录库存量、预留量和可售量",
+        "description": "库存记录事实表，按产品+仓库+日期记录库存量、预留量和可售量。典型问题：当前库存、可售量、库存周转",
     },
     {
         "table_name": "fact_attendance",
@@ -142,7 +142,7 @@ _TABLES: list[dict] = [
             {"name": "work_hours", "type": "DECIMAL(4,1)"},
         ],
         "ddl": None,
-        "description": "考勤记录事实表，关联员工，包含考勤状态和工时",
+        "description": "考勤记录事实表，关联员工，包含考勤状态和工时。典型问题：出勤率统计、加班工时、部门考勤对比",
     },
 ]
 

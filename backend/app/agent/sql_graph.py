@@ -112,39 +112,51 @@ def _intent_analyze(state: SQLAgentState) -> dict:
     user_query = state.get("user_query", "")
 
     tools_block = _format_tools_for_prompt()
-    prompt = f"""你是 ReportAgent 意图分析器。用户给了一个中文业务问题,
-请基于下面的可用工具列表,推荐 3-4 个最匹配用户意图的分析能力。
+    prompt = f"""你是 ReportAgent 意图分析器。用户的问题要匹配下面的分析工具。
+请选最合适的 3-4 个工具推荐给用户，输出 JSON。
 
 用户问题: {user_query}
 
 可用工具:
 {tools_block}
 
-输出 JSON(禁止解释,禁止 markdown,禁止换行):
+── 工具选择指南 ──
+
+【chart_advisor vs insight_analyst】
+  chart_advisor → 数据已有，想要一个图来展示（自动判断用饼图还是柱状图）
+  insight_analyst → 数据已有，想要数值摘要（合计、平均、最大、最小）
+  区别：需要的是"图"还是"数"。两者不互斥，但一次只推荐一个。
+
+【group_compare vs trend_analysis】
+  group_compare → 对比不同组的数值高低（哪个区域最高、哪个产品最畅销）
+  trend_analysis → 观察单一维度的变化方向（这个月比上个月涨了还是跌了）
+  区别：横向对比 vs 纵向趋势。想比高低用 group_compare，想看走势用 trend_analysis。
+
+【detect_anomaly】
+  只想看"哪里不正常"（异常高或异常低）时用。数据量小于 3 行时不可用。
+
+── 输出规则 ──
+
+仅输出 JSON，禁止 markdown，禁止解释：
 {{
   "options": [
     {{
       "label": "📊 各区域销售对比",
-      "description": "类似 SQL: SELECT region_name, SUM(total_amount) FROM ...",
+      "description": "按区域汇总销售额并排名",
       "tool": "group_compare",
       "params_preview": {{"group_col": "region_name", "value_col": "total_amount"}}
     }}
   ],
-  "needs_options_group": true,
-  "missing_dimensions": [],
+  "needs_options_group": true/false,
   "confidence": 0.85,
-  "reasoning": "用户想看不同区域的销售横向对比,典型 group_compare 场景"
+  "reasoning": "用户想看不同区域的销售横向对比"
 }}
 
-规则:
-- options 数量必须 3 <= n <= 4
-- 每个 option.tool 必须是上面列出的 5 个之一
-- label 用一句话讲「做什么」(如「各区域销售对比」「月度趋势」「Top 排名」)
-- description 用一句话讲「类似 SQL 会怎么写」
-- params_preview 给出一个可能落地的 SQL 草图参数,key 与该 tool 的预期 input 对齐
-- confidence 取值 0.7-0.95
-- needs_options_group: 当 query 仍有数据维度(时间范围/区域范围/Top N 等)未明确时填 true;完全清晰可直跑时填 false
-"""
+格式约束:
+- options 数量: 3-4 个
+- 每个 option.tool 必须是上面 5 个之一
+- confidence: 0.7-0.95，越匹配越高
+- needs_options_group: 用户没指定时间/区域范围等细节时 true，完全明确时 false"""
 
     raw = call_llm(prompt, max_tokens=1500)
     parsed = safe_json_parse(raw)
@@ -230,13 +242,11 @@ def _plan(state: SQLAgentState) -> dict:
     confirmed_requirement = state.get("confirmed_requirement")
     confirmed_block = ""
     if confirmed_requirement:
-        # Authoritative — the user already filled and PATCHed these via
-        # the requirement card. The free-form user_query is for flavor
-        # only; the structured fields below are the source of truth.
-        # Keep the wording mild so the LLM's JSON output isn't
-        # disrupted by the auxiliary instruction.
+        # 权威来源：用户已在需求卡上填好并 PATCH 确认。自由文本
+        # user_query 仅作参考，以下结构化字段才是生成 SQL 的依据。
+        # 措辞保持克制，避免辅助指令干扰 LLM 的 JSON 输出。
         confirmed_block = (
-            f"\n\nConfirmed requirement (use these as authoritative):\n"
+            f"\n\n已确认需求（以下字段为权威依据，优先于对自由文本的推断）：\n"
             f"{confirmed_requirement}\n"
         )
 

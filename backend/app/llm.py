@@ -27,33 +27,36 @@ _INTENT_TOOL_WHITELIST = {
 }
 
 
-def _format_tools_for_prompt() -> str:
-    """Render the available tool list (from the dynamic registry) for stage 1.
+def _format_tools_for_prompt(whitelist: set[str] | None = None) -> str:
+    """把注册表工具渲染进模型 prompt —— 输出完整中文描述，不截断。
 
-    Falls back to an empty list if the registry hasn't been populated yet
-    (e.g., during import-time inspection).
+    工具描述是模型选择工具的主要依据：五要素描述（用途/输入/输出/
+    适用/「不要用来 → 替代工具」边界）必须完整保留。只渲染首行会
+    把描述退化成简略版，导致相近工具之间误选率显著升高。
+
+    whitelist：要渲染的工具名集合，缺省用意图阶段的分析工具白名单。
+    注册表不可用时降级返回空字符串。
     """
     try:
         from app.tools import register_all_tools
-        from app.tools.registry import registry
-        # Idempotent: `register_all_tools` does dedup by tool name internally.
         register_all_tools()
     except Exception:
         pass
 
+    allowed = whitelist if whitelist is not None else _INTENT_TOOL_WHITELIST
     try:
         from app.tools.registry import registry
-        lines = []
-        # all_tools() returns dict[name, ToolMetadata]
-        all_tools = registry.all_tools()
-        for name, meta in all_tools.items():
-            if name not in _INTENT_TOOL_WHITELIST:
+        blocks = []
+        # all_tools() 按注册顺序返回 dict[name, ToolMetadata]
+        for name, meta in registry.all_tools().items():
+            if name not in allowed:
                 continue
-            # ToolMetadata.description may be long; take the first sentence-ish.
-            desc = (meta.description or "").strip().split("\n", 1)[0]
-            lines.append(f"- {name}: {desc}")
-        return "\n".join(lines)
-    except Exception as exc:  # registry not initialized yet (very early import)
+            desc = (meta.description or "").strip()
+            if not desc:
+                continue
+            blocks.append(f"- {name}: {desc}")
+        return "\n".join(blocks)
+    except Exception as exc:  # 极早期导入时注册表尚未初始化
         logger = logging.getLogger(__name__)
         logger.warning("registry unavailable for _format_tools_for_prompt: %s", exc)
         return ""
