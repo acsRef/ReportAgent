@@ -51,9 +51,15 @@ export function isBusyPhase(phase: AnalysisPhase): boolean {
 }
 
 /**
- * True when the current error came from a recoverable confirm failure,
- * i.e. the UI should offer a retry button wired to
- * `POST /api/v1/sessions/{sid}/retry`.
+ * True when the current error is recoverable AND lives in a phase the
+ * retry endpoint knows how to replay.
+ *
+ * Originally only `failed_action === 'confirm'` qualified, but the
+ * backend now emits structured SQL errors (`failed_action === 'sql'`)
+ * with `recoverable: true` for transient failures (timeout / connection /
+ * object-not-found). These should also be retryable because the user
+ * might want to retry with the same requirement + a smaller time range,
+ * which the retry endpoint supports.
  */
 export function canRetryFailedAction(
   state: Pick<AnalysisState, 'phase' | 'error'>,
@@ -62,7 +68,7 @@ export function canRetryFailedAction(
     state.phase === 'error' &&
     state.error !== null &&
     state.error.recoverable === true &&
-    state.error.failed_action === 'confirm'
+    (state.error.failed_action === 'confirm' || state.error.failed_action === 'sql')
   )
 }
 

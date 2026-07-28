@@ -48,5 +48,16 @@ export interface AnalysisError {
   code: string
   message: string
   recoverable: boolean
-  failed_action: 'new' | 'supplement' | 'confirm' | 'adjust' | 'retry' | null
+  /** Where the failure happened. `sql` was added when the backend
+   *  started emitting structured error envelopes for query execution
+   *  failures (timeouts, missing tables, etc.). */
+  failed_action: 'new' | 'supplement' | 'confirm' | 'adjust' | 'retry' | 'sql' | null
+  /** Failure category from the backend. Drives ErrorCard copy + the
+   *  retry-button affordance. Optional for backward compatibility —
+   *  legacy events (HTTP_ERROR / NETWORK_ERROR / INTERNAL) have no
+   *  kind and fall back to a generic title. */
+  kind?: 'timeout' | 'syntax' | 'object' | 'connection' | 'permission' | 'other' | null
+  /** The SQL the agent actually tried, clipped to ≤200 chars by the
+   *  backend. Used by ErrorCard's collapsible "查看 SQL" disclosure. */
+  sql?: string | null
 }

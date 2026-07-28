@@ -22,6 +22,12 @@ export default function TableBlock({ block }: Props) {
 
   if (columns.length === 0) return null
 
+  // `data.empty` is set by reportAdapter when the SQL ran cleanly but
+  // returned no rows (execution_status=EMPTY from the backend). We
+  // show an explicit "未找到匹配记录" hint instead of a header-only
+  // table that looks like a rendering bug.
+  const isEmpty = data.empty === true
+
   const numericKeys = new Set(
     columns
       .filter(({ key }) =>
@@ -80,28 +86,44 @@ export default function TableBlock({ block }: Props) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} style={rowIndex >= shown ? { display: 'none' } : undefined}>
-                {columns.map((column) => {
-                  const isNum = numericKeys.has(column.key)
-                  return (
-                    <td
-                      key={column.key}
-                      className={isNum ? 'num' : undefined}
-                      style={{
-                        padding: '9px',
-                        borderBottom: '1px solid var(--line)',
-                        color: 'var(--ink-2)',
-                        textAlign: isNum ? 'right' : 'left',
-                        fontVariantNumeric: isNum ? 'tabular-nums' : undefined,
-                      }}
-                    >
-                      {String(row[column.key] ?? '')}
-                    </td>
-                  )
-                })}
+            {rows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={columns.length}
+                  style={{
+                    padding: '32px 9px',
+                    textAlign: 'center',
+                    color: 'var(--muted)',
+                    fontSize: 13,
+                  }}
+                >
+                  {isEmpty ? '未找到匹配记录' : '暂无数据'}
+                </td>
               </tr>
-            ))}
+            ) : (
+              rows.map((row, rowIndex) => (
+                <tr key={rowIndex} style={rowIndex >= shown ? { display: 'none' } : undefined}>
+                  {columns.map((column) => {
+                    const isNum = numericKeys.has(column.key)
+                    return (
+                      <td
+                        key={column.key}
+                        className={isNum ? 'num' : undefined}
+                        style={{
+                          padding: '9px',
+                          borderBottom: '1px solid var(--line)',
+                          color: 'var(--ink-2)',
+                          textAlign: isNum ? 'right' : 'left',
+                          fontVariantNumeric: isNum ? 'tabular-nums' : undefined,
+                        }}
+                      >
+                        {String(row[column.key] ?? '')}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -117,7 +139,7 @@ export default function TableBlock({ block }: Props) {
         }}
       >
         <Text style={{ fontSize: 12, color: 'var(--muted)' }}>
-          显示 {shown} / {rows.length} 条
+          {rows.length === 0 ? '0 条记录' : `显示 ${shown} / ${rows.length} 条`}
         </Text>
         {rows.length > VISIBLE_ROWS && (
           <button

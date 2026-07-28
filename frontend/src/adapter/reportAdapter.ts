@@ -23,12 +23,20 @@ export function adaptReport(resp: ReportResponse): ReportBlock[] {
     })
   }
 
-  if (answer.table && answer.table.columns.length > 0 && answer.table.rows.length > 0) {
+  if (answer.table && answer.table.columns.length > 0) {
+    // We always emit the table block — even when rows=[] — so the
+    // front-end can render the "未找到匹配记录" band for the legitimate
+    // zero-match case (execution_status=EMPTY). The old guard
+    // (`rows.length > 0`) silently dropped the table for EMPTY runs,
+    // making them look indistinguishable from FAILED.
     blocks.push({
       id: 'table',
       type: 'table',
       title: '数据明细',
-      data: answer.table as unknown as Record<string, unknown>,
+      data: {
+        ...(answer.table as unknown as Record<string, unknown>),
+        empty: answer.table.rows.length === 0,
+      },
     })
   }
 

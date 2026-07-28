@@ -19,6 +19,11 @@ const FAILED_ACTIONS: ReadonlySet<string> = new Set([
   'confirm',
   'adjust',
   'retry',
+  // `sql` was added when the backend started emitting structured
+  // error envelopes from the SQL sub-graph (timeouts / missing
+  // tables / connection issues). Without it the parser would drop
+  // the frame because the value isn't in the known set.
+  'sql',
 ])
 
 export type AnalysisStreamEvent =
@@ -86,6 +91,15 @@ function readPhase(value: unknown): AnalysisPhase | null {
     : null
 }
 
+const ERROR_KINDS: ReadonlySet<string> = new Set([
+  'timeout',
+  'syntax',
+  'object',
+  'connection',
+  'permission',
+  'other',
+])
+
 function readAnalysisError(payload: Record<string, unknown>): AnalysisError | null {
   if (
     typeof payload.code !== 'string' ||
@@ -103,13 +117,30 @@ function readAnalysisError(payload: Record<string, unknown>): AnalysisError | nu
     return null
   }
 
+  // Optional fields: kind + sql. Backend always emits them for the
+  // structured error helper; we keep them optional so older servers
+  // (or HTTP_ERROR / NETWORK_ERROR / INTERNAL events) still parse.
+  const rawKind = payload.kind
+  const kind: AnalysisError['kind'] =
+    typeof rawKind === 'string' && ERROR_KINDS.has(rawKind)
+      ? (rawKind as AnalysisError['kind'])
+      : null
+  const rawSql = payload.sql
+  const sql: string | null = typeof rawSql === 'string' ? rawSql : null
+
   return {
     code: payload.code,
     message: payload.message,
     recoverable: payload.recoverable,
     failed_action: failedAction as AnalysisError['failed_action'],
+    kind,
+    sql,
   }
 }
+
+// Exported for the unit test in __tests__/analysisEvents.test.ts so we
+// can drive readAnalysisError without going through the SSE decoder.
+export const __test__ = { readAnalysisError }
 
 function isRequirementCard(payload: unknown): payload is RequirementCard {
   if (typeof payload !== 'object' || payload === null) return false

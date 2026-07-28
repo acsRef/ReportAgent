@@ -70,6 +70,10 @@ export interface ReportVersionDetail {
   trace_id: string | null
   favorite: boolean
   created_at: string
+  /** SUCCESS / EMPTY / FAILED from the backend verdict. Older rows
+   *  (written before the three-state split) return undefined — the
+   *  front-end treats those as SUCCESS for back-compat. */
+  execution_status?: 'SUCCESS' | 'EMPTY' | 'FAILED' | null
 }
 
 export function fetchSessions(): Promise<{ sessions: SessionSummary[] }> {

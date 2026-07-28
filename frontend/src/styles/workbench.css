@@ -748,6 +748,26 @@
 }
 .wb-finding-text { font: 700 15px/1.62 var(--font-display); }
 .wb-finding-text strong { color: var(--teal-deep); }
+
+/* Empty-result band — shown when execution_status=EMPTY (SQL ran
+ * cleanly but matched 0 rows). Distinct from .wb-finding (which
+ * carries the LLM insight for a successful run). */
+.wb-empty-band {
+  display: grid;
+  grid-template-columns: 75px 1fr;
+  gap: 18px;
+  padding: 24px 30px 24px 34px;
+  background: linear-gradient(90deg, var(--canvas-2, #f6f6f4), var(--paper) 65%);
+  border-bottom: 1px solid var(--line);
+}
+.wb-empty-label {
+  padding-top: 3px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+}
+.wb-empty-text { font: 700 15px/1.62 var(--font-display); color: var(--ink); }
 .wb-report-section {
   padding: 24px 30px 24px 34px;
   border-bottom: 1px solid var(--line);

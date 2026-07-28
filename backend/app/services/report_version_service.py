@@ -76,6 +76,91 @@ async def persist_adjust_run(
     )
 
 
+async def persist_empty_run(
+    *,
+    session_id: str,
+    user_id: int,
+    requirement_draft_id: int,
+    title: str,
+    query_snapshot: dict | None,
+    trace_id: str | None,
+) -> dict:
+    """SQL ran successfully but returned 0 rows.
+
+    Still a "done" version (execution succeeded) — payload carries
+    execution_status=EMPTY so the front-end knows to render the no-data
+    band instead of pretending the report has content.
+    """
+    payload = {
+        "answer": {
+            "text": "查询执行成功,但未匹配到数据",
+            "table": None,
+            "chart": None,
+            "insight": None,
+        },
+        "trace": [],
+        "execution_status": "EMPTY",
+    }
+    return await _persist(
+        session_id=session_id,
+        user_id=user_id,
+        parent_version=None,
+        requirement_draft_id=requirement_draft_id,
+        adjustment_text=None,
+        title=title,
+        report_status="done",
+        report_payload=payload,
+        query_snapshot=query_snapshot,
+        trace_id=trace_id,
+    )
+
+
+async def persist_error_run(
+    *,
+    session_id: str,
+    user_id: int,
+    requirement_draft_id: int,
+    title: str,
+    error_detail: dict,
+    query_snapshot: dict | None,
+    trace_id: str | None,
+) -> dict:
+    """SQL execution failed (timeout / connection / permission / etc.).
+
+    Persists status='error' so version history shows the failed attempt.
+    SSE still emits the error event to the active stream; this version
+    exists for later inspection (e.g. user switches to v3 from the rail
+    after a successful v4).
+    """
+    payload = {
+        "answer": {
+            "text": "查询执行失败",
+            "table": None,
+            "chart": None,
+            "insight": None,
+        },
+        "trace": [],
+        "execution_status": "FAILED",
+        "error": {
+            "code": str(error_detail.get("code", "QUERY_FAILED")),
+            "message": str(error_detail.get("message", ""))[:300],
+            "kind": error_detail.get("kind") or "other",
+        },
+    }
+    return await _persist(
+        session_id=session_id,
+        user_id=user_id,
+        parent_version=None,
+        requirement_draft_id=requirement_draft_id,
+        adjustment_text=None,
+        title=title,
+        report_status="error",
+        report_payload=payload,
+        query_snapshot=query_snapshot,
+        trace_id=trace_id,
+    )
+
+
 async def _persist(
     *,
     session_id: str,

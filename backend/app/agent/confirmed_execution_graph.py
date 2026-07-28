@@ -45,6 +45,10 @@ class ConfirmedExecutionState(TypedDict, total=False):
     report_payload: Optional[dict]
     execution_status: str
     error: Optional[ErrorDetail]
+    # Last SQL the sub-graph generated (filled by _confirmed_sql_agent).
+    # Used by the SSE error helper so the user sees the query that
+    # actually ran when execution fails.
+    sql: Optional[str]
 
 
 # --- Errors ----------------------------------------------------------------
@@ -177,9 +181,15 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
         "confirmed_requirement": confirmed_requirement,
     })
     qr = ss.get("query_result")
+    # Passthrough of error + last-tried SQL so the parent graph can emit
+    # a structured SSE error event and persist a status='error' version
+    # row. Both stay None on the success path.
+    sub_error = ss.get("error")
     return {
         "query_result": qr.model_dump() if qr else None,
         "execution_status": ss.get("execution_status", "FAILED"),
+        "error": sub_error,
+        "sql": ss.get("generated_sql") or "",
     }
 
 
@@ -214,7 +224,21 @@ def _format_confirmed_requirement(card) -> str | None:
 
 @traced_node("confirmed_report_agent")
 async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
-    """Build the report payload from the query result."""
+    """Build the report payload from the query result.
+
+    Three-state verdict drives `execution_status`:
+
+    - SUCCESS: query_result.error is None AND rows present
+    - EMPTY:   query_result.error is None AND rows absent (legitimate
+      zero-match — the SQL ran fine, just didn't match anything)
+    - FAILED:  query_result.error is not None (timeout / connection /
+      permission / syntax / object / other)
+
+    The old single-state `if rows: SUCCESS else FAILED` collapsed EMPTY
+    and FAILED, which made legitimate empty results look like query
+    failures. We split them here so the SSE + persistence layer can
+    tell the two cases apart and the front-end can render distinct UX.
+    """
     report_graph = build_report_graph()
     rs = await report_graph.ainvoke({
         "query_result": state.get("query_result"),
@@ -229,54 +253,115 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
     })
 
     qr = state.get("query_result")
-    table = None
-    has_data = False
+    err: ErrorDetail | None = None
+    rows: list = []
+    columns: list = []
     if qr and isinstance(qr, dict):
         rows = qr.get("rows") or []
-        if rows:
-            has_data = True
-            cols = []
-            for c in (qr.get("columns") or []):
-                name = c.get("name") if isinstance(c, dict) else str(c)
-                cols.append({"key": name, "title": name})
-            table = {"columns": cols, "rows": rows}
+        columns = qr.get("columns") or []
+        err_field = qr.get("error")
+        if isinstance(err_field, dict):
+            err = ErrorDetail.model_validate(err_field)
 
-    status = "SUCCESS" if has_data else "FAILED"
+    # Three-state verdict:
+    # - FAILED  : err is set OR query_result never produced (sub-graph
+    #            crashed / never executed). Both mean "the user can't
+    #            trust the report content".
+    # - EMPTY   : SQL ran cleanly but matched 0 rows (legitimate
+    #            no-match — distinct from FAILED).
+    # - SUCCESS : rows present.
+    if err is not None or qr is None:
+        status = "FAILED"
+        table = None
+        insight_text = None
+        chart_cfg = None
+    elif not rows:
+        status = "EMPTY"
+        table = None
+        insight_text = None
+        chart_cfg = None
+    else:
+        status = "SUCCESS"
+        cols = []
+        for c in columns:
+            name = c.get("name") if isinstance(c, dict) else str(c)
+            cols.append({"key": name, "title": name})
+        table = {"columns": cols, "rows": rows}
+        insight_text = rs.get("insight_text") or None
+        chart_cfg = rs.get("chart_config") or None
+
+    payload = {
+        "answer": {
+            "text": "查询完成",
+            "table": table,
+            "chart": chart_cfg,
+            "insight": insight_text,
+        },
+        "trace": [],
+        "execution_status": status,
+    }
+    if err is not None:
+        payload["error"] = err.model_dump()
 
     return {
-        "report_payload": {
-            "answer": {
-                "text": "查询完成",
-                "table": table,
-                "chart": rs.get("chart_config") or None,
-                "insight": rs.get("insight_text") or None,
-            },
-            "trace": [],
-        },
+        "report_payload": payload,
         "execution_status": status,
+        "error": err,
     }
 
 
 @traced_node("persist_report")
 async def _persist_report(state: ConfirmedExecutionState) -> dict:
-    """Append a row to `agent.report_version` in a transaction with the
-    conversation pointer and session.phase update. Returns the new version
-    number.
+    """Append a row to `agent.report_version`.
+
+    Branches on `execution_status` from the report agent:
+
+    - SUCCESS: existing path (persist_confirmed_run / persist_adjust_run).
+    - EMPTY:   persist_empty_run — same as SUCCESS but payload carries
+      execution_status=EMPTY and the no-data band tells the front-end
+      to render "未找到匹配记录" instead of a fake table.
+    - FAILED:  persist_error_run — still inserts a row so version
+      history shows the failed attempt; status='error'.
+
+    All three end with execution_status='DONE' so main.py can emit a
+    `report` SSE event regardless of the empty/err verdict. The actual
+    SSE error event is emitted by main.py from the FAIL/EMPTY exit, not
+    here — see _route_after_report.
     """
     if state.get("report_payload") is None:
         return {"execution_status": "FAILED"}
     draft_id = await _draft_id_from_state(state)
     base_version = state.get("base_report_version")
-    # Build a query_snapshot from query_result so /reports/{v} can
-    # expose the actual SQL + rows for the version-history view.
+    verdict = state.get("execution_status") or "SUCCESS"
+
     qr = state.get("query_result") or {}
-    query_snapshot = {
-        "sql": qr.get("sql") if isinstance(qr, dict) else None,
-        "columns": qr.get("columns") if isinstance(qr, dict) else None,
-        "rows": qr.get("rows") if isinstance(qr, dict) else None,
-        "row_count": qr.get("row_count") if isinstance(qr, dict) else None,
-    } if qr else None
-    if base_version is None:
+    query_snapshot = _build_query_snapshot(qr, verdict, state.get("error"))
+
+    if verdict == "FAILED":
+        err = state.get("error")
+        error_detail = (
+            err.model_dump() if hasattr(err, "model_dump") else
+            (err if isinstance(err, dict) else {"code": "QUERY_FAILED", "message": "", "kind": "other"})
+        )
+        row = await report_version_service.persist_error_run(
+            session_id=state["session_id"],
+            user_id=state["user_id"],
+            requirement_draft_id=draft_id,
+            title="报告",
+            error_detail=error_detail,
+            query_snapshot=query_snapshot,
+            trace_id=state.get("trace_id"),
+        )
+    elif verdict == "EMPTY":
+        row = await report_version_service.persist_empty_run(
+            session_id=state["session_id"],
+            user_id=state["user_id"],
+            requirement_draft_id=draft_id,
+            title="报告",
+            query_snapshot=query_snapshot,
+            trace_id=state.get("trace_id"),
+        )
+    elif base_version is None:
         row = await report_version_service.persist_confirmed_run(
             session_id=state["session_id"],
             user_id=state["user_id"],
@@ -304,10 +389,55 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
         tracer = get_tracer(trace_id)
         tracer.end("DONE")
 
+    merged = {**state["report_payload"], "version": row["version"]}
     return {
-        "report_payload": {**state["report_payload"], "version": row["version"]},
+        "report_payload": merged,
         "execution_status": "DONE",
     }
+
+
+def _build_query_snapshot(
+    qr: dict,
+    verdict: str,
+    err: ErrorDetail | None,
+) -> dict | None:
+    """Compose the JSONB query_snapshot we persist on agent.report_version.
+
+    - SUCCESS / EMPTY → sql + columns + rows + row_count + truncated.
+    - FAILED          → sql + error_kind + error message; no rows
+      (we never had any) and row_count=0 / truncated=False.
+    """
+    if not qr:
+        return None
+    base = {
+        "sql": qr.get("sql") if isinstance(qr, dict) else None,
+    }
+    if verdict == "FAILED":
+        kind = None
+        message = ""
+        if err is not None:
+            kind = err.kind
+            message = err.message
+        elif isinstance(qr.get("error"), dict):
+            inner = qr["error"]
+            kind = inner.get("kind")
+            message = inner.get("message", "")
+        base.update({
+            "row_count": 0,
+            "truncated": False,
+            "error_kind": kind,
+            "error": message,
+            "columns": [],
+            "rows": [],
+        })
+        return base
+    base.update({
+        "columns": qr.get("columns") if isinstance(qr, dict) else None,
+        "rows": qr.get("rows") if isinstance(qr, dict) else None,
+        "row_count": qr.get("row_count") if isinstance(qr, dict) else None,
+        "truncated": bool(qr.get("truncated")) if isinstance(qr, dict) else False,
+    })
+    return base
 
 
 # --- Helpers --------------------------------------------------------------
@@ -364,17 +494,19 @@ def build_confirmed_execution_graph():
     workflow.add_edge("sql_agent", "report_agent")
 
     def _route_after_report(state: ConfirmedExecutionState) -> str:
-        # FAILED reports (no data) must NOT be persisted. Skipping
-        # persist_report keeps execution_status="FAILED" in the final
-        # state, so main.py's /confirm SSE handler emits an `error`
-        # event and stamps session.phase='error' with
-        # last_failed_action='confirm' (enabling POST /retry).
-        return "persist_report" if state.get("execution_status") == "SUCCESS" else END
+        # All three verdicts (SUCCESS / EMPTY / FAILED) now persist so
+        # the version history shows the full timeline. The
+        # execution_status flows to main.py unchanged, where:
+        #   FAILED → emit SSE error event AND emit a `report` event with
+        #            status='error' payload (persisted above)
+        #   EMPTY  → emit SSE `report` event with execution_status=EMPTY
+        #   SUCCESS → emit SSE `report` event with full payload
+        return "persist_report"
 
     workflow.add_conditional_edges(
         "report_agent",
         _route_after_report,
-        {"persist_report": "persist_report", END: END},
+        {"persist_report": "persist_report"},
     )
     workflow.add_edge("persist_report", END)
 

@@ -54,6 +54,87 @@ from app.infra.db import report_version_repository
 VECTOR_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
 
+# ---------------------------------------------------------------------------
+# SSE error-event helper
+# ---------------------------------------------------------------------------
+#
+# All confirmed-execution / adjust failures funnel through this so the
+# front-end gets a structured `kind` + the SQL the agent actually tried
+# (≤200 chars). Without this the front-end has to guess why a query
+# failed, and silent failures (DB unreachable returned as "no data")
+# become indistinguishable from legitimate empty results.
+_ERROR_FRIENDLY: dict[str, str] = {
+    "timeout":    "查询超时,请缩小时间范围或维度后重试",
+    "connection": "数据库连接失败,请稍后重试",
+    "permission": "权限不足,无法执行该查询",
+    "syntax":     "SQL 语法错误,请调整查询条件后重试",
+    "object":     "查询引用的表/列不存在,请检查维度后重试",
+    "other":      "查询执行失败,请稍后重试或调整需求",
+}
+_ERROR_CODE: dict[str, str] = {
+    "timeout":    "QUERY_TIMEOUT",
+    "connection": "QUERY_CONNECTION",
+    "permission": "QUERY_PERMISSION",
+    "syntax":     "QUERY_SYNTAX",
+    "object":     "QUERY_OBJECT",
+    "other":      "QUERY_FAILED",
+}
+
+
+def _normalize_sql_snippet(sql: str | None, limit: int = 200) -> str:
+    """Flatten newlines + clamp to `limit` characters with an ellipsis.
+
+    SQL in error events is read by the agent (to retry with the same
+    params) AND by humans. Keeping it short + single-line avoids breaking
+    SSE framing and the front-end toast / card layout.
+    """
+    if not sql:
+        return ""
+    snippet = " ".join(sql.strip().split())
+    if len(snippet) > limit:
+        snippet = snippet[: limit - 1] + "…"
+    return snippet
+
+
+def _build_sse_error(
+    err: dict | None,
+    sql: str | None,
+    failed_action: str,
+) -> dict:
+    """Compose a structured SSE `error` event from a backend ErrorDetail.
+
+    `err` may be an ErrorDetail dict (with `kind` + `message`) or None;
+    when None we default to kind='other' / code='QUERY_FAILED'.
+
+    The SQL snippet is appended to message so the front-end ErrorCard can
+    show it in a collapsible section without losing context if the user
+    only reads the toast.
+    """
+    err_dict: dict = err if isinstance(err, dict) else {}
+    kind = err_dict.get("kind") or "other"
+    if kind not in _ERROR_FRIENDLY:
+        kind = "other"
+    code = _ERROR_CODE[kind]
+    # Always use the friendly mapping — the raw PG message (often in
+    # English / opaque) is kept in trace logs but never shown to end
+    # users. The point of the helper is to make every kind produce a
+    # distinct, actionable sentence in Chinese.
+    base_message = _ERROR_FRIENDLY[kind]
+    snippet = _normalize_sql_snippet(sql)
+    message = base_message if not snippet else f"{base_message}\n尝试的 SQL: {snippet}"
+    return {
+        "event": "error",
+        "data": json.dumps({
+            "code": code,
+            "message": message,
+            "recoverable": kind in ("timeout", "connection", "object", "other"),
+            "failed_action": failed_action,
+            "kind": kind,
+            "sql": snippet,
+        }, ensure_ascii=False),
+    }
+
+
 async def _check_embedding_dimension():
     """Verify embedding output dimension matches DB vector dimension on startup."""
     from app.embedding.service import get_embedder
@@ -318,11 +399,22 @@ async def _chat_confirmed_execution(
                 "error": None,
             }
             result = await graph.ainvoke(initial, config)
-            report_payload = result.get("report_payload") or {}
-            yield {
-                "event": "report",
-                "data": json.dumps(report_payload, ensure_ascii=False, default=str),
-            }
+            status = result.get("execution_status", "FAILED")
+            if status == "FAILED":
+                await session_manager.update_phase(
+                    session_id, "error", failed_action="sql",
+                )
+                yield _build_sse_error(
+                    result.get("error"),
+                    result.get("sql"),
+                    "sql",
+                )
+            else:
+                report_payload = result.get("report_payload") or {}
+                yield {
+                    "event": "report",
+                    "data": json.dumps(report_payload, ensure_ascii=False, default=str),
+                }
         except RequirementIncompleteError as exc:
             await session_manager.update_phase(
                 session_id, "error", failed_action=request.mode,
@@ -705,17 +797,13 @@ async def confirm_session(
             status = result.get("execution_status", "FAILED")
             if status == "FAILED":
                 await session_manager.update_phase(
-                    session_id, "error", failed_action="confirm",
+                    session_id, "error", failed_action="sql",
                 )
-                yield {
-                    "event": "error",
-                    "data": json.dumps({
-                        "code": "QUERY_FAILED",
-                        "message": "查询未返回数据",
-                        "recoverable": True,
-                        "failed_action": "confirm",
-                    }, ensure_ascii=False),
-                }
+                yield _build_sse_error(
+                    result.get("error"),
+                    result.get("sql"),
+                    "sql",
+                )
             else:
                 report_payload = result.get("report_payload") or {}
                 yield {
@@ -810,7 +898,13 @@ async def get_report_version(
     version: int,
     user: dict = Depends(get_current_user),
 ):
-    """Read a specific report version. No LLM / no graph."""
+    """Read a specific report version. No LLM / no graph.
+
+    Surfaces `execution_status` from the persisted payload so the
+    front-end can distinguish SUCCESS / EMPTY / FAILED when reviewing
+    historical versions (e.g. the user switches to v3 in the right
+    rail after a v4 success).
+    """
     from app.infra.db.postgres import get_pool
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -830,6 +924,8 @@ async def get_report_version(
         row["query_snapshot"] = _json.loads(row["query_snapshot"])
     if row.get("created_at"):
         row["created_at"] = row["created_at"].isoformat()
+    payload = row.get("report_payload") or {}
+    row["execution_status"] = payload.get("execution_status")
     return {"report": row}
 
 

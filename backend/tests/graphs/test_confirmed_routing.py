@@ -1,9 +1,14 @@
 """Graph-level routing tests for the confirmed execution graph.
 
-A FAILED report (no rows) must skip `persist_report` so that:
-1. no empty v1 report row is written to `agent.report_version`, and
-2. the final `execution_status` stays "FAILED" so main.py's /confirm
-   SSE handler emits an `error` event instead of a fake `report`.
+All three verdicts (SUCCESS / EMPTY / FAILED) now persist a row so
+version history shows the full timeline. The previous behaviour was
+to skip persist for FAILED/EMPTY, which meant failed attempts and
+zero-match runs had no historical trace and the front-end had no way
+to distinguish them from each other or from a real success.
+
+SSE still uses the verdict to decide whether to emit an `error` event
+(in `main.py`); persistence now happens regardless so users can
+inspect old failed/empty attempts from the right-rail version list.
 """
 from __future__ import annotations
 
@@ -64,8 +69,14 @@ def _patch_upstream(monkeypatch, ceg, query_result):
     return calls
 
 
-async def test_failed_report_skips_persist(monkeypatch) -> None:
-    """query_result=None → report_agent FAILED → END without persist."""
+async def test_failed_report_persists_with_error_status(monkeypatch) -> None:
+    """query_result=None → report_agent FAILED → still persists (status='error').
+
+    The SSE error event is emitted by main.py separately; the persist
+    step only writes a status='error' row so the user can find the
+    failed attempt later. The final execution_status in the graph is
+    DONE because persist_report succeeded.
+    """
     import app.agent.confirmed_execution_graph as ceg
 
     calls = _patch_upstream(monkeypatch, ceg, query_result=None)
@@ -74,14 +85,15 @@ async def test_failed_report_skips_persist(monkeypatch) -> None:
         dict(_BASE_STATE), {"configurable": {"thread_id": "routing-fail"}}
     )
 
-    assert calls == [], "persist_report must be skipped when the report FAILED"
-    assert result["execution_status"] == "FAILED", (
-        "execution_status must stay FAILED so /confirm emits an error event"
+    assert calls == ["persist"], (
+        "FAILED runs must still persist (status='error') so users can "
+        "see what they tried in version history"
     )
+    assert result["execution_status"] == "DONE"
 
 
-async def test_empty_rows_report_skips_persist(monkeypatch) -> None:
-    """Executed SQL but zero rows → FAILED → END without persist."""
+async def test_empty_rows_report_persists_with_empty_status(monkeypatch) -> None:
+    """Zero rows but no error → EMPTY → still persists (status='done')."""
     import app.agent.confirmed_execution_graph as ceg
 
     calls = _patch_upstream(
@@ -99,8 +111,13 @@ async def test_empty_rows_report_skips_persist(monkeypatch) -> None:
         dict(_BASE_STATE), {"configurable": {"thread_id": "routing-empty"}}
     )
 
-    assert calls == [], "zero-row result must not persist a hollow report"
-    assert result["execution_status"] == "FAILED"
+    assert calls == ["persist"], (
+        "EMPTY runs must still persist (status='done', payload "
+        "execution_status=EMPTY) so the front-end can render the "
+        "no-data band instead of pretending the report was empty"
+    )
+    assert result["execution_status"] == "DONE"
+    assert result["report_payload"]["execution_status"] == "EMPTY"
 
 
 async def test_success_report_persists(monkeypatch) -> None:

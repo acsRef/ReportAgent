@@ -33,10 +33,31 @@ describe('adaptReport', () => {
     expect(blocks.some((b) => b.type === 'chart')).toBe(false)
   })
 
-  it('skips table when rows are empty (degenerate backend shape)', () => {
+  it('keeps table block but flags empty=true when rows=[] (EMPTY verdict)', () => {
+    // The old behaviour silently dropped the table block for zero-row
+    // results, which made EMPTY look the same as a failed render.
+    // The new behaviour keeps the block so the front-end can render
+    // "未找到匹配记录" inside it.
+    const answer = {
+      ...FULL_ANSWER,
+      table: { columns: [{ key: '区域', title: '区域' }], rows: [] },
+    }
+    const blocks = adaptReport({ answer } as any)
+    const table = blocks.find((b) => b.type === 'table')
+    expect(table).toBeDefined()
+    expect((table!.data as any).empty).toBe(true)
+  })
+
+  it('skips table when there are no columns at all (degenerate)', () => {
     const answer = { ...FULL_ANSWER, table: { columns: [], rows: [] } }
     const blocks = adaptReport({ answer } as any)
     expect(blocks.some((b) => b.type === 'table')).toBe(false)
+  })
+
+  it('table block has empty=false when rows are present', () => {
+    const blocks = adaptReport({ answer: FULL_ANSWER } as any)
+    const table = blocks.find((b) => b.type === 'table')!
+    expect((table.data as any).empty).toBe(false)
   })
 
   it('empty answer → no blocks', () => {

@@ -137,11 +137,20 @@ describe('canRetryFailedAction', () => {
     expect(canRetryFailedAction({ phase: 'error', error: { ...confirmError } })).toBe(true)
   })
 
-  it('false when the failed action is not confirm', () => {
+  it('false when the failed action is not confirm/sql', () => {
     expect(canRetryFailedAction({
       phase: 'error',
       error: { ...confirmError, failed_action: 'new' },
     })).toBe(false)
+  })
+
+  it('true for recoverable sql failure in error phase', () => {
+    // Structured SQL errors (timeout / connection / object) emitted by
+    // the new _build_sse_error helper also qualify for retry.
+    expect(canRetryFailedAction({
+      phase: 'error',
+      error: { ...confirmError, failed_action: 'sql', kind: 'timeout' },
+    })).toBe(true)
   })
 
   it('false when the error is not recoverable', () => {

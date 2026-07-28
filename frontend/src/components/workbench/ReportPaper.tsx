@@ -72,13 +72,75 @@ export default function ReportPaper({
     )
   }
 
-  const payload = detail.report_payload as { answer?: Record<string, unknown> } | null
+  const payload = detail.report_payload as { answer?: Record<string, unknown>; execution_status?: string; error?: Record<string, unknown> } | null
   const answer = payload?.answer ?? {}
+  const verdict = detail.execution_status ?? payload?.execution_status ?? 'SUCCESS'
+
+  // Historical failed version (status='error' on the row, or verdict FAILED).
+  // We render an inline error band instead of the normal paper so the user
+  // can see what went wrong when reviewing old attempts from the right rail.
+  if (detail.status === 'error' || verdict === 'FAILED') {
+    const errInfo = (payload?.error ?? {}) as { message?: string; kind?: string; code?: string }
+    const triedSql =
+      (detail.query_snapshot && typeof detail.query_snapshot === 'object'
+        ? (detail.query_snapshot as { sql?: string }).sql
+        : null) ?? null
+    return (
+      <div className="wb-report-shell wb-reveal">
+        <div className="wb-report-toolbar">
+          <span className="wb-report-version">报告 v{detail.version} · {detail.title}</span>
+          <span className="wb-report-tools">
+            {onFocusComposer && (
+              <button type="button" className="wb-quiet-btn" onClick={onFocusComposer}>
+                继续调整
+              </button>
+            )}
+          </span>
+        </div>
+        <article className="wb-report-paper">
+          <header className="wb-report-header">
+            <div className="wb-report-number">REPORT / v{detail.version}</div>
+            <h1 className="wb-report-title">{detail.title || '分析报告'}</h1>
+            <div className="wb-report-meta">
+              <span>
+                <span className="wb-meta-key">状态</span>执行失败
+              </span>
+            </div>
+          </header>
+          <section className="wb-finding" style={{ borderLeftColor: 'var(--accent-warn, #c43)' }}>
+            <div className="wb-finding-label">执行失败</div>
+            <div className="wb-finding-text">
+              {errInfo.message || '查询未能返回数据'}
+              {triedSql && (
+                <details style={{ marginTop: 12 }}>
+                  <summary style={{ cursor: 'pointer', color: 'var(--teal-deep)' }}>
+                    查看尝试的 SQL
+                  </summary>
+                  <pre style={{
+                    marginTop: 8,
+                    padding: 12,
+                    background: 'var(--canvas)',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    overflow: 'auto',
+                  }}>
+                    <code>{triedSql}</code>
+                  </pre>
+                </details>
+              )}
+            </div>
+          </section>
+        </article>
+      </div>
+    )
+  }
+
   const blocks: ReportBlock[] = adaptReport(payload as Parameters<typeof adaptReport>[0])
   const overviewBlock = blocks.find((block) => block.type === 'markdown')
   const chartBlock = blocks.find((block) => block.type === 'chart')
   const tableBlock = blocks.find((block) => block.type === 'table')
   const insight = typeof answer.insight === 'string' && answer.insight ? answer.insight : null
+  const isEmpty = verdict === 'EMPTY'
 
   const metaPairs: Array<[string, string]> = [
     ['数据范围', requirement?.time_range ?? '—'],
@@ -129,14 +191,13 @@ export default function ReportPaper({
                 import('../../utils/export').then(({ exportReportHTML }) => {
                   exportReportHTML({
                     id: `r-${detail.version}`,
-                    version: detail.version,
                     title: detail.title ?? '报告',
                     query: '',
                     blocks: [],
                     steps: [],
-                    timestamp: detail.created_at ?? Date.now(),
+                    timestamp: Date.now(),
                     status: 'done',
-                  })
+                  } as any)
                 })
               }
             }}
@@ -171,8 +232,20 @@ export default function ReportPaper({
                 {value}
               </span>
             ))}
+            {isEmpty && (
+              <span>
+                <span className="wb-meta-key">查询结果</span>未匹配到数据
+              </span>
+            )}
           </div>
         </header>
+
+        {isEmpty && (
+          <section className="wb-empty-band" aria-live="polite">
+            <div className="wb-empty-label">查询已执行</div>
+            <div className="wb-empty-text">未找到匹配记录</div>
+          </section>
+        )}
 
         {insight && (
           <section className="wb-finding">
@@ -232,7 +305,9 @@ export default function ReportPaper({
 
         <footer className="wb-report-foot">
           <span>由 ReportAgent 根据确认需求自动组织</span>
-          <span>需求已确认 · SQL 已校验</span>
+          <span>
+            {isEmpty ? '查询已执行 · 未匹配到数据' : '需求已确认 · SQL 已校验'}
+          </span>
         </footer>
       </article>
     </div>

@@ -145,4 +145,86 @@ describe('ReportPaper — prototype shell with real payload', () => {
     expect(screen.queryByText(/VISUALIZATION/)).toBeNull()
     expect(screen.queryByText(/EVIDENCE/)).toBeNull()
   })
+
+  it('execution_status=EMPTY renders the no-match band and rewrites the footer', async () => {
+    // SQL ran cleanly but matched zero rows. The front-end must NOT
+    // pretend the report has content; it shows the empty band and
+    // rewrites the "SQL 已校验" footer.
+    mockFetch.mockResolvedValue({
+      report: {
+        session_id: 'sid-1',
+        version: 4,
+        title: '空报告',
+        status: 'done',
+        execution_status: 'EMPTY',
+        report_payload: {
+          answer: {
+            text: '查询执行成功,但未匹配到数据',
+            table: { columns: [{ key: '区域', title: '区域' }], rows: [] },
+          },
+          execution_status: 'EMPTY',
+        },
+        query_snapshot: { sql: 'SELECT 1 WHERE FALSE', row_count: 0 },
+        created_at: '2026-07-27T12:00:00Z',
+      },
+    } as never)
+    render(
+      <ToastProvider>
+        <ReportPaper sessionId="sid-1" version={4} requirement={REQUIREMENT} />
+      </ToastProvider>,
+    )
+    // Both the .wb-empty-band AND the table block carry "未找到匹配记录" —
+    // use the band as the canonical marker.
+    const matches = await screen.findAllByText('未找到匹配记录')
+    expect(matches.length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('查询已执行 · 未匹配到数据')).toBeTruthy()
+    // Footer is rewritten — the legacy "SQL 已校验" copy is gone.
+    expect(screen.queryByText(/SQL 已校验/)).toBeNull()
+  })
+
+  it('status=error (historical FAILED version) renders error band with tried SQL', async () => {
+    // When the user revisits an old failed version from the right rail,
+    // ReportPaper must render the error band with the tried SQL —
+    // distinct from the live SSE error event.
+    mockFetch.mockResolvedValue({
+      report: {
+        session_id: 'sid-1',
+        version: 5,
+        title: '失败归档',
+        status: 'error',
+        execution_status: 'FAILED',
+        report_payload: {
+          answer: { text: '查询执行失败' },
+          execution_status: 'FAILED',
+          error: {
+            code: 'QUERY_TIMEOUT',
+            message: '查询超时,请缩小时间范围或维度后重试',
+            kind: 'timeout',
+          },
+        },
+        query_snapshot: {
+          sql: 'SELECT pg_sleep(60)',
+          error_kind: 'timeout',
+          error: 'cancel due to statement timeout',
+          row_count: 0,
+          truncated: false,
+        },
+        created_at: '2026-07-27T12:00:00Z',
+      },
+    } as never)
+    render(
+      <ToastProvider>
+        <ReportPaper sessionId="sid-1" version={5} requirement={REQUIREMENT} />
+      </ToastProvider>,
+    )
+    // "执行失败" appears in the meta pair AND in the band — assert
+    // at least one match to allow both.
+    const failureMarkers = await screen.findAllByText('执行失败')
+    expect(failureMarkers.length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText(/查询超时/)).toBeTruthy()
+    // Tried SQL is shown via a collapsible <details>.
+    expect(screen.getByText(/SELECT pg_sleep\(60\)/)).toBeTruthy()
+    // No EVIDENCE section for failed runs.
+    expect(screen.queryByText(/EVIDENCE/)).toBeNull()
+  })
 })

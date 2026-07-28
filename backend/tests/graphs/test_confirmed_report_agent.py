@@ -1,7 +1,12 @@
 """Tests for _confirmed_report_agent.
 
 Verifies that answer.table is built from query_result, and that
-execution_status reflects actual data presence.
+execution_status reflects the three-state verdict:
+
+- query_result absent           → FAILED
+- query_result.error is set     → FAILED
+- query_result present, no err, no rows → EMPTY  (was FAILED before)
+- query_result present, rows    → SUCCESS
 """
 from __future__ import annotations
 
@@ -55,7 +60,11 @@ def test_report_agent_with_query_result() -> None:
 
 
 def test_report_agent_empty_result() -> None:
-    """空 query_result → execution_status=FAILED, table=None."""
+    """空 query_result → execution_status=EMPTY, table=None.
+
+    Was FAILED before; the bug was that legitimate "no match" results
+    were indistinguishable from real query failures.
+    """
     from app.agent.confirmed_execution_graph import _confirmed_report_agent
     import asyncio
 
@@ -92,11 +101,16 @@ def test_report_agent_empty_result() -> None:
     payload = result.get("report_payload", {})
     answer = payload.get("answer", {})
     assert answer.get("table") is None
-    assert result["execution_status"] == "FAILED"
+    assert result["execution_status"] == "EMPTY"
+    assert payload["execution_status"] == "EMPTY"
 
 
 def test_report_agent_no_result() -> None:
-    """query_result 完全不存在 → execution_status=FAILED."""
+    """query_result 完全不存在 → execution_status=FAILED.
+
+    Distinct from EMPTY because there was no SQL result at all — the
+    sub-graph never produced one (likely a hard error before execute).
+    """
     from app.agent.confirmed_execution_graph import _confirmed_report_agent
     import asyncio
 

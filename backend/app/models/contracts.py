@@ -59,6 +59,10 @@ class QueryResult(BaseModel):
     # total/true lets the LLM ask the user to narrow scope instead of
     # silently dropping the tail.
     truncated: bool = False
+    # Mirror of ErrorDetail.kind for callers that don't unpack the full
+    # ErrorDetail. Values mirror ErrorDetail.kind: timeout / syntax /
+    # object / connection / permission / other / None.
+    error_kind: Optional[str] = None
 
 
 class ComponentSpec(BaseModel):
@@ -175,4 +179,22 @@ class TemplateRequest(BaseModel):
     name: str
     description: str = ""
     requirement_payload: dict
+
+
+class ReportVersionDetailResponse(BaseModel):
+    """Shape of `GET /api/v1/sessions/{sid}/reports/{v}` response.
+
+    execution_status carries the SUCCESS / EMPTY / FAILED verdict so
+    front-end can render the right band even when the user is reviewing
+    a historical version (not the just-streamed one).
+    """
+
+    version: int
+    title: str
+    status: Literal["generating", "done", "error"] = "done"
+    report_payload: dict | None = None
+    query_snapshot: dict | None = None
+    created_at: datetime | None = None
+    favorite: bool = False
+    execution_status: Optional[Literal["SUCCESS", "EMPTY", "FAILED"]] = None
 

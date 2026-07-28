@@ -340,7 +340,13 @@ export default function WorkbenchPage() {
           {phase === 'parsing' && <ParsingCard />}
 
           {phase === 'error' && canRetryFailedAction({ phase, error }) && (
-            <ErrorCard message={error?.message} onRetry={handleRetry} retrying={confirming} />
+            <ErrorCard
+              message={error?.message}
+              kind={error?.kind}
+              sql={error?.sql}
+              onRetry={handleRetry}
+              retrying={confirming}
+            />
           )}
           {(phase === 'generating' || phase === 'adjusting') && (
             <ProgressCard
