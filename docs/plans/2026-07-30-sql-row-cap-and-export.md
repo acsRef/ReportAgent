@@ -1,5 +1,9 @@
 # Plan: SQL 结果数据量保护 + 超时与错误分类 + Excel 导出
 
+> 状态: 已归档（并入主文档；commit e8e9b1e）
+
+> **历史归档**：本 plan 的设计已合并到 [2026-07-30-query-execution-safety-and-reporting.md](2026-07-30-query-execution-safety-and-reporting.md)（「层 1：SQL 工具」一节）。代码实现落地于 commit `e8e9b1e`。本文档保留作为可追溯的历史记录，不再单独维护。
+
 ## Context
 
 用户在桌面上指出两个真实存在的生产风险：

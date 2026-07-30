@@ -27,6 +27,9 @@ async def create_draft(
     concurrent writers are serialized by the UNIQUE(session_id, version)
     constraint.
     """
+    # B-7: 同 report_version_repository.append_version——事务级咨询锁按 session_id
+    # 串行化 MAX+1，关闭 READ COMMITTED 下的版本号竞态。命名空间 2 = requirement_draft。
+    await conn.fetchval("SELECT pg_advisory_xact_lock(2, hashtext($1))", session_id)
     next_version = await conn.fetchval(
         "SELECT COALESCE(MAX(version), 0) + 1 FROM agent.requirement_draft WHERE session_id = $1",
         session_id,

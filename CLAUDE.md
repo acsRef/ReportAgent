@@ -2,6 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 沟通语言
+
+始终用**中文**回复用户。代码、文件路径、类型名、函数名、错误码、命令、SQL 片段保持原文，不要翻译。
+
+## 配套文档
+
+- 详细的 Python / TypeScript 代码风格规范、SSE 事件协议、Git 提交约定、已知坑（Known Quirks）见 [AGENTS.md](AGENTS.md)。本文件与其冲突时以 AGENTS.md 的代码风格部分为准，避免两处重复维护。
+- API 端点、SSE v2 事件载荷、工作台界面约定见 [README.md](README.md)。
+
+## 开发前必读（plan 驱动）
+
+任何非平凡改动（≥2 文件或 ≥1 设计决策）动手前，必须先：
+
+1. 读**固定入口** [docs/plans/README.md](docs/plans/README.md)（永久索引，唯一入口——**不要按日期找 plan**）。
+2. 在索引「进行中」区定位本次任务对应的 plan；找不到就 `grep -rl "^> 状态: 进行中" docs/plans/`（锚定行首的 `> 状态:` 标记行，避免命中索引正文）。
+3. 以该 plan 的「设计 / 复用工具 / 明确不做」为硬约束：复用优先、不越界、错误路径按 plan 枚举实现。
+4. 开新 plan：命名 `docs/plans/YYYY-MM-DD-<slug>.md`，顶部写 `> 状态: 进行中`，并登记进 README.md 索引。
+5. plan 落地后状态改 `已完成`（带 commit），被合并/取代的改 `已归档` 并注明并入哪份。
+
+状态机：`进行中 → 已完成 → 已归档`；另有 `暂缓`（已批准但搁置）与 `只读评审`（review/grill 类）。
+
 ## Project Overview
 
 ReportAgent turns Chinese natural-language questions into PostgreSQL queries and renders the results as tables, charts, and insights inside a conversational workbench.

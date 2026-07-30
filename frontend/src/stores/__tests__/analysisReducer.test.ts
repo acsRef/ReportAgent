@@ -137,10 +137,21 @@ describe('canRetryFailedAction', () => {
     expect(canRetryFailedAction({ phase: 'error', error: { ...confirmError } })).toBe(true)
   })
 
-  it('false when the failed action is not confirm/sql', () => {
+  it('true for recoverable requirement failures (new/supplement/adjust)', () => {
+    // P-1: REQUIREMENT_INCOMPLETE 以 failed_action = 当前 mode 出现且 recoverable，
+    // 也应可重试。
+    for (const action of ['new', 'supplement', 'adjust'] as const) {
+      expect(canRetryFailedAction({
+        phase: 'error',
+        error: { ...confirmError, failed_action: action },
+      })).toBe(true)
+    }
+  })
+
+  it('false when the failed action is not retryable', () => {
     expect(canRetryFailedAction({
       phase: 'error',
-      error: { ...confirmError, failed_action: 'new' },
+      error: { ...confirmError, failed_action: 'retry' },
     })).toBe(false)
   })
 

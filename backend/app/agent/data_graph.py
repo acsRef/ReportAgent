@@ -18,6 +18,10 @@ class DataAgentState(TypedDict):
     mcp_tool_calls: list[dict]
     raw_schema: str
     schema_context: SchemaContext
+    # 层7/B-3: 必须声明 trace_id，否则 LangGraph 对未声明 key 静默丢弃，
+    # traced_node 读到空串 → 所有子图 span 落进共享的 _local[""] 桶，
+    # 造成跨请求 trace 污染 + 内存泄露。调用点早已传入 trace_id。
+    trace_id: str
 
 
 @traced_node("data_detect_intent")

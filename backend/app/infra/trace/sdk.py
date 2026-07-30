@@ -2,9 +2,11 @@
 
 import asyncio
 import functools
+import logging
 import time
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Callable, Generator, Optional
@@ -12,7 +14,21 @@ from typing import Any, Callable, Generator, Optional
 from app.infra.trace.models import LLMCall, Span, Trace
 from app.infra.trace.repository import TraceRepository
 
+logger = logging.getLogger(__name__)
+
 _local: dict[str, "Tracer"] = {}
+
+# C-4: 当前请求的 tracer。此前 llm.py 用 `for _t in _local.values()` 把一次
+# LLM 调用记到所有在途 tracer 上（span attribution 错位）；`_local` 还只在
+# flush 成功时 pop，异常路径永久泄露。改成 ContextVar：traced_node 进入节点时
+# set、退出时 reset，llm.py 只往「当前」tracer 记。sync 节点虽跑在执行器线程，
+# 但 set 发生在该线程内的 wrapper 入口，故同一线程深处的 call_llm 仍可见。
+_current_tracer: ContextVar[Optional["Tracer"]] = ContextVar("current_tracer", default=None)
+
+
+def current_tracer() -> Optional["Tracer"]:
+    """返回当前执行上下文里的 tracer（无则 None）。供 llm.py 精确归属 LLM 调用。"""
+    return _current_tracer.get()
 
 
 class Tracer:
@@ -88,20 +104,23 @@ class Tracer:
     async def flush(self):
         repo = TraceRepository()
         try:
-            await repo.save_trace(self._trace)
-        except Exception:
-            pass
-        for llm_call in self._llm_calls:
             try:
-                await repo.save_llm_call(llm_call)
-            except Exception:
-                pass
-        for span in self._spans:
-            try:
-                await repo.save_span(span)
-            except Exception:
-                pass
-        _local.pop(self.trace_id, None)
+                await repo.save_trace(self._trace)
+            except Exception as exc:
+                logger.warning("save_trace failed for trace_id=%s: %s", self.trace_id, exc)
+            for llm_call in self._llm_calls:
+                try:
+                    await repo.save_llm_call(llm_call)
+                except Exception as exc:
+                    logger.warning("save_llm_call failed for trace_id=%s: %s", self.trace_id, exc)
+            for span in self._spans:
+                try:
+                    await repo.save_span(span)
+                except Exception as exc:
+                    logger.warning("save_span failed for trace_id=%s: %s", self.trace_id, exc)
+        finally:
+            # C-4: 无论落库成败都要释放桶，否则异常路径下 tracer 永驻 _local → 内存泄露。
+            _local.pop(self.trace_id, None)
 
 
 def get_tracer(trace_id: str, session_id: Optional[str] = None,
@@ -123,20 +142,28 @@ def traced_node(name: str, span_type: str = "NODE"):
             async def async_wrapper(state: dict, **kwargs):
                 trace_id = state.get("trace_id", "")
                 tracer = get_tracer(trace_id)
-                with tracer.span(name, span_type=span_type, input=_summarize_state(state)):
-                    result = await func(state, **kwargs)
-                _handle_output_span(tracer, result)
-                return result
+                token = _current_tracer.set(tracer)
+                try:
+                    with tracer.span(name, span_type=span_type, input=_summarize_state(state)):
+                        result = await func(state, **kwargs)
+                    _handle_output_span(tracer, result)
+                    return result
+                finally:
+                    _current_tracer.reset(token)
             return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(state: dict, **kwargs):
                 trace_id = state.get("trace_id", "")
                 tracer = get_tracer(trace_id)
-                with tracer.span(name, span_type=span_type, input=_summarize_state(state)):
-                    result = func(state, **kwargs)
-                _handle_output_span(tracer, result)
-                return result
+                token = _current_tracer.set(tracer)
+                try:
+                    with tracer.span(name, span_type=span_type, input=_summarize_state(state)):
+                        result = func(state, **kwargs)
+                    _handle_output_span(tracer, result)
+                    return result
+                finally:
+                    _current_tracer.reset(token)
             return sync_wrapper
     return decorator
 

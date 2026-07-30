@@ -27,6 +27,12 @@ _INTENT_TOOL_WHITELIST = {
 }
 
 
+# C-8: 同一次 call_llm 链路里工具描述块被反复重拼（遍历整个注册表）。
+# 每个调用方的白名单是固定的，渲染结果可按白名单缓存。注册表在进程内
+# 不变（register_all_tools 幂等），故缓存键只用白名单集合即可。
+_TOOLS_BLOCK_CACHE: dict[frozenset, str] = {}
+
+
 def _format_tools_for_prompt(whitelist: set[str] | None = None) -> str:
     """把注册表工具渲染进模型 prompt —— 输出完整中文描述，不截断。
 
@@ -40,10 +46,14 @@ def _format_tools_for_prompt(whitelist: set[str] | None = None) -> str:
     try:
         from app.tools import register_all_tools
         register_all_tools()
-    except Exception:
-        pass
+    except Exception as exc:  # Detail D: 不再静默——注册失败会让工具块缺失
+        logging.getLogger(__name__).warning("register_all_tools failed: %s", exc)
 
     allowed = whitelist if whitelist is not None else _INTENT_TOOL_WHITELIST
+    cache_key = frozenset(allowed)
+    cached = _TOOLS_BLOCK_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         from app.tools.registry import registry
         blocks = []
@@ -55,7 +65,9 @@ def _format_tools_for_prompt(whitelist: set[str] | None = None) -> str:
             if not desc:
                 continue
             blocks.append(f"- {name}: {desc}")
-        return "\n".join(blocks)
+        result = "\n".join(blocks)
+        _TOOLS_BLOCK_CACHE[cache_key] = result
+        return result
     except Exception as exc:  # 极早期导入时注册表尚未初始化
         logger = logging.getLogger(__name__)
         logger.warning("registry unavailable for _format_tools_for_prompt: %s", exc)
@@ -95,9 +107,12 @@ def call_llm(prompt: str | list, **kwargs) -> str:
         else:
             prompt_tokens = getattr(usage, "input_tokens", 0) or 0
             completion_tokens = getattr(usage, "output_tokens", 0) or 0
-        from app.infra.trace.sdk import _local as _tracer_local
-        for _t in _tracer_local.values():
-            _t.add_llm_call(model, prompt_tokens, completion_tokens, elapsed_ms)
+        # C-4: 只记到「当前」请求的 tracer。此前遍历 _local.values() 把一次
+        # 调用记到所有在途 tracer，造成 span attribution 跨请求错位。
+        from app.infra.trace.sdk import current_tracer
+        tracer = current_tracer()
+        if tracer is not None:
+            tracer.add_llm_call(model, prompt_tokens, completion_tokens, elapsed_ms)
     except Exception:
         pass
 

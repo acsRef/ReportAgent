@@ -66,10 +66,23 @@ _PARSE_PROMPT = """你是 ReportAgent 需求解析器。给定用户的中文业
 """
 
 
+# C-7: prompt 里的 schema 文本必须有界。表/列描述随业务增长可膨胀到几十 K，
+# 直接挤爆 LLM 上下文窗口。单表描述截到 160 字，整体再套一个硬上限。
+MAX_SCHEMA_CHARS = 8000
+_MAX_TABLE_DESC = 160
+
+
 def _schema_text(ctx: SchemaContext | None) -> str:
     if not ctx or not ctx.tables:
         return "无可用表结构"
-    return "\n".join(f"- {t.name}: {t.description}" for t in ctx.tables)
+    lines = [
+        f"- {t.name}: {(t.description or '')[:_MAX_TABLE_DESC]}"
+        for t in ctx.tables
+    ]
+    text = "\n".join(lines)
+    if len(text) > MAX_SCHEMA_CHARS:
+        text = text[:MAX_SCHEMA_CHARS] + "\n...（schema 已截断）"
+    return text
 
 
 def _call_llm_for_parse(user_query: str, schema: SchemaContext | None) -> dict:

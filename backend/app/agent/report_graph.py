@@ -23,6 +23,22 @@ class ReportAgentState(TypedDict):
     assemble_plan: list[dict]
     assemble_step_idx: int
     assemble_results: list[dict]
+    # 层7/B-3: 声明 trace_id（调用点早已传入），避免子图 span 落进共享桶。
+    trace_id: str
+
+
+def _validate_qr(qr_raw) -> Optional[QueryResult]:
+    """C-9: 子图边界统一收敛 QueryResult 的解析。
+
+    父图传进来的可能是 Pydantic 模型，也可能是 `model_dump()` 后的 dict。
+    之前三处节点各自 `QueryResult(**qr_raw)` 防御，形态一变就静默失效；
+    统一走 model_validate（比 `**dict` 更宽容，允许字段类型强转）。
+    """
+    if qr_raw is None:
+        return None
+    if isinstance(qr_raw, QueryResult):
+        return qr_raw
+    return QueryResult.model_validate(qr_raw)
 
 
 @traced_node("report_plan_analysis")
@@ -31,11 +47,7 @@ def _plan_analysis(state: ReportAgentState) -> dict:
     if not qr_raw:
         return {"assemble_plan": [], "assemble_step_idx": 0, "assemble_results": []}
 
-    # Normalize QueryResult (might be Pydantic model or dict from subgraph)
-    if isinstance(qr_raw, dict):
-        qr = QueryResult(**qr_raw)
-    else:
-        qr = qr_raw
+    qr = _validate_qr(qr_raw)
 
     if not qr.rows:
         return {"assemble_plan": [], "assemble_step_idx": 0, "assemble_results": []}
@@ -74,11 +86,7 @@ def _run_step(state: ReportAgentState) -> dict:
         return _build_output(state)
 
     step = plan[idx]
-    qr_raw = state.get("query_result")
-    if isinstance(qr_raw, dict):
-        qr = QueryResult(**qr_raw)
-    else:
-        qr = qr_raw
+    qr = _validate_qr(state.get("query_result"))
 
     data_json = json.dumps({
         "columns": qr.columns if qr else [],
@@ -131,11 +139,7 @@ def _build_output(state: ReportAgentState) -> dict:
             insight_text += r["result"] + "\n"
 
     if not chart_config:
-        qr_raw = state.get("query_result")
-        if isinstance(qr_raw, dict):
-            qr = QueryResult(**qr_raw)
-        else:
-            qr = qr_raw
+        qr = _validate_qr(state.get("query_result"))
         data_json = json.dumps({
             "columns": qr.columns if qr else [],
             "rows": qr.rows if qr else [],

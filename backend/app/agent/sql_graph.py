@@ -71,7 +71,10 @@ class SQLAgentState(TypedDict):
     validation_result: dict
     sql_result: str
     execution_status: str
-    error: Optional[str]
+    # C-6: 与所有父图（parent_graph / confirmed_execution_graph）的
+    # Optional[ErrorDetail] 对齐。此前是 Optional[str]，边界处靠父图防御性
+    # 转换屏蔽——一旦本图真写 str 进 error 就是无声的类型错位。
+    error: Optional[ErrorDetail]
     retry_counters: dict
     query_result: Optional[QueryResult]
     chosen_tool: Optional[str]
@@ -81,6 +84,9 @@ class SQLAgentState(TypedDict):
     # confirmed_execution_graph._confirmed_sql_agent; ignored by the
     # legacy interrupt-based flow.
     confirmed_requirement: Optional[str]
+    # 层7/B-3: 声明 trace_id（调用点早已传入），避免 LangGraph 静默丢弃
+    # 导致子图 span 落进共享 _local[""] 桶。
+    trace_id: str
 
 
 _PLAN_TABLE_HINTS = """常用表速查:
@@ -352,19 +358,35 @@ def _generate_sql(state: SQLAgentState) -> dict:
 - 使用中文别名（例如「销售额」「年份」）
 - 只输出纯 SQL，禁止解释，禁止 markdown 代码块"""
 
-    # Retry feedback loop: when regenerating after a validation failure,
-    # feed the failed SQL and its error back to the LLM. Without this the
-    # retry loop is blind — the same prompt reproduces the same invalid
-    # SQL (e.g. a hallucinated column) until retries are exhausted.
+    # Retry feedback loop: when regenerating after a failure, feed the failed
+    # SQL and its error back to the LLM. Without this the retry loop is blind —
+    # the same prompt reproduces the same invalid SQL (e.g. a hallucinated
+    # column) until retries are exhausted.
+    #
+    # Two failure sources must BOTH be checked: a validation failure
+    # (validation_result.valid is False) AND an execution failure (sql_result
+    # carries an "error"). Bug: previously only validation was checked, so when
+    # validate passed but execute failed (e.g. column does not exist at runtime)
+    # the error was silently dropped and the retry regenerated identical SQL.
     prev_validation = state.get("validation_result") or {}
     prev_sql = (state.get("generated_sql") or "").strip()
-    if prev_sql and prev_validation.get("valid") is False:
+    prev_sql_result = state.get("sql_result") or ""
+    _exec_err = ""
+    if prev_sql_result:
+        try:
+            _parsed_result = json.loads(prev_sql_result)
+            if isinstance(_parsed_result, dict):
+                _exec_err = _parsed_result.get("error") or ""
+        except json.JSONDecodeError:
+            _parsed_result = None
+    if prev_sql and (prev_validation.get("valid") is False or _exec_err):
+        error_to_show = prev_validation.get("error") or _exec_err
         prompt += f"""
 
 【上一次生成失败，必须修正】
 上一次的 SQL：
 {prev_sql}
-校验错误：{prev_validation.get("error", "")}
+错误：{error_to_show}
 请针对该错误修正 SQL：只使用上面「可用表结构」中真实存在的表名和列名，不要臆造列。"""
 
     sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
@@ -408,7 +430,8 @@ def _evaluate(state: SQLAgentState) -> dict:
             return {"execution_status": "SQL_SYNTAX_ERROR"}
         else:
             return {"execution_status": "NEED_CLARIFICATION",
-                    "error": "SQL生成失败: 验证不通过"}
+                    "error": ErrorDetail(code="SQL_GENERATION_FAILED",
+                                         message="SQL生成失败: 验证不通过", kind="other")}
     result = json.loads(raw)
     if "error" in result:
         retry = state.get("retry_counters", {})
@@ -425,7 +448,9 @@ def _evaluate(state: SQLAgentState) -> dict:
             }[kind]
             return {
                 "execution_status": "FAILED",
-                "error": f"{message}：{result.get('error', '')}",
+                "error": ErrorDetail(code="EXECUTION_ERROR",
+                                     message=f"{message}：{result.get('error', '')}",
+                                     kind=kind),
             }
 
         # syntax / object / other：维持原重试逻辑
@@ -436,7 +461,9 @@ def _evaluate(state: SQLAgentState) -> dict:
             return {"execution_status": "SCHEMA_ERROR", "retry_counters": retry}
         else:
             return {"execution_status": "NEED_CLARIFICATION",
-                    "error": f"SQL执行失败: {result['error']}"}
+                    "error": ErrorDetail(code="EXECUTION_ERROR",
+                                         message=f"SQL执行失败: {result['error']}",
+                                         kind=kind)}
 
     return {"execution_status": "SUCCESS"}
 
@@ -454,13 +481,36 @@ def _build_output(state: SQLAgentState) -> dict:
     has_error = "error" in result_data and result_data["error"]
     columns_raw = result_data.get("columns", [])
     columns = [c if isinstance(c, dict) else {"name": c, "type": ""} for c in columns_raw]
+    rows = result_data.get("rows", [])
+    # 保留 execute_sql 用 CTE count(*) 算出的「真实总行数」。截断场景下
+    # len(rows) 只是 MAX_RESULT_ROWS 上限，会误导 _plan_analysis 的规模估算，
+    # 也让 query_snapshot.row_count 入库失真。
+    total = result_data.get("row_count")
+    if not isinstance(total, int):
+        total = len(rows)
+    # 三态：FAILED（有 error）/ EMPTY（无 error 但零行，合法结论）/ SUCCESS。
+    # EMPTY 之前永远是死代码——父图被迫从 rows 反推 verdict 绕过去，下游任何
+    # 依赖 query_result.status == 'EMPTY' 的判定都会无声失效。
+    if has_error:
+        status = "FAILED"
+    elif not rows:
+        status = "EMPTY"
+    else:
+        status = "SUCCESS"
+    error_kind = result_data.get("error_kind") if has_error else None
     qr = QueryResult(
         sql=state.get("generated_sql", ""),
         columns=columns,
-        rows=result_data.get("rows", []),
-        row_count=len(result_data.get("rows", [])),
-        status="FAILED" if has_error else "SUCCESS",
-        error=ErrorDetail(code="EXECUTION_ERROR", message=str(result_data["error"])) if has_error else None,
+        rows=rows,
+        row_count=total,
+        status=status,
+        truncated=bool(result_data.get("truncated", False)),
+        error_kind=error_kind,
+        error=ErrorDetail(
+            code="EXECUTION_ERROR",
+            message=str(result_data["error"]),
+            kind=error_kind,
+        ) if has_error else None,
     )
     return {"query_result": qr}
 

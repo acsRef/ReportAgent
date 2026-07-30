@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Literal, Optional, TypedDict
 
@@ -27,6 +28,13 @@ from app.tools.registry import registry
 from app.tools.__init__ import register_all_tools
 
 logger = logging.getLogger(__name__)
+
+# C-2: clarify 跨多轮会让 clarification_history 与 current_query 线性膨胀
+# （每轮把上一轮答案追加进 current_query），最终挤爆 LLM 上下文窗口。
+# 滚动窗口：history 只留最近 N 轮，augmented query 套硬上限。
+CLARIFY_MAX_TURNS = 5
+CLARIFY_QUERY_MAX_CHARS = 2000
+_CLARIFY_ANSWER_MAX_CHARS = 200
 
 
 class AgentState(TypedDict):
@@ -144,7 +152,8 @@ async def _classify_intent(state: AgentState) -> dict:
     try:
         mm = MemoryManager()
         memory_context = await mm.recall(query=q, user_id=user_id, top_k_queries=2, top_k_preferences=3)
-    except Exception:
+    except Exception as exc:  # Detail D: 记忆召回失败降级为空，但要留痕
+        logger.warning("memory recall failed: %s", exc)
         memory_context = ""
 
     return {
@@ -219,7 +228,11 @@ async def _run_sql_agent(state: AgentState) -> dict:
             "intent_reasoning": "",
             "execution_status": "",
         }
-        intent_result = _run_intent(intent_state)  # type: ignore[arg-type]
+        # 真 P0（bug-review #8）：_intent_analyze 是 sync 函数（内含 1-5s 的
+        # call_llm HTTP），从 async 节点直接调用会阻塞整个 event loop——LangGraph
+        # 只对「注册为节点」的 sync 函数自动套线程池，这里是节点内部直调，没有包装。
+        # 显式丢进线程池，释放 event loop。
+        intent_result = await asyncio.to_thread(_run_intent, intent_state)
         # Mark trace + bubble the intent_card up so main.py can emit it.
         return {
             "query_plan": None,
@@ -263,8 +276,8 @@ async def _run_sql_agent(state: AgentState) -> dict:
                 schema=schema.model_dump() if schema else None,
                 target_metric=ss["query_plan"].target_metric if ss.get("query_plan") else "",
             )
-        except Exception:
-            pass
+        except Exception as exc:  # Detail D
+            logger.warning("remember_query failed: %s", exc)
 
     # Pre-SQL clarification: if the plan node decided we need to clarify,
     # build a card payload and route via execution_status rather than forcing
@@ -444,8 +457,8 @@ async def _run_report_agent(state: AgentState) -> dict:
                 memory_type="insight",
                 importance=0.3,
             )
-        except Exception:
-            pass
+        except Exception as exc:  # Detail D
+            logger.warning("remember_preference failed: %s", exc)
 
     # End trace
     trace_id = state.get("trace_id")
@@ -488,18 +501,24 @@ def _clarify(state: AgentState) -> dict:
     })
 
     answer = str(user_response)
-    clarification_entry = {"question": question, "answer": answer}
-    history = list(state.get("clarification_history", []))
-    history.append(clarification_entry)
+    truncated_answer = answer[:_CLARIFY_ANSWER_MAX_CHARS]
 
-    # Build augmented query: original + clarification context
+    # C-2: 滚动窗口——只保留最近 CLARIFY_MAX_TURNS 轮，避免 history 无界增长。
+    history = list(state.get("clarification_history", []))
+    history = history[-(CLARIFY_MAX_TURNS - 1):]
+    history.append({"question": question, "answer": truncated_answer})
+
+    # Build augmented query: original + clarification context. 套硬上限，
+    # 超出时保留尾部（最近的补充信息），防止 current_query 随轮次线性膨胀。
     current_q = state.get("current_query", state["user_query"])
-    augmented = f"{current_q}\n\n补充信息: {answer}"
+    augmented = f"{current_q}\n\n补充信息: {truncated_answer}".strip()
+    if len(augmented) > CLARIFY_QUERY_MAX_CHARS:
+        augmented = augmented[-CLARIFY_QUERY_MAX_CHARS:]
 
     return {
         "current_query": augmented,
         "clarification_history": history,
-        "clarification_context": {"question": question, "answer": answer},
+        "clarification_context": {"question": question, "answer": truncated_answer},
         "execution_status": "RETRY",
         "retry_count": 0,
         "active_sub_agent": "sql",

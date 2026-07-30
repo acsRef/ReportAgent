@@ -1,5 +1,9 @@
 # Plan: 让「执行成功 vs 执行失败」与「零行 vs 超时」在系统内可被准确区分
 
+> 状态: 已归档（并入主文档；commit 56fb0fa）
+
+> **历史归档**：本 plan 的设计已合并到 [2026-07-30-query-execution-safety-and-reporting.md](2026-07-30-query-execution-safety-and-reporting.md)（「层 3-4：父图 + SSE + 报告壳」一节）。代码实现落地于 commit `56fb0fa`。本文档保留作为可追溯的历史记录，不再单独维护。
+
 ## Context
 
 用户在桌面上抛出两个核心原则，以及三类后果：

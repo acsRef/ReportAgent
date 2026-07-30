@@ -38,6 +38,12 @@ async def append_version(
     constraint is a safety net for any race that survives the transaction
     boundary.
     """
+    # B-7: 纯 MAX+1 在 READ COMMITTED 下有并发竞态——两个事务都读到同一 MAX，
+    # 后提交者撞 UNIQUE(session_id, version)，调用方收到 500。用事务级咨询锁按
+    # session_id 串行化版本号分配：同 session 的并发 append 在此排队，锁随调用方
+    # 的事务结束自动释放。命名空间 1 = report_version 序列（与 requirement_draft
+    # 的命名空间 2 分开，避免两张表的写互相阻塞）。
+    await conn.fetchval("SELECT pg_advisory_xact_lock(1, hashtext($1))", session_id)
     next_version = await conn.fetchval(
         "SELECT COALESCE(MAX(version), 0) + 1 FROM agent.report_version WHERE session_id = $1",
         session_id,

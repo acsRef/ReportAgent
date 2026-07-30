@@ -6,6 +6,7 @@
  * this function resolves on every exit path and never throws.
  */
 import type { AnalysisPhase } from '../types/analysis'
+import { handleUnauthorized } from './unauthorized'
 
 export type ToastApi = {
   error: (m: string) => void
@@ -45,6 +46,10 @@ export async function postConfirmStream(
   } catch (err) {
     if ((err as Error)?.name === 'AbortError') return
     ctx.toast.error(`${action} 请求失败：${String(err).slice(0, 100)}`)
+    return
+  }
+  if (res.status === 401) {
+    handleUnauthorized()
     return
   }
   if (!res.ok || !res.body) {

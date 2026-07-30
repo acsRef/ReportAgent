@@ -1,0 +1,79 @@
+# docs/plans 永久索引（唯一入口）
+
+> **本文件是 `docs/plans/` 的唯一永久入口。CLAUDE.md 永远指向这个固定路径——不要按日期找 plan。**
+> 每日可再有 `YYYY-MM-DD-index.md` 做当天细分，但「该读哪份」以本文件为准。
+
+## 怎么用（plan 驱动开发）
+
+1. 任何非平凡改动动手前，**先读本文件**，在下表「进行中」区定位本次任务对应的 plan。
+2. 找不到就 `grep -rl "^> 状态: 进行中" docs/plans/`（锚定行首的 `> 状态:` 标记行，避免命中本索引正文）。
+3. 以该 plan 的「设计 / 复用工具 / 明确不做」为硬约束：复用优先、不越界、错误路径按 plan 枚举实现。
+4. 开新 plan：命名 `docs/plans/YYYY-MM-DD-<slug>.md`，顶部写 `> 状态: 进行中`，并登记进本文件「进行中」表。
+5. plan 落地后：状态改 `已完成`（带 commit），移入「已完成」表；被合并/取代的改 `已归档` 并注明并入哪份。
+
+## 状态图例
+
+| 状态 | 含义 |
+|---|---|
+| `进行中` | 正在实施，是当前开发依据 |
+| `已完成` | 已落地并验证（带 commit / 完成报告） |
+| `已归档` | 内容被合并或取代，保留作追溯，不再单独执行 |
+| `暂缓` | 已批准但主动搁置（含残留项），重启时先读本文件与完成报告 |
+| `只读评审` | review / grill 类，只审不改码 |
+
+## 进行中
+
+| Plan | 主题 | 备注 |
+|---|---|---|
+| —（当前无） | — | 新任务开 plan 后登记于此 |
+
+## 已完成
+
+| Plan | 主题 | 落地 |
+|---|---|---|
+| [2026-07-30-bugfix-completion.md](2026-07-30-bugfix-completion.md) | 本轮 bug 修复完成报告（权威记录） | 后端 107 / 前端 242 / 启动冒烟 |
+| [2026-07-30-auth-secret-hardening.md](2026-07-30-auth-secret-hardening.md) | B-1 auth 启动闸（fail-closed） | `startup_guard.py` + 10 测试 |
+| [2026-07-30-query-execution-safety-and-reporting.md](2026-07-30-query-execution-safety-and-reporting.md) | SQL 执行安全 + 三态 + 报告正确性（主文档） | 层 2/6/7 全部落地 |
+| [2026-07-30-cross-agent-state-fix.md](2026-07-30-cross-agent-state-fix.md) | 多 agent 状态隔离 + 上下文窗口保护 | C-1~C-4/C-6~C-9 落地；C-5 残留转 async |
+| [2026-07-30-legacy-sql-bugs.md](2026-07-30-legacy-sql-bugs.md) | legacy SQL 子图三个 bug | Bug1/Bug2 落地；Bug3 随 async |
+| [2026-07-30-tool-desc-error-examples.md](2026-07-30-tool-desc-error-examples.md) | 工具描述补错误返回样例 | `tools/__init__.py` |
+
+## 暂缓（已批准但搁置，含残留项）
+
+| Plan | 主题 | 搁置原因 |
+|---|---|---|
+| [2026-07-30-backend-async-refactor.md](2026-07-30-backend-async-refactor.md) | 后端全量 async 重构 | 经确认停在安全子集；两个真 P0 已用 `asyncio.to_thread` 单独修掉；全量改造需重写 5+ 测试、收益 P1 |
+| [2026-07-30-conversation-context-system.md](2026-07-30-conversation-context-system.md) | 分层对话上下文系统 | 新特性（非 bug），本轮不做 |
+
+## 只读评审
+
+| Plan | 主题 | 产出 |
+|---|---|---|
+| [2026-07-30-bug-review.md](2026-07-30-bug-review.md) | 核实各 plan bug + 补遗 | B-1~B-8 / P-1~P-8 |
+| [2026-07-30-cross-agent-state-safety.md](2026-07-30-cross-agent-state-safety.md) | 多 agent 状态污染审查 | C-1~C-9 |
+| [2026-07-30-design-principles-grill.md](2026-07-30-design-principles-grill.md) | plan 设计原则合规评审 | 逐份评分 + 整改 |
+
+## 已归档（被合并/取代，保留追溯）
+
+| Plan | 主题 | 并入 / commit |
+|---|---|---|
+| [2026-07-30-sql-row-cap-and-export.md](2026-07-30-sql-row-cap-and-export.md) | SQL 行数上限 + 超时 + Excel 导出 | 并入主文档；commit `e8e9b1e` |
+| [2026-07-30-confirmed-exec-three-state.md](2026-07-30-confirmed-exec-three-state.md) | 三态分离 | 并入主文档；commit `56fb0fa` |
+
+## 当日细分索引
+
+- [2026-07-30-index.md](2026-07-30-index.md) — 2026-07-30 当天 plan 的关系网 / 优先级 / 冲突点细分
+
+## 历史 plan（更早日期）
+
+| Plan | 主题 |
+|---|---|
+| [2026-07-27-bugfix-atelier-migration.md](2026-07-27-bugfix-atelier-migration.md) | antd→atelier 迁移修复 |
+| [2026-07-24-conversational-workbench.md](2026-07-24-conversational-workbench.md) | 对话工作台 |
+| [2026-07-24-intelligent-analysis-workbench-design.md](2026-07-24-intelligent-analysis-workbench-design.md) | 智能分析工作台设计 |
+| [2026-07-24-intelligent-analysis-workbench-html.md](2026-07-24-intelligent-analysis-workbench-html.md) | 工作台原型 HTML |
+| [2026-07-22-frontend-ui-refactor.md](2026-07-22-frontend-ui-refactor.md) | 前端 UI 重构 |
+
+## 约定回顾
+
+命名、七章节结构、设计质量标尺、中文规范见 [CLAUDE.md](../../CLAUDE.md)「Planning Discipline」与 [AGENTS.md](../../AGENTS.md)。本文件只做索引与执行分流，不复述实现细节。

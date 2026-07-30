@@ -83,6 +83,7 @@ def register_all_tools():
                 "输出：{valid: bool, error: 失败原因}。"
                 "用于：每次 execute_sql 之前必须调用；重试生成新 SQL 后重新校验。"
                 "不要用来执行查询获取数据——用 execute_sql；校验通过只代表安全可执行，不代表业务逻辑正确。"
+                "错误示例：{\"valid\":false, \"error\":\"仅允许 SELECT 语句\"} → SQL 含 DDL/DML 关键字"
             ),
             capability="sql_validate",
             agent_type="sql",
@@ -102,6 +103,12 @@ def register_all_tools():
                 "输出：{columns: [{name, type}], rows: [每行 {字段: 值}], error: 空为成功}。"
                 "用于：校验通过后立即执行，为报表生成提供数据。"
                 "不要用来执行任何 DDL/DML——连接为只读；执行失败时按 error 修正 SQL 重试，3 次失败转用户澄清。"
+                "错误返回示例：\n"
+                "- {\"error\": \"relation xxx does not exist\", \"error_kind\": \"object\"} → 表/字段不存在，先用 get_table_ddl 确认正确名称后修正 SQL\n"
+                "- {\"error\": \"canceling statement due to statement timeout\", \"error_kind\": \"timeout\"} → 查询超时（>30s），尝试增加 WHERE 时间筛选或减少维度\n"
+                "- {\"error\": \"permission denied for table yyy\", \"error_kind\": \"permission\"} → 无权限，换用其他表或缩小查询范围\n"
+                "- {\"error\": \"syntax error at or near ...\", \"error_kind\": \"syntax\"} → SQL 语法错误，根据提示位置修正后重新 validate\n"
+                "- {\"error\": \"column xxx does not exist\", \"error_kind\": \"object\"} → 字段名错误，用 get_table_ddl 确认字段后修正"
             ),
             capability="sql_execute",
             agent_type="sql",

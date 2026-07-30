@@ -133,6 +133,41 @@ User Query → security_guard (score ≥ 3 → block)
 - Conventional Commits: `feat(scope): msg`, `fix(scope): msg`, `docs: msg`, `chore(scope): msg`, `test(scope): msg`, `refactor: msg`, `style(scope): msg`.
 - English messages, lowercase after colon, no period at end.
 
+## Design Documentation
+
+Every non-trivial design decision must be documented in `docs/plans/` before implementation.
+
+### Language
+
+All plan documents must be written in Chinese. Rationale: the domain language and end-user communication are all in Chinese; plans are internal design records best kept in the same language as the domain.
+
+### Naming
+
+```
+docs/plans/YYYY-MM-DD-short-description.md
+```
+
+### Template
+
+Each plan doc uses these sections:
+
+| Section | Purpose |
+|---------|---------|
+| `# Title`（标题） | One-line summary of the decision/plan |
+| `## Context`（背景） | Why this change exists, what problem it solves, prior discussion |
+| `## Design`（设计） | The chosen approach with rationale. MUST reference real schemas and real code paths — never fabricate APIs or data. |
+| `## Files to change`（文件改动） | Concrete file list with one-liner per file |
+| `## Reused existing utilities`（复用工具） | What existing code is leveraged (not rewritten) |
+| `## Verification`（验证） | How to test, including manual test matrix |
+| `## Explicitly NOT doing`（不做事项） | What is deliberately out of scope |
+
+### Principles
+
+- **High cohesion**: related behavior stays together; one file/module = one responsibility
+- **Low coupling**: modules communicate through narrow, well-defined interfaces (models, repos, services), not by sharing internal state
+- **Design docs are immutable records**: append amendments; never rewrite history
+- **Every plan must be filed before code changes begin**
+
 ## Known Quirks
 
 - `__init__.py` files are intentionally 0 bytes (namespace packages)

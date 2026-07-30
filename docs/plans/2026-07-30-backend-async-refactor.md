@@ -1,6 +1,12 @@
 # Plan: Backend Async Refactor — 消除同步阻塞
 
-## Context
+> 状态: 暂缓（全量 async 停在安全子集，真 P0 已单独修复）
+
+> **勘误**（review 后写）：plan 原文宣称 sync 节点"阻塞整个事件循环"——**经实测核对**，LangGraph `coerce_to_runnable` 通过 `run_in_executor(None, sync_func)` 把 sync 函数自动扔进默认线程池（`max_workers = min(32, cpu+4)`，本机 = 24）。**真正的 event loop 阻塞只有 2 处**：`parent_graph.py:222` 的 sync `_intent_analyze()` 从 async node 直接调用（无线程池包装），与 `main.py:977` 的 sync `openpyxl.Workbook()` 在 `async def` 端点内。sync node 转 async 的真正收益是**缓解线程池耗尽 + 减少 sync psycopg2 每次新连接的 socket 风暴**，而非事件循环阻塞。本勘误段重新校准 P0 → P1 评级，下方「问题清单」表的严重度已同步修正。
+
+> **Related**：[2026-07-30-cross-agent-state-fix.md](2026-07-30-cross-agent-state-fix.md) 的 Step 7 与本 plan 的 PG 连接池/async 化话题部分重叠。fix plan 选方案 A（保留 sync + ThreadedConnectionPool），本 plan 选方案 B（彻底转 asyncpg）——**两份不同时实施**，建议 PR-7 选 fix plan 路线（更省），PR-8 选本 plan 路线（彻底）。
+
+## 背景
 
 整个后端存在严重的 **sync-in-async 反模式**。核心问题：
 
@@ -32,7 +38,7 @@
 | 14 | `app/main.py:14` | 模块级 sync `load_dotenv()` | P2 |
 | 15 | `app/main.py:977` | sync `openpyxl.Workbook()` 在 async 端点 | P2 |
 
-## Design
+## 设计
 
 ### 改造原则
 
@@ -102,7 +108,7 @@ except Exception as exc:
     logger.warning("failed to record LLM call: %s", exc)
 ```
 
-**Pre-condition:** `ChatOpenAI` 的 `ainvoke()` 可用。langchain-openai ≥ 0.1.0 已支持。当前 requirements.txt 无版本下限，需要确认。验证：`hasattr(ChatOpenAI, 'ainvoke')`。
+**前置条件：** `ChatOpenAI` 的 `ainvoke()` 可用。langchain-openai ≥ 0.1.0 已支持。当前 requirements.txt 无版本下限，需要确认。验证：`hasattr(ChatOpenAI, 'ainvoke')`。
 
 ---
 
@@ -170,7 +176,7 @@ async def execute_sql(sql: str) -> str:
 
 **注意：** `chart_advisor` 和 `insight_analyst` 是纯 CPU 计算（解析 JSON 算统计），无 I/O，不需要改 async。
 
-**Pre-condition:** 现有的 asyncpg pool（`get_pool()`）与 `sql_tools.py` 使用同一个 `DATABASE_URL`。已验证：`postgres.py` 的 `POSTGRES_DSN` 和 `sql_tools.py` 的 `PG_DSN` 来源相同（`DATABASE_URL` env var），可以复用。
+**前置条件：** 现有的 asyncpg pool（`get_pool()`）与 `sql_tools.py` 使用同一个 `DATABASE_URL`。已验证：`postgres.py` 的 `POSTGRES_DSN` 和 `sql_tools.py` 的 `PG_DSN` 来源相同（`DATABASE_URL` env var），可以复用。
 
 ---
 
@@ -295,7 +301,7 @@ Step 9: parent_graph.py        — node async def + await call_llm + except → 
 Step 10: memory.py             — except → log（零依赖，可随时做）
 ```
 
-## Files to change
+## 文件改动
 
 - `backend/app/llm.py` — `call_llm` async def + `ainvoke` + except log
 - `backend/app/tools/sql_tools.py` — `validate_sql`/`execute_sql` async + asyncpg + `_classify_asyncpg_error`
@@ -308,7 +314,7 @@ Step 10: memory.py             — except → log（零依赖，可随时做）
 - `backend/app/infra/trace/sdk.py` — 3 个 except→logger.warning
 - `backend/app/memory.py` — 2 个 except→logger.warning
 
-## Reused existing utilities
+## 复用工具
 
 - `app/infra/db/postgres.py` `get_pool()` — 复用 asyncpg pool，sql_tools 不再自建 sync 连接
 - `langchain_openai.ChatOpenAI.ainvoke()` — 原生支持 async，无需额外依赖
@@ -316,7 +322,7 @@ Step 10: memory.py             — except → log（零依赖，可随时做）
 - `app/utils/text.py` `safe_json_parse()` — 无 I/O，不需要改
 - `app/models/contracts.py` — 错误枚举不需要改，`ErrorKind` 语义不变
 
-## Verification
+## 验证
 
 ### 测试策略
 
@@ -346,7 +352,7 @@ curl -N -X POST ... -d '{"user_query":"今年华东趋势","session_id":"t2","mo
 # 改后：并行处理，总耗时 ≈ max(每个请求)
 ```
 
-## Explicitly NOT doing
+## 明确不做
 
 - **psycopg2 完全移除**：不在本轮做。`sql_tools.py` 改 asyncpg 后 psycopg2 仍被 `requirements.txt` 引用，等下次清理依赖时移除
 - **DuckDB (`app/db.py`) 转 async**：只在启动时用一次，不是热路径
@@ -357,7 +363,7 @@ curl -N -X POST ... -d '{"user_query":"今年华东趋势","session_id":"t2","mo
 - **`data_graph.py` 的 `_detect_intent` 无用节点移除**：虽然是 dead code 但不在本轮范围
 - **Module-level `load_dotenv()`**：只在启动时执行一次，不阻塞热路径
 
-## Outcome
+## 预期成果
 
 - 全部 13 个子图 node sync→async
 - `call_llm` 从 `invoke` → `ainvoke`，释放 event loop

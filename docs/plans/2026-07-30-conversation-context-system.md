@@ -1,119 +1,121 @@
-# Plan: Conversation Context System — 分层对话上下文
+# Plan: 分层对话上下文系统
 
-## Context
+> 状态: 暂缓（新特性，本轮不做）
 
-The system currently has **no conversation history injection into LLM prompts**. Every LLM call is stateless: it receives only the current `user_query` + database schema, with no awareness of prior turns. Messages are persisted in `app.conversations` for UI display only — the LLM never reads them.
+## 背景
 
-This causes a clear failure: if a user says "2024年华东销售趋势" then follows up with "再按产品细分", the second LLM call has no idea "华东" was ever discussed.
+系统目前**完全没有对话历史注入到 LLM prompt 中**。每次 LLM 调用都是无状态的：只接收当前 `user_query` + 数据库 schema，对之前的轮次毫无感知。消息虽然持久化在 `app.conversations` 中供 UI 展示，但 LLM 从不读取。
 
-We need a multi-tier context system that:
+这导致一个明确的失败场景：用户先说"2024年华东销售趋势"，然后补充"再按产品细分"——第二次 LLM 调用完全不知道"华东"曾经被讨论过。
 
-1. Injects recent conversation history into LLM prompts as raw text
-2. Compresses older history to avoid token bloat, using LLM summarization
-3. Never loses precise business facts (field mappings, SQL logic, user preferences) to fuzzy summarization
-4. Avoids compressing on every request (latency/cost)
-5. Prevents summary bloat over time (A + batch → A' must be a rewrite, not an append)
+我们需要一个多层上下文系统：
 
-Prior art in this repo:
-- `app.conversations` stores all messages with `role`, `content`, `message_type`, `metadata`
-- `agent.session` holds per-session state (phase, pointers to drafts/reports)
-- `memory.semantic_entry` stores user preferences with pgvector embeddings, accessed via `UserMemory` with ranking (semantic × 0.6 + importance × 0.2 + frequency × 0.1 + recency × 0.1)
-- `memory.query_template` stores SQL templates with pgvector
-- `app/infra/memory/memory_manager.py` / `user_memory.py` / `policy.py` already exist but are not wired into the new graphs
-- `app/llm.py` provides `call_llm()` with MiniMax client — reusable for compression calls
-- `docs/memory-ranking-plan.md` documents the full ranking system design
+1. 将近期对话历史以原始文本形式注入 LLM prompt
+2. 压缩较旧的历史以避免 token 膨胀，使用 LLM 摘要
+3. 不丢失精确的业务事实（字段映射、SQL 逻辑、用户偏好）到模糊摘要中
+4. 避免每次请求都压缩（延迟/成本）
+5. 防止摘要随时间膨胀（旧摘要 + 新批次 → 新摘要必须是重写，而非追加）
 
-## Design
+现有相关基础设施：
+- `app.conversations` 存储所有消息，包含 `role`、`content`、`message_type`、`metadata`
+- `agent.session` 保存每个会话的状态（phase、指向草稿/报告的指针）
+- `memory.semantic_entry` 通过 pgvector 存储用户偏好，通过 `UserMemory` 访问，评分公式为（语义相似度 × 0.6 + 重要性 × 0.2 + 频率 × 0.1 + 近因 × 0.1）
+- `memory.query_template` 通过 pgvector 存储 SQL 模板
+- `app/infra/memory/memory_manager.py` / `user_memory.py` / `policy.py` 已存在但未接入新图
+- `app/llm.py` 提供 `call_llm()` 与 MiniMax 客户端——可复用用于压缩调用
+- `docs/memory-ranking-plan.md` 记录了完整的 ranking 系统设计
 
-### Architecture Overview
+## 设计
+
+### 架构概览
 
 ```
-Request arrives → build_context()
-                       │
-          ┌────────────┼────────────────┐
-          │            │                │
-          ▼            ▼                ▼
-   结构化数据         叙事摘要          最近对话
-   (DB直读)          (L2 digest)       (L1 raw, last 10)
-                        │
-                  压缩时顺便提取（单次 LLM 调用输出 JSON）
-                        │
-          ┌─────────────┴─────────────┐
-          │                           │
-          ▼                           ▼
-   summary → L2 digest         extracted_schemas + extracted_preferences
-   (覆盖写入)                        │
-                                     ▼
-                             memory.semantic_entry (L3)
-                             通过 UserMemory.save() 写入
+请求到达 → build_context()
+               │
+    ┌───────────┼────────────────┐
+    │           │                │
+    ▼           ▼                ▼
+ 结构化数据     叙事摘要         最近对话
+ (DB直读)      (L2 digest)      (L1 raw, last 10)
+                 │
+           压缩时顺便提取（单次 LLM 调用输出 JSON）
+                 │
+    ┌────────────┴─────────────┐
+    │                          │
+    ▼                          ▼
+summary → L2 digest    extracted_schemas + extracted_preferences
+(覆盖写入)                     │
+                              ▼
+                      memory.semantic_entry (L3)
+                      通过 UserMemory.save() 写入
 ```
 
-### Tier Definitions
+### 层级定义
 
-| Tier | Storage | Content | Size Limit | Update Trigger |
-|------|---------|---------|-----------|----------------|
-| **L1** | `app.conversations` | Last N raw messages | 10 messages | Every user message |
-| **L2** | `agent.session.digest` | Narrative summary (A + batch → A') | **800 chars** | Every `COMPRESS_BATCH` (10) messages beyond window |
-| **L2.5** | `agent.session.mid_digest` | Archived L2 (long-term narrative arc) | 400 chars | Every 5 L2 rewrites |
-| **L3** | `memory.semantic_entry` | Structured facts: field_mapping, calculation, preference | One row per fact | Extracted during compression |
+| 层级 | 存储位置 | 内容 | 大小限制 | 更新时机 |
+|------|---------|------|---------|----------|
+| **L1** | `app.conversations` | 最近 N 条原始消息 | 10 条 | 每次用户消息 |
+| **L2** | `agent.session.digest` | 叙事摘要（旧摘要 + 新批次 → 新摘要） | **800 字** | 每 `COMPRESS_BATCH`（10）条超出窗口的消息 |
+| **L2.5** | `agent.session.mid_digest` | 归档的 L2（长期叙事脉络） | 400 字 | 每 5 次 L2 重写 |
+| **L3** | `memory.semantic_entry` | 结构化事实：field_mapping、calculation、preference | 一行一个事实 | 压缩时提取 |
 
-### Key Constants
+### 关键常量
 
 ```python
-RECENT_WINDOW = 10      # L1: keep last N messages as raw text
-COMPRESS_BATCH = 10     # Compress every M messages beyond the window
-L2_MAX_CHARS = 800      # Hard ceiling for L2 digest
-L2_5_MAX_CHARS = 400    # Hard ceiling for L2.5 archive
-L2_ARCHIVE_INTERVAL = 5 # Archive to L2.5 every N L2 rewrites
+RECENT_WINDOW = 10      # L1：保留最近 N 条原始消息
+COMPRESS_BATCH = 10     # 每 M 条超出窗口的消息压缩一次
+L2_MAX_CHARS = 800      # L2 digest 硬上限
+L2_5_MAX_CHARS = 400    # L2.5 归档硬上限
+L2_ARCHIVE_INTERVAL = 5 # 每 N 次 L2 重写归档一次 L2.5
 ```
 
-### Storage: 4 New Columns on `agent.session`
+### 存储：`agent.session` 新增 4 列
 
-No new table — session-to-digest is 1:1. Adding to `agent.session` follows the existing pattern (`current_phase`, `latest_requirement_draft_id`, etc.):
+不建新表——session 与 digest 是 1:1 关系。遵循现有模式（`current_phase`、`latest_requirement_draft_id` 等已有列）：
 
 ```sql
 ALTER TABLE agent.session
-  ADD COLUMN IF NOT EXISTS digest TEXT,                  -- L2 narrative summary
-  ADD COLUMN IF NOT EXISTS digest_msg_count INT DEFAULT 0, -- messages covered by digest
-  ADD COLUMN IF NOT EXISTS digest_version INT DEFAULT 0,   -- rewrite counter
-  ADD COLUMN IF NOT EXISTS mid_digest TEXT;               -- L2.5 long-term archive
+  ADD COLUMN IF NOT EXISTS digest TEXT,                  -- L2 叙事摘要
+  ADD COLUMN IF NOT EXISTS digest_msg_count INT DEFAULT 0, -- digest 覆盖的消息数
+  ADD COLUMN IF NOT EXISTS digest_version INT DEFAULT 0,   -- 重写计数器
+  ADD COLUMN IF NOT EXISTS mid_digest TEXT;               -- L2.5 长期归档
 ```
 
-### Incremental Merge Algorithm (Anti-Bloat)
+### 增量合并算法（防膨胀）
 
-**Core operation: replace, never append.** Each compression is a rewrite of the entire digest, constrained by a hard character limit.
+**核心操作：替换，绝不追加。** 每次压缩都是完整重写摘要，受硬性字符上限约束。
 
 ```python
 def build_context(session, messages, user_id) -> str:
-    """Build LLM context string from conversation history."""
+    """从对话历史构建 LLM 上下文字符串。"""
     total = len(messages)
 
-    # 0-20 messages: no compression needed
+    # 0-20 条消息：无需压缩
     if total <= RECENT_WINDOW + COMPRESS_BATCH:
         return format_messages(messages)
 
     recent = messages[-RECENT_WINDOW:]
     old_count = total - RECENT_WINDOW
 
-    # Compress if a new batch has accumulated
+    # 如果新批次已累积，触发压缩
     if session.digest_msg_count < old_count:
         batch = messages[session.digest_msg_count:old_count]
         result = compress_and_extract(session.digest, batch)
-        session.digest = result["summary"]          # ← OVERWRITE, not append
+        session.digest = result["summary"]          # ← 覆盖，不是追加
         session.digest_msg_count = old_count
         session.digest_version += 1
 
-        # Archive to L2.5 every N rewrites
+        # 每 N 次重写归档 L2.5
         if session.digest_version % L2_ARCHIVE_INTERVAL == 0:
             session.mid_digest = archive_to_l2_5(result["summary"])
 
-        # Extract structured facts → L3
+        # 提取结构化事实 → L3
         for fact in result["extracted_schemas"]:
             UserMemory.save(user_id=user_id, content=fact, ...)
         for pref in result["extracted_preferences"]:
             UserMemory.save(user_id=user_id, content=pref, ...)
 
-    # Assemble final context
+    # 组装最终上下文
     parts = []
     if session.mid_digest:
         parts.append(f"<长期脉络>\n{session.mid_digest}\n</长期脉络>")
@@ -122,9 +124,9 @@ def build_context(session, messages, user_id) -> str:
     return "\n\n".join(parts)
 ```
 
-### Duo-Channel Compression via Single LLM Call
+### 双通道压缩（单次 LLM 调用）
 
-The compression LLM call outputs a **JSON with three sections** — one for L2, two for L3:
+压缩 LLM 调用输出一个**包含三部分的 JSON**——一份用于 L2，两份用于 L3：
 
 ```python
 def compress_and_extract(old_digest: str | None, batch_messages: list[dict]) -> dict:
@@ -160,7 +162,7 @@ JSON：
     raw = call_llm(prompt, model="MiniMax-M2.7-highspeed", max_tokens=1000)
     result = safe_json_parse(raw) or {}
 
-    # Hard truncation safety net
+    # 硬截断安全网
     summary = (result.get("summary") or "")[:L2_MAX_CHARS]
     return {
         "summary": summary,
@@ -169,94 +171,94 @@ JSON：
     }
 ```
 
-### Compression Trigger Timeline
+### 压缩触发时间线
 
-Example with `RECENT_WINDOW=10, COMPRESS_BATCH=10`:
+以 `RECENT_WINDOW=10, COMPRESS_BATCH=10` 为例：
 
-| Total Messages | digest | digest_msg_count | digest_version | mid_digest | Compression Cost |
-|---------------|--------|-----------------|----------------|------------|-----------------|
-| 1-20 | NULL | 0 | 0 | NULL | None |
-| 21 | A(compress 1-10) | 10 | 1 | NULL | 1 LLM call |
-| 22-30 | A | 10 | 1 | NULL | None |
-| 31 | A'(A + 11-20) | 20 | 2 | NULL | 1 LLM call |
-| 41 | A''(A' + 21-30) | 30 | 3 | NULL | 1 LLM call |
-| 51 | A'''(A'' + 31-40) | 40 | 4 | NULL | 1 LLM call |
-| 61 | A''''(A''' + 41-50) | 50 | **5** | archive of A''' | 2 LLM calls (compress + archive) |
+| 总消息数 | digest | digest_msg_count | digest_version | mid_digest | 压缩开销 |
+|---------|--------|-----------------|----------------|------------|---------|
+| 1-20 | NULL | 0 | 0 | NULL | 无 |
+| 21 | A(compress 1-10) | 10 | 1 | NULL | 1 次 LLM 调用 |
+| 22-30 | A | 10 | 1 | NULL | 无 |
+| 31 | A'(A + 11-20) | 20 | 2 | NULL | 1 次 LLM 调用 |
+| 41 | A''(A' + 21-30) | 30 | 3 | NULL | 1 次 LLM 调用 |
+| 51 | A'''(A'' + 31-40) | 40 | 4 | NULL | 1 次 LLM 调用 |
+| 61 | A''''(A''' + 41-50) | 50 | **5** | A''' 归档 | 2 次 LLM 调用（压缩+归档） |
 
-Compression runs at most once every 10 messages. L2.5 archive runs at most once every 50 messages.
+压缩最多每 10 条消息运行一次。L2.5 归档最多每 50 条消息运行一次。
 
-### L3 Integration: Existing Infrastructure
+### L3 集成：现有基础设施
 
-The `memory.semantic_entry` table + `UserMemory` + `MemoryManager` already exist and handle:
+`memory.semantic_entry` 表 + `UserMemory` + `MemoryManager` 已存在并处理：
 
-- Dedup: same `user_id + content` → increment `access_count`
-- Vector search: cosine similarity via pgvector
-- Ranking: `semantic_similarity × 0.6 + importance × 0.2 + log(1+access_count) × 0.1 + recency × 0.1`
-- Memory types: `stable_preference` (0.8), `temporary_preference` (0.5), `insight` (0.3)
+- 去重：相同 `user_id + content` → 递增 `access_count`
+- 向量搜索：通过 pgvector 进行余弦相似度
+- 排序：`semantic_similarity × 0.6 + importance × 0.2 + log(1+access_count) × 0.1 + recency × 0.1`
+- 记忆类型：`stable_preference`（0.8）、`temporary_preference`（0.5）、`insight`（0.3）
 
-No changes needed to the memory layer. The compression module calls `UserMemory.save()` for extracted facts.
+memory 层不需要改动。压缩模块调用 `UserMemory.save()` 保存提取的事实。
 
-### Context Injection Points
+### 上下文注入点
 
-| File | Node | Inject? | Rationale |
-|------|------|---------|-----------|
-| `sql_graph.py` | `_plan` | Yes | Needs narrative context + field mappings |
-| `sql_graph.py` | `_generate_sql` | Yes | Needs field mappings + preferences |
-| `requirement_parser.py` | `parse_requirement` | Yes | Benefits from prior topic context |
-| `report_graph.py` | `_plan_analysis` | No | Data-driven; conversation history not relevant |
-| `security_guard.py` | `check` | No | Needs only the current query |
-| `confirmed_execution_graph.py` | gate nodes | No | Gates check structural invariants, not conversation |
+| 文件 | Node | 注入？ | 理由 |
+|------|------|--------|------|
+| `sql_graph.py` | `_plan` | 是 | 需要叙事上下文 + 字段映射 |
+| `sql_graph.py` | `_generate_sql` | 是 | 需要字段映射 + 偏好 |
+| `requirement_parser.py` | `parse_requirement` | 是 | 受益于先前话题上下文 |
+| `report_graph.py` | `_plan_analysis` | 否 | 数据驱动；对话历史无关 |
+| `security_guard.py` | `check` | 否 | 只需当前查询 |
+| `confirmed_execution_graph.py` | gate nodes | 否 | gate 检查结构不变量，非对话 |
 
-All injection happens via `build_context()` at the entry point of each LLM prompt template.
+所有注入均通过 `build_context()` 在每个 LLM prompt 模板的入口点进行。
 
-## Files to change
+## 文件改动
 
-- **New** `backend/app/context.py` — `build_context()`, `compress_and_extract()`, `archive_to_l2_5()`
-- `backend/app/infra/conversation/repository.py` — add `get_messages_up_to_count()` for efficient partial retrieval
-- `backend/app/agent/sql_graph.py` — `_plan()` and `_generate_sql()` call `build_context()`, prepend to prompt
-- `backend/app/agent/requirement_parser.py` — `parse_requirement()` call `build_context()`, prepend to prompt
-- `backend/app/main.py` — wire `build_context()` into chat flow (pass `session_id` through graph state)
-- `backend/scripts/init_pg.sql` — add `digest`, `digest_msg_count`, `digest_version`, `mid_digest` to `agent.session`
+- **新建** `backend/app/context.py` — `build_context()`、`compress_and_extract()`、`archive_to_l2_5()`
+- `backend/app/infra/conversation/repository.py` — 新增 `get_messages_up_to_count()` 以高效部分检索
+- `backend/app/agent/sql_graph.py` — `_plan()` 和 `_generate_sql()` 调用 `build_context()`，将结果前置到 prompt
+- `backend/app/agent/requirement_parser.py` — `parse_requirement()` 调用 `build_context()`，将结果前置到 prompt
+- `backend/app/main.py` — 将 `build_context()` 接入聊天流程（在 graph state 中传递 `session_id`）
+- `backend/scripts/init_pg.sql` — 向 `agent.session` 中添加 `digest`、`digest_msg_count`、`digest_version`、`mid_digest`
 
-## Reused existing utilities
+## 复用工具
 
-- `app/llm.py` `call_llm()` — reused for compression calls with cheaper model config
-- `app/utils/text.py` `safe_json_parse()` — parse compression LLM JSON output
-- `app/infra/memory/user_memory.py` `UserMemory.save()` — persist L3 extracted facts
-- `app/infra/memory/memory_manager.py` `MemoryManager.recall()` — retrieve L3 facts during context building
-- `app/infra/memory/policy.py` `MemoryPolicy.extract_preference()` — could supplement LLM-based extraction for known patterns
-- `app/infra/conversation/repository.py` `get_messages()` — base retrieval (add count-limited variant)
-- `app/infra/db/postgres.py` `get_pool()` — standard asyncpg pool access
+- `app/llm.py` `call_llm()` — 复用用于压缩调用，使用更便宜的模型配置
+- `app/utils/text.py` `safe_json_parse()` — 解析压缩 LLM JSON 输出
+- `app/infra/memory/user_memory.py` `UserMemory.save()` — 持久化 L3 提取的事实
+- `app/infra/memory/memory_manager.py` `MemoryManager.recall()` — 在上下文构建时检索 L3 事实
+- `app/infra/memory/policy.py` `MemoryPolicy.extract_preference()` — 可补充基于 LLM 的提取，用于已知模式
+- `app/infra/conversation/repository.py` `get_messages()` — 基础检索（添加计数限制变体）
+- `app/infra/db/postgres.py` `get_pool()` — 标准 asyncpg pool 访问
 
-## Verification
+## 验证
 
-- **Unit: `backend/tests/test_context.py`** — new test file
-  - `build_context()` with 5 messages → no compression, raw output
-  - `build_context()` with 22 messages → first compression triggered, check digest written
-  - `compress_and_extract()` with empty old digest → check JSON output shape
-  - `compress_and_extract()` with existing digest → verify summary length ≤ 800 chars
-  - L2.5 archive trigger at version 5
-- **Unit: `backend/tests/graphs/test_sql_generation.py`** — add context injection assertions
-  - Verify that `_plan()` prompt contains `<对话摘要>` and `<最新对话>` markers when messages > threshold
-- **Integration: `REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_full_flow.py -s`** — full flow with multi-turn
-  - Two sequential queries → second query sees context from first
-  - Verify `agent.session.digest` is populated after threshold crossed
-- **Manual matrix:**
-  | Scenario | Expected |
-  |----------|----------|
-  | 1 message | No digest, context = raw message only |
-  | 15 messages | No digest (below compress threshold), context = all raw |
-  | 22 messages | Digest created, context = digest + last 10 raw |
-  | 35 messages | Digest overwritten (not appended), length ≤ 800 |
-  | 65 messages (version=5) | L2.5 archived |
-  | 2nd session | Separate digest, no cross-contamination |
+- **单元测试：`backend/tests/test_context.py`** — 新测试文件
+  - `build_context()` 5 条消息 → 无压缩，原始输出
+  - `build_context()` 22 条消息 → 首次压缩触发，检查 digest 已写入
+  - `compress_and_extract()` 空旧 digest → 检查 JSON 输出格式
+  - `compress_and_extract()` 有现有 digest → 验证摘要长度 ≤ 800 字
+  - L2.5 归档在 version=5 时触发
+- **单元测试：`backend/tests/graphs/test_sql_generation.py`** — 添加上下文注入断言
+  - 验证当消息超过阈值时，`_plan()` prompt 中包含 `<对话摘要>` 和 `<最新对话>` 标记
+- **集成测试：`REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_full_flow.py -s`** — 多轮完整流程
+  - 两次连续查询 → 第二次查询看到第一次的上下文
+  - 验证超过阈值后 `agent.session.digest` 已填充
+- **手动测试矩阵：**
+  | 场景 | 预期 |
+  |------|------|
+  | 1 条消息 | 无 digest，context = 仅原始消息 |
+  | 15 条消息 | 无 digest（低于压缩阈值），context = 所有原始消息 |
+  | 22 条消息 | digest 已创建，context = digest + 最近 10 条原始消息 |
+  | 35 条消息 | digest 已覆盖（非追加），长度 ≤ 800 |
+  | 65 条消息（version=5） | L2.5 已归档 |
+  | 第二个 session | 独立的 digest，无跨 session 污染 |
 
-## Explicitly NOT doing
+## 明确不做
 
-- Adding a separate conversation_summary table (1:1 with session → just add columns)
-- Migrating off MiniMax for compression (reuse existing `call_llm()`)
-- Implementing L3 retrieval during context building (existing `MemoryManager.recall()` to be wired separately)
-- Token-aware dynamic window sizing (hardcoded RECENT_WINDOW/COMPRESS_BATCH is sufficient for now)
-- Cross-session digest merging (each session is independent)
-- Frontend changes for context display (context is LLM-internal only)
-- Changes to `app/llm.py` (context building is a separate concern)
+- 新增单独的 conversation_summary 表（1:1 与 session → 直接加列即可）
+- 从 MiniMax 迁移用于压缩（复用现有 `call_llm()`）
+- 在上下文构建时实现 L3 检索（现有的 `MemoryManager.recall()` 将单独接入）
+- Token 感知的动态窗口大小（硬编码 RECENT_WINDOW/COMPRESS_BATCH 目前足够）
+- 跨 session digest 合并（每个 session 独立）
+- 上下文的 UI 展示改动（context 仅在 LLM 内部使用）
+- 对 `app/llm.py` 的改动（上下文构建是独立关注点）

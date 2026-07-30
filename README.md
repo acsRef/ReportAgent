@@ -47,7 +47,7 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 | LLM | OpenAI 兼容（MiniMax，可配置） |
 | Embedding | SiliconFlow API（pgvector 语义搜索，失败降级关键字匹配） |
 | 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型 6 维 4 事实；数据覆盖 2020–2024） |
-| 测试 | pytest（61 通过）+ vitest（224 通过） |
+| 测试 | pytest（107 通过，含 persistence；e2e 需 `REPORTAGENT_E2E`）+ vitest（242 通过） |
 
 ## 环境要求
 
@@ -72,7 +72,22 @@ MINIMAX_API_KEY=your-minimax-key
 SILICONFLOW_API_KEY=your-siliconflow-key
 DATABASE_URL=postgresql://ragent:ragent@localhost:5432/ragent
 # LLM_MODEL / LLM_BASE_URL / EMBEDDING_MODEL / EMBEDDING_DIM(必须 1536) 可选
+
+# 运行环境 + 开发逃生门（见下方「生产部署安全前置」）
+APP_ENV=development
+ALLOW_INSECURE_DEFAULT_AUTH=1
 ```
+
+#### 生产部署安全前置（fail-closed 启动闸）
+
+后端启动期有 auth 安全闸（`app/infra/auth/startup_guard.py`），**fail-closed**：
+
+- `APP_ENV` 未设置时按 `production` 处理（最严格）。
+- 非开发环境（`staging` / `production`）下，`JWT_SECRET` 必须显式设置、不能是公开的开发默认值、长度 ≥ 32；`DEFAULT_PASSWORD` 不能是 `admin123`。否则**进程拒绝启动**。
+- `ALLOW_INSECURE_DEFAULT_AUTH=1` 仅在 `APP_ENV=development` 下生效，生产环境忽略。
+- 即便默认 admin 账户已存在，只要它还持 `admin123` 弱密码，非开发环境同样拒绝启动（堵住「开发库直接升生产」的后门）。
+
+本地开发用 `APP_ENV=development` + `ALLOW_INSECURE_DEFAULT_AUTH=1` 即可照常启动；生产必须显式配置强 `JWT_SECRET` 与强 `DEFAULT_PASSWORD`。
 
 ### 3. 初始化数据库
 
@@ -161,7 +176,7 @@ pytest -m graphs                # 图测试（SQL sanitize/重试反馈/FAILED �
 pytest -m persistence           # 需 ragent-postgres 起着
 
 # 前端（frontend/ 目录）
-npm run test:run                # vitest 224 用例
+npm run test:run                # vitest 242 用例
 npx tsc -b && npx oxlint        # 类型 + lint
 
 # 真实端到端（需 PG + 后端 :8100 + 真实 LLM key，仓库根目录）
@@ -203,6 +218,8 @@ docs/
 ## 参考文档
 
 - [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) — 架构与操作指引
+- [docs/plans/README.md](docs/plans/README.md) — plan 永久索引（开发前必读入口）
+- [docs/plans/2026-07-30-bugfix-completion.md](docs/plans/2026-07-30-bugfix-completion.md) — 最近一轮 bug 修复完成报告
 - [docs/state-machine.md](docs/state-machine.md) — phase ↔ LangGraph 状态映射
 - [docs/persistence.md](docs/persistence.md) — DDL 权威
 - [docs/api-reference.md](docs/api-reference.md) / [docs/sse-v2.md](docs/sse-v2.md) — API 与事件协议

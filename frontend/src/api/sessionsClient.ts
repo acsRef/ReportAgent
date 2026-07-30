@@ -1,6 +1,8 @@
 /**
  * REST client for `/api/v1/sessions/*` and `/api/v1/sessions/{sid}/reports/{v}`.
  */
+import { handleUnauthorized } from './unauthorized'
+
 function getAuthToken(): string | null {
   try {
     const raw = localStorage.getItem('ragent_auth')
@@ -21,6 +23,10 @@ function authHeaders(): Record<string, string> {
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, headers: { ...authHeaders(), ...(init?.headers || {}) } })
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error(`${url} failed: 401`)
+  }
   if (!res.ok) {
     throw new Error(`${url} failed: ${res.status}`)
   }

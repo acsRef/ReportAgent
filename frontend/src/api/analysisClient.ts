@@ -16,6 +16,8 @@
  * backend flow; if we ever re-enable /api/v1/chat?mode=legacy those will
  * appear here too. The reducer ignores them for now.
  */
+import { handleUnauthorized } from './unauthorized'
+
 export interface ChatRequest {
   user_query: string
   session_id?: string | null
@@ -75,6 +77,10 @@ export function openChat(
         body,
         signal: controller.signal,
       })
+      if (res.status === 401) {
+        handleUnauthorized()
+        return
+      }
       if (!res.ok || !res.body) {
         onEvent({
           type: 'error',

@@ -193,6 +193,15 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
     }
 
 
+# C-3: prompt 里的需求文本必须有界。RequirementCard 各字段来自 LLM + 用户 PATCH，
+# 长度不受信任——assumption.text 单条可达 300 字，100 条假设就能拼出 30K prompt。
+# 每个字段套单项上限 + 列表长度上限，假设区块再套整段上限。
+_MAX_FIELD_VALUE_CHARS = 300
+_MAX_LIST_ITEM_CHARS = 80
+_MAX_ASSUMPTION_TEXT = 200
+_MAX_ASSUMPTION_TOTAL = 2000
+
+
 def _format_confirmed_requirement(card) -> str | None:
     """把 PATCH 确认后的 RequirementCard 序列化成 SQL plan prompt
     消费的结构化字符串（中文字段标签）。无卡时返回 None，plan
@@ -200,23 +209,28 @@ def _format_confirmed_requirement(card) -> str | None:
     """
     if card is None:
         return None
+
+    def _join(items: list[str], limit: int) -> str:
+        return ", ".join(str(s)[:_MAX_LIST_ITEM_CHARS] for s in items[:limit])
+
     parts: list[str] = []
     if card.time_range:
-        parts.append(f"时间范围 = {card.time_range}")
+        parts.append(f"时间范围 = {str(card.time_range)[:_MAX_FIELD_VALUE_CHARS]}")
     if card.scope:
-        parts.append(f"数据范围 = [{', '.join(card.scope)}]")
+        parts.append(f"数据范围 = [{_join(card.scope, 20)}]")
     if card.target_metrics:
-        parts.append(f"核心指标 = [{', '.join(card.target_metrics)}]")
+        parts.append(f"核心指标 = [{_join(card.target_metrics, 10)}]")
     if card.dimensions:
-        parts.append(f"分析维度 = [{', '.join(card.dimensions)}]")
+        parts.append(f"分析维度 = [{_join(card.dimensions, 10)}]")
     if card.analysis_methods:
-        parts.append(f"分析方法 = [{', '.join(card.analysis_methods)}]")
+        parts.append(f"分析方法 = [{_join(card.analysis_methods, 10)}]")
     if card.assumptions:
         accepted = [a for a in card.assumptions if a.accepted is True]
         if accepted:
-            parts.append(
-                "用户已接受的假设 = [" + "; ".join(a.text for a in accepted) + "]"
-            )
+            joined = "; ".join((a.text or "")[:_MAX_ASSUMPTION_TEXT] for a in accepted)
+            if len(joined) > _MAX_ASSUMPTION_TOTAL:
+                joined = joined[:_MAX_ASSUMPTION_TOTAL] + "..."
+            parts.append("用户已接受的假设 = [" + joined + "]")
     if not parts:
         return None
     return "\n".join(parts)

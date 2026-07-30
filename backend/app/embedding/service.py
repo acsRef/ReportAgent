@@ -67,5 +67,9 @@ _embedder: EmbeddingService | None = None
 def get_embedder() -> EmbeddingService:
     global _embedder
     if _embedder is None:
-        _embedder = EmbeddingService()
+        # B-6: 维度必须来自 EMBEDDING_DIM，与 main.py 启动校验和 init_pg.sql 的
+        # VECTOR(n) 同源。此前硬编码默认 1536，运维改 EMBEDDING_DIM 匹配
+        # vector(1024) 也不生效，启动校验永远报 actual_dim=1536 的死结。
+        dimension = int(os.getenv("EMBEDDING_DIM", "1536"))
+        _embedder = EmbeddingService(dimension=dimension)
     return _embedder

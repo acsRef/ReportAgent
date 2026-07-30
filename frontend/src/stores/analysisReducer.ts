@@ -64,11 +64,19 @@ export function isBusyPhase(phase: AnalysisPhase): boolean {
 export function canRetryFailedAction(
   state: Pick<AnalysisState, 'phase' | 'error'>,
 ): boolean {
+  // P-1: REQUIREMENT_INCOMPLETE 的错误事件以 failed_action = 当前 mode
+  // （'new' | 'supplement' | 'adjust'）出现且 recoverable: true，此前白名单
+  // 只认 'confirm' | 'sql'，导致这类可恢复错误不显示重试按钮。补齐。
+  const action = state.error?.failed_action
   return (
     state.phase === 'error' &&
     state.error !== null &&
     state.error.recoverable === true &&
-    (state.error.failed_action === 'confirm' || state.error.failed_action === 'sql')
+    (action === 'confirm' ||
+      action === 'sql' ||
+      action === 'new' ||
+      action === 'supplement' ||
+      action === 'adjust')
   )
 }
 

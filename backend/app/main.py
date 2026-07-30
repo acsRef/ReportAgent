@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -39,10 +40,11 @@ from app.infra.db.postgres import init_pool, close_pool
 from app.infra.checkpoint.session import session_manager
 from app.infra.trace.sdk import get_tracer
 from app.infra.auth.repository import ensure_default_user, verify_user
+from app.infra.auth.startup_guard import validate_auth_security_config
 from app.infra.auth.jwt import create_token
 from app.infra.auth.deps import get_current_user
 from app.infra.conversation.repository import save_message, get_messages, list_sessions
-from app.models.contracts import LoginRequest, RegisterRequest, PatchRequirementRequest
+from app.models.contracts import ErrorDetail, LoginRequest, RegisterRequest, PatchRequirementRequest
 from app.models.requirement import RequirementCard
 from app.services import (
     requirement_service,
@@ -156,6 +158,23 @@ async def _check_embedding_dimension():
 _agent = None
 _server_start_time = datetime.datetime.now()
 
+# C-1/B-8: legacy 模式所有请求共享一个模块全局 _agent + MemorySaver，按
+# thread_id=session_id 分桶。同一 session_id 的两个并发请求会互相覆盖
+# update_state/get_state（chosen_tool、clarification_history 跨流污染）。
+# 用按 session 的 asyncio.Lock 把同 session 的 legacy 流串行化：既消除竞态，
+# 又保留共享 MemorySaver 的跨请求 checkpoint（clarify interrupt 连续性不破坏）。
+# 不同 session 用不同锁，互不阻塞。锁随进程生命周期保留（与 MemorySaver 同寿命）。
+# 彻底的生产方案是 PostgresSaver（独立 PR）。
+_legacy_session_locks: dict[str, asyncio.Lock] = {}
+
+
+def _legacy_lock(session_id: str) -> asyncio.Lock:
+    lock = _legacy_session_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _legacy_session_locks[session_id] = lock
+    return lock
+
 
 class ChatRequest(BaseModel):
     user_query: str
@@ -170,6 +189,10 @@ class ChatRequest(BaseModel):
 async def lifespan(app: FastAPI):
     global _agent
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    # B-1 安全闸：fail-closed。不安全默认配置（公开 JWT_SECRET / admin123）在非开发
+    # 环境必须让进程「显式启动失败」，而不是带着远程认证绕过漏洞继续运行。
+    # 必须早于 init_pool / ensure_default_user——让错误在最早阶段暴露。
+    validate_auth_security_config()
     get_connection()
     await init_pool()
     await ensure_default_user()
@@ -379,6 +402,9 @@ async def _chat_confirmed_execution(
     config = {"configurable": {"thread_id": session_id}}
 
     async def event_generator() -> AsyncGenerator[dict, None]:
+        # B-5: done 事件的 final_phase 必须反映真实结局。此前硬编码 report_ready，
+        # 出错时前端 Reducer 看到 phase→report_ready 会把 ErrorCard 卸载、phase 翻回。
+        final_phase = "report_ready"
         try:
             yield {
                 "event": "phase",
@@ -401,6 +427,7 @@ async def _chat_confirmed_execution(
             result = await graph.ainvoke(initial, config)
             status = result.get("execution_status", "FAILED")
             if status == "FAILED":
+                final_phase = "error"
                 await session_manager.update_phase(
                     session_id, "error", failed_action="sql",
                 )
@@ -416,6 +443,7 @@ async def _chat_confirmed_execution(
                     "data": json.dumps(report_payload, ensure_ascii=False, default=str),
                 }
         except RequirementIncompleteError as exc:
+            final_phase = "error"
             await session_manager.update_phase(
                 session_id, "error", failed_action=request.mode,
             )
@@ -429,6 +457,7 @@ async def _chat_confirmed_execution(
                 }, ensure_ascii=False),
             }
         except SessionNotFoundError as exc:
+            final_phase = "error"
             yield {
                 "event": "error",
                 "data": json.dumps({
@@ -438,7 +467,20 @@ async def _chat_confirmed_execution(
                     "failed_action": request.mode,
                 }, ensure_ascii=False),
             }
+        except asyncio.CancelledError:
+            # P-3: CancelledError 是 BaseException，不被 except Exception 捕获。
+            # 客户端断连时若不处理，session 会永远卡在 adjusting。best-effort
+            # 标记 error 后必须重新抛出以完成取消。
+            final_phase = "error"
+            try:
+                await session_manager.update_phase(
+                    session_id, "error", failed_action=request.mode,
+                )
+            except Exception:
+                pass
+            raise
         except Exception as exc:
+            final_phase = "error"
             await session_manager.update_phase(
                 session_id, "error", failed_action=request.mode,
             )
@@ -456,7 +498,7 @@ async def _chat_confirmed_execution(
             await tracer.flush()
             yield {
                 "event": "done",
-                "data": json.dumps({"final_phase": "report_ready"}, ensure_ascii=False),
+                "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
             }
 
     return EventSourceResponse(event_generator())
@@ -499,6 +541,8 @@ async def _chat_legacy(
         error_result = None
         clarify_result = None
         pending_card: ChatCard | None = None
+        # C-1: 串行化同 session 的 legacy 流，消除共享 MemorySaver 的跨请求污染。
+        await _legacy_lock(session_id).acquire()
         try:
             input_data = {
                 "user_query": request.user_query,
@@ -588,6 +632,27 @@ async def _chat_legacy(
                     if final_state.get("execution_status") == "INTENT_AWAIT":
                         logger.info("intent_card emitted; awaiting user choice")
                         await session_manager.update_checkpoint_time(session_id)
+                    elif final_state.get("execution_status") == "FAILED":
+                        # P-6: legacy 失败不能再走 _build_response 发「查询完成」假报告。
+                        # 发结构化 error 事件，前端据此显示错误而非空表格。
+                        err = final_state.get("error")
+                        if isinstance(err, ErrorDetail):
+                            msg = err.message
+                        elif isinstance(err, dict):
+                            msg = err.get("message", "")
+                        else:
+                            msg = str(err) if err else "查询执行失败"
+                        error_result = msg
+                        yield {
+                            "event": "error",
+                            "data": json.dumps({
+                                "code": "QUERY_FAILED",
+                                "message": (msg or "查询执行失败")[:300],
+                                "recoverable": False,
+                                "failed_action": "legacy",
+                            }, ensure_ascii=False),
+                        }
+                        await session_manager.update_checkpoint_time(session_id)
                     else:
                         result = _build_response(final_state)
                         report_result = result
@@ -606,6 +671,7 @@ async def _chat_legacy(
                 await save_message(session_id, user["id"], "assistant", json.dumps(report_result, ensure_ascii=False), "report")
             elif error_result:
                 await save_message(session_id, user["id"], "assistant", error_result, "error")
+            _legacy_lock(session_id).release()
 
         yield {"event": "done", "data": ""}
 
@@ -774,6 +840,9 @@ async def confirm_session(
     config = {"configurable": {"thread_id": session_id}}
 
     async def event_generator() -> AsyncGenerator[dict, None]:
+        # B-5 + P-3: 同 _chat_confirmed_execution——跟踪真实 final_phase，
+        # 并在客户端断连（CancelledError）时把 session 标记为 error 而非卡死。
+        final_phase = "report_ready"
         try:
             yield {
                 "event": "phase",
@@ -796,6 +865,7 @@ async def confirm_session(
             result = await graph.ainvoke(initial, config)
             status = result.get("execution_status", "FAILED")
             if status == "FAILED":
+                final_phase = "error"
                 await session_manager.update_phase(
                     session_id, "error", failed_action="sql",
                 )
@@ -811,6 +881,7 @@ async def confirm_session(
                     "data": json.dumps(report_payload, ensure_ascii=False, default=str),
                 }
         except RequirementIncompleteError as exc:
+            final_phase = "error"
             await session_manager.update_phase(
                 session_id, "error", failed_action="confirm",
             )
@@ -824,6 +895,7 @@ async def confirm_session(
                 }, ensure_ascii=False),
             }
         except SessionNotFoundError as exc:
+            final_phase = "error"
             yield {
                 "event": "error",
                 "data": json.dumps({
@@ -833,7 +905,17 @@ async def confirm_session(
                     "failed_action": "confirm",
                 }, ensure_ascii=False),
             }
+        except asyncio.CancelledError:
+            final_phase = "error"
+            try:
+                await session_manager.update_phase(
+                    session_id, "error", failed_action="confirm",
+                )
+            except Exception:
+                pass
+            raise
         except Exception as exc:
+            final_phase = "error"
             await session_manager.update_phase(
                 session_id, "error", failed_action="confirm",
             )
@@ -851,7 +933,7 @@ async def confirm_session(
             await tracer.flush()
             yield {
                 "event": "done",
-                "data": json.dumps({"final_phase": "report_ready"}, ensure_ascii=False),
+                "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
             }
 
     return EventSourceResponse(event_generator())
@@ -945,7 +1027,6 @@ async def export_report_xlsx(
     """
     import io
     from fastapi.responses import StreamingResponse
-    from openpyxl import Workbook
 
     from app.infra.db.postgres import get_pool
     pool = get_pool()
@@ -974,18 +1055,12 @@ async def export_report_xlsx(
     if not headers and rows:
         headers = list(rows[0].keys())
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "data"
-    ws.append(headers)
-    for row in rows:
-        ws.append([row.get(h) for h in headers])
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+    # B-4: openpyxl 的 Workbook 构建 + save 是 CPU 密集同步操作。直接在 async
+    # 端点里跑会阻塞整个 event loop——一次大导出期间 /chat、/confirm 全部停摆。
+    # 丢进线程池跑，释放 event loop。
+    xlsx_bytes = await asyncio.to_thread(_build_xlsx_bytes, headers, rows)
     return StreamingResponse(
-        buf,
+        io.BytesIO(xlsx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": (
@@ -993,3 +1068,19 @@ async def export_report_xlsx(
             )
         },
     )
+
+
+def _build_xlsx_bytes(headers: list, rows: list) -> bytes:
+    """B-4: 同步构建 xlsx 并返回字节。仅供 `asyncio.to_thread` 调用。"""
+    import io
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "data"
+    ws.append(headers)
+    for row in rows:
+        ws.append([row.get(h) for h in headers])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
