@@ -135,3 +135,83 @@ Key semantics:
 - **FAILED never fakes success**: `report_agent` builds `answer.table` from real rows and sets `execution_status=FAILED` when there are none; a conditional edge then **skips `persist_report`**, so `main.py` emits an SSE `error` event (`{code, message, recoverable, failed_action}`) and stamps `session.phase='error'` + `last_failed_action='confirm'` instead of writing a hollow report.
 - **SQL generation hardening** ([backend/app/utils/text.py](backend/app/utils/text.py)): reasoning models emit `
 </think>
+
+## Planning Discipline
+
+> **Every multi-step change leaves a plan behind.** No "I'll just quickly do X" — anything that touches ≥2 files or ≥1 design decision is planned first, written to a file, and tracked.
+
+### Where plans live
+
+Plans live in two mirrored locations during a session, but the **canonical, traceable copy** is always in the repo:
+
+| Location | Purpose |
+|---|---|
+| `~/.claude/plans/<token>.md` | Live plan edited while in plan mode (Claude Code internal). Throwaway. |
+| `docs/plans/YYYY-MM-DD-<topic-slug>.md` | Canonical plan committed to git. The only one that survives the session. |
+
+When plan mode is invoked, after writing the initial plan to `~/.claude/plans/`, copy it to `docs/plans/`. When the plan evolves during execution, edit the in-repo copy. On commit, the in-repo plan goes in alongside the code change — same commit, message `feat|fix(<scope>): <title> + plan: <topic-slug>`.
+
+### Naming convention
+
+```
+docs/plans/YYYY-MM-DD-<topic-slug>.md
+```
+
+Rules (do not relax these):
+
+1. **Date prefix is `YYYY-MM-DD`**, ISO 8601, zero-padded, today's date in the user's local timezone. One plan per day per topic — if a topic rolls past midnight, add `-v2` (and `-v3`, …) instead of changing the date.
+2. **`<topic-slug>` is kebab-case**, 2–6 words, derived from the feature or fix area (e.g. `sql-row-cap-and-export`, `confirmed-exec-three-state`, `workbench-shell-css-rebuild`).
+3. **No random suffixes.** The token-style `<adjective>-<verb>-<noun>.md` files Claude Code generates for its own scratchpad are **not** reused as canonical names — they look like noise in `git log -- docs/plans/`.
+4. **One topic per file.** If you find yourself adding a section that doesn't fit, it's a new plan — split it.
+5. **Same slug in the commit and the PR title** so `git log --grep "<slug>"` retrieves every artifact of the change.
+
+### Required structure
+
+Each `docs/plans/*.md` file must contain these sections in this order. Skipping one is a defect; "I'll fix it later" never wins.
+
+1. **Context** — the why: what triggered this, what the user is trying to achieve, what the current code does that's wrong or missing. Reuse the original prompt so the plan is interpretable without the session context.
+2. **Design** — what we're building and how the pieces fit. Reference the modules touched (file paths, no line numbers — they rot).
+3. **Files to change** — explicit list, with the *pattern* of change described once and a representative path or two. Not every file. The reviewer should know the blast radius without opening the diff.
+4. **Reused existing utilities** — name them with paths. Stop proposing new code when `app.tools.sql_tools._classify_psycopg2_error` already does it. Reuse is the design.
+5. **Verification** — how to prove it works end-to-end. List the exact test commands and the manual smoke-test matrix. No "tests pass" as a one-liner.
+6. **Explicitly NOT doing** — the inverse of scope. Every "we considered X and decided against it because Y" goes here.
+
+### Language
+
+Plans are artifacts for **humans** (you, reviewers, future you). Write in **Chinese**. Keep code, file paths, type names, function names, error codes, and SQL fragments in their original form — those are the *ground truth* and translating them would lose precision. Everything else: prose, rationales, alternatives-considered bullets, table cell descriptions → Chinese. A reviewer should be able to skim a plan in 中文 without context-switching.
+
+### Design quality bar (this is the rubric, not a wish list)
+
+A plan is acceptable only when **all** of the following are true. If any one fails, the plan is rejected and rewritten — do not patch around it.
+
+- **Single responsibility per change.** One plan, one coherent feature or fix. If the implementation touches two unrelated subsystems, the plan is actually two plans.
+- **High cohesion.** All edits stay inside one module's responsibility. A change to error classification lives in `sql_tools.py` + the type that consumes it; it does not bleed into `main.py` HTTP plumbing.
+- **Low coupling.** New modules expose a small, intent-revealing surface; existing callers adapt through that surface, not by reaching into private fields. When the plan introduces a new helper (e.g. `_build_sse_error`), the caller count and the call-site changes are listed in the plan.
+- **No drive-by edits.** Cosmetic reformatting, unrelated test rewrites, or "while we're here" tweaks belong in a follow-up plan.
+- **Reuse over reinvention.** Find the existing function/component/type first. Quote its path. If you can't find it, you've looked in the wrong place — search the repo before proposing a new utility.
+- **Interface is the contract, not the implementation.** A plan that says "pass SQL as `state['sql']`" without saying who sets it, who reads it, and what happens when it's empty, is not a plan.
+- **Errors are first-class.** Every error code path the change touches is enumerated (kind → user-visible message → persistence row → test). This is the level of detail that turns "the agent hides errors" into a specific fixable claim.
+- **Naming carries intent.** Variables, types, files: a reader should know what it is before reading what it does. `execution_status` beats `status`; `persist_error_run` beats `mark_failed`.
+
+### Workflow
+
+1. **Trigger.** User says "let me plan X", asks for a non-trivial feature, or you yourself decide the change is non-trivial (≥2 files, ≥1 design decision, or any new module).
+2. **Brainstorm before planning.** Follow `superpowers:brainstorming` if the idea is fuzzy; skip only for well-specified ask-the-expert prompts.
+3. **Write the in-repo plan first**, dated, slugged. The `~/.claude/plans/<token>.md` scratch copy exists for plan-mode ergonomics; mirror to in-repo before `ExitPlanMode`.
+4. **Validate the quality bar.** Self-review against the "Design quality bar" list above. Fix issues inline.
+5. **Hand to user.** `ExitPlanMode` only — do not skip with prose.
+6. **After approval, the plan stays.** Do not delete or rewrite after the commit unless the commit referenced it. `git log --follow docs/plans/<slug>.md` is the audit trail.
+
+### Quick commands
+
+```bash
+# New plan today, on topic "sql-row-cap-and-export"
+NEW_PLAN="docs/plans/$(date +%Y-%m-%d)-sql-row-cap-and-export.md"
+mkdir -p docs/plans
+touch "$NEW_PLAN"
+$EDITOR "$NEW_PLAN"
+
+# Find a plan back later
+git log --all --diff-filter=A --name-only -- docs/plans/ | grep -v '^$'
+git log --all --follow --oneline -- docs/plans/2026-07-30-sql-row-cap-and-export.md
+```
