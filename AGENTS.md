@@ -171,7 +171,7 @@ Each plan doc uses these sections:
 ## Known Quirks
 
 - `__init__.py` files are intentionally 0 bytes (namespace packages)
-- `infra/trace/repository.py` uses raw `asyncpg` (not `infra/db/postgres.py` pool) — pool integration not wired
+- `infra/trace/repository.py` uses the shared `asyncpg` pool (`infra/db/postgres.py` `get_pool`) for both trace writes and the read-only observability queries (`list_traces`/`get_trace`/`get_spans`/`get_llm_calls`/`get_metrics`) — it no longer opens its own connection
 - MCP Schema Server's `registry.py` and `app/tools/data_tools.py` are **two independent** keyword schema-matching implementations
 - Session persisted in `localStorage` key `ragent_session_id` (Zustand, 24h TTL). Auth store key: `ragent_auth`.
 - Frontend TypeScript ~6.0; lint uses oxlint, not eslint

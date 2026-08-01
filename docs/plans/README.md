@@ -31,6 +31,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-01-observability-ops.md](2026-08-01-observability-ops.md) | 可观测性运维闭环：指标 + trace 可视化 + agent 执行链路明细 | 后端 150 / 前端 245 passed；冒烟验证观测端点 |
 | [2026-08-01-memory-mechanism.md](2026-08-01-memory-mechanism.md) | 记忆机制完善：分层上下文 + mem0 抽取 + LFU/LRU 容量淘汰 | 5 轮 23 测试；全套 146 passed；合并 conversation-context |
 | [2026-08-01-postgres-checkpointer.md](2026-08-01-postgres-checkpointer.md) | PostgresSaver 替代 MemorySaver | 共享单例 + 三图接线 + lifespan；跨实例持久化测试通过 |
 | [2026-08-01-draft-id-consistency.md](2026-08-01-draft-id-consistency.md) | P-4：confirmed-execution 锁定与执行的 draft 一致性 | load 定 draft_id 入 state，下游不重查 |

@@ -9,6 +9,7 @@ import SecureReportPage from './pages/SecureReportPage'
 import ChatPage from './pages/ChatPage'
 import TemplateCenter from './pages/TemplateCenter'
 import HistoryPage from './pages/HistoryPage'
+import ObservabilityPage from './pages/ObservabilityPage'
 
 export default function App() {
   return (
@@ -39,6 +40,14 @@ export default function App() {
               element={
                 <AuthGuard>
                   <TemplateLibraryPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/observability"
+              element={
+                <AuthGuard>
+                  <ObservabilityPage />
                 </AuthGuard>
               }
             />

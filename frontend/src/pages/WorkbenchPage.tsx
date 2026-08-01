@@ -261,6 +261,9 @@ export default function WorkbenchPage() {
           <button type="button" className="nav-btn" onClick={() => navigate('/templates')}>
             模板中心
           </button>
+          <button type="button" className="nav-btn" onClick={() => navigate('/observability')}>
+            可观测
+          </button>
         </nav>
         <div className="atelier-topbar__meta">
           <span

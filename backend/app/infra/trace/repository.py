@@ -56,3 +56,147 @@ class TraceRepository:
                 call.span_id, call.model, call.prompt_tokens,
                 call.completion_tokens, call.latency_ms, call.cost,
             )
+
+    # --- 只读查询（可观测性运维闭环，见 docs/plans/2026-08-01-observability-ops.md）---
+
+    @staticmethod
+    def _trace_row(r) -> dict:
+        return {
+            "trace_id": r["trace_id"],
+            "session_id": r["session_id"],
+            "user_query": r["user_query"],
+            "status": r["status"],
+            "start_time": r["start_time"].isoformat() if r["start_time"] else None,
+            "end_time": r["end_time"].isoformat() if r.get("end_time") else None,
+            "total_duration_ms": r["total_duration_ms"],
+        }
+
+    async def list_traces(
+        self, limit: int = 50, offset: int = 0, status: Optional[str] = None,
+    ) -> list[dict]:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            if status:
+                rows = await conn.fetch(
+                    """SELECT trace_id, session_id, user_query, status,
+                              start_time, end_time, total_duration_ms
+                       FROM observability.agent_trace
+                       WHERE status = $1
+                       ORDER BY start_time DESC NULLS LAST
+                       LIMIT $2 OFFSET $3""",
+                    status, limit, offset,
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT trace_id, session_id, user_query, status,
+                              start_time, end_time, total_duration_ms
+                       FROM observability.agent_trace
+                       ORDER BY start_time DESC NULLS LAST
+                       LIMIT $1 OFFSET $2""",
+                    limit, offset,
+                )
+            return [self._trace_row(r) for r in rows]
+
+    async def get_trace(self, trace_id: str) -> Optional[dict]:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT trace_id, session_id, user_query, status,
+                          start_time, end_time, total_duration_ms
+                   FROM observability.agent_trace WHERE trace_id = $1""",
+                trace_id,
+            )
+            return self._trace_row(row) if row else None
+
+    async def get_spans(self, trace_id: str) -> list[dict]:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT span_id, parent_span_id, span_name, span_type,
+                          start_time, duration_ms, status, error
+                   FROM observability.agent_trace_span
+                   WHERE trace_id = $1
+                   ORDER BY start_time ASC NULLS LAST""",
+                trace_id,
+            )
+            return [
+                {
+                    "span_id": r["span_id"],
+                    "parent_span_id": r["parent_span_id"],
+                    "span_name": r["span_name"],
+                    "span_type": r["span_type"],
+                    "start_time": r["start_time"].isoformat() if r["start_time"] else None,
+                    "duration_ms": r["duration_ms"],
+                    "status": r["status"],
+                    "error": r["error"],
+                }
+                for r in rows
+            ]
+
+    async def get_llm_calls(self, trace_id: str) -> list[dict]:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT lc.model, lc.prompt_tokens, lc.completion_tokens,
+                          lc.latency_ms, lc.cost
+                   FROM observability.llm_call lc
+                   JOIN observability.agent_trace_span s ON s.span_id = lc.span_id
+                   WHERE s.trace_id = $1
+                   ORDER BY lc.id ASC""",
+                trace_id,
+            )
+            return [
+                {
+                    "model": r["model"],
+                    "prompt_tokens": r["prompt_tokens"] or 0,
+                    "completion_tokens": r["completion_tokens"] or 0,
+                    "latency_ms": r["latency_ms"] or 0,
+                    "cost": float(r["cost"]) if r["cost"] is not None else None,
+                }
+                for r in rows
+            ]
+
+    async def get_metrics(self) -> dict:
+        """聚合运维指标：trace 总量/状态分布/成功率/耗时均值与 P95/LLM 用量。"""
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            trace_stats = await conn.fetchrow(
+                """SELECT count(*) AS total,
+                          avg(total_duration_ms) AS avg_duration,
+                          percentile_cont(0.95) WITHIN GROUP
+                            (ORDER BY total_duration_ms) AS p95_duration
+                   FROM observability.agent_trace"""
+            )
+            status_rows = await conn.fetch(
+                "SELECT status, count(*) AS n FROM observability.agent_trace GROUP BY status"
+            )
+            llm_stats = await conn.fetchrow(
+                """SELECT count(*) AS total,
+                          sum(COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0)) AS tokens,
+                          avg(latency_ms) AS avg_latency
+                   FROM observability.llm_call"""
+            )
+        total = trace_stats["total"] or 0
+        status_breakdown = {r["status"]: r["n"] for r in status_rows}
+        # trace 的 status 取值为 DONE/SUCCESS（完成）、AWAITING_*/RUNNING（中途等待/进行）、
+        # FAILED/REJECTED（失败）。完成口径取 DONE + SUCCESS（兼容两种命名）。
+        success = sum(n for s, n in status_breakdown.items() if s in ("DONE", "SUCCESS"))
+        return {
+            "trace_total": total,
+            "status_breakdown": status_breakdown,
+            "success_rate": (success / total) if total else None,
+            "avg_duration_ms": (
+                round(float(trace_stats["avg_duration"]), 1)
+                if trace_stats["avg_duration"] is not None else None
+            ),
+            "p95_duration_ms": (
+                round(float(trace_stats["p95_duration"]), 1)
+                if trace_stats["p95_duration"] is not None else None
+            ),
+            "llm_call_total": llm_stats["total"] or 0,
+            "llm_tokens_total": int(llm_stats["tokens"] or 0),
+            "llm_avg_latency_ms": (
+                round(float(llm_stats["avg_latency"]), 1)
+                if llm_stats["avg_latency"] is not None else None
+            ),
+        }
