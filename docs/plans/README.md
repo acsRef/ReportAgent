@@ -31,6 +31,8 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-01-draft-id-consistency.md](2026-08-01-draft-id-consistency.md) | P-4：confirmed-execution 锁定与执行的 draft 一致性 | load 定 draft_id 入 state，下游不重查 |
+| [2026-08-01-extract-sql-multi-statement.md](2026-08-01-extract-sql-multi-statement.md) | P-8：extract_sql 多语句截断（安全加固） | 只取首条语句，截注入尾部 |
 | [2026-07-30-bugfix-completion.md](2026-07-30-bugfix-completion.md) | 本轮 bug 修复完成报告（权威记录） | 后端 107 / 前端 242 / 启动冒烟 |
 | [2026-07-30-auth-secret-hardening.md](2026-07-30-auth-secret-hardening.md) | B-1 auth 启动闸（fail-closed） | `startup_guard.py` + 10 测试 |
 | [2026-07-30-query-execution-safety-and-reporting.md](2026-07-30-query-execution-safety-and-reporting.md) | SQL 执行安全 + 三态 + 报告正确性（主文档） | 层 2/6/7 全部落地 |

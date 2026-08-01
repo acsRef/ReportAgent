@@ -31,7 +31,11 @@ def extract_sql(text: str) -> str:
     idx = text.lower().find("select")
     if idx > 0:
         text = text[idx:]
-    return text.strip()
+    # P-8: 只保留第一条语句——丢弃首个 ';' 之后的内容。多语句既是
+    # sqlglot.parse_one 的解析失败源（错误文本会被喂回重试 prompt），也是
+    # `SELECT…; DELETE…` 这类注入的攻击面；截掉尾部一次解决两者（尾随的
+    # 单个分号也顺带去掉，避免 `WITH src AS (…;)` 语法错误）。
+    return text.split(";", 1)[0].strip()
 
 
 def strip_markdown_fence(text: str) -> str:

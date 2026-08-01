@@ -38,6 +38,9 @@ class ConfirmedExecutionState(TypedDict, total=False):
     session_id: str
     trace_id: str
     requirement_card: Optional[RequirementCard]
+    # P-4: 加载阶段确定的 draft 主键。下游 gate/persist 只读它，不再中途重查
+    # 最新 draft，避免用户在窗口内 PATCH 时锁定的卡与实际执行的卡错位。
+    draft_id: Optional[int]
     base_report_version: Optional[int]
     adjustment_text: Optional[str]
     schema_context: Optional[SchemaContext]
@@ -84,7 +87,7 @@ async def _load_confirmed_requirement(state: ConfirmedExecutionState) -> dict:
     if draft["status"] == "locked":
         # Already locked = already in a confirmed run; treat as a no-op
         # reload so the graph is idempotent.
-        return {"requirement_card": _hydrate_card(draft)}
+        return {"requirement_card": _hydrate_card(draft), "draft_id": draft["id"]}
     if draft["status"] != "complete":
         raise RequirementIncompleteError(
             f"draft {draft['id']} is in status '{draft['status']}', "
@@ -101,7 +104,7 @@ async def _load_confirmed_requirement(state: ConfirmedExecutionState) -> dict:
         raise RequirementIncompleteError(
             f"draft {draft['id']} has unresolved assumptions"
         )
-    return {"requirement_card": card}
+    return {"requirement_card": card, "draft_id": draft["id"]}
 
 
 @traced_node("sql_gate")
@@ -465,27 +468,16 @@ def _hydrate_card(draft_row: dict) -> RequirementCard:
     return RequirementCard.model_validate(payload)
 
 
-def _draft_id_from_state(state: ConfirmedExecutionState) -> int:
-    """Re-fetch the latest draft id for the current session/user. We keep
-    the state lean (it carries the card, not the id) so this is a
-    best-effort read. Callers should have just loaded it.
+async def _draft_id_from_state(state: ConfirmedExecutionState) -> int:
+    """P-4: 返回加载阶段已确定并写入 state 的 draft_id。
 
-    Returns a coroutine — call with `await` inside an async node.
+    旧实现在执行中途「重新查最新 draft」：若用户在 load 与 gate/persist 之间
+    PATCH 了一次需求，就会锁住新 draft、却拿旧卡执行——锁定的卡与实际执行的卡
+    错位。load 阶段把 draft_id 写进 state 后，这里只读 state，保证整条链路
+    （gate 锁定 / persist 落库）用的是同一份 draft。缺失时回退 0，让
+    lock_for_execution 以「draft 不存在」优雅失败。
     """
-    from app.infra.db.postgres import get_pool
-
-    async def _read() -> int:
-        pool = get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """SELECT id FROM agent.requirement_draft
-                   WHERE session_id = $1 AND user_id = $2
-                   ORDER BY version DESC LIMIT 1""",
-                state["session_id"], state["user_id"],
-            )
-            return row["id"] if row else 0
-
-    return _read()
+    return state.get("draft_id") or 0
 
 
 # --- Graph build ----------------------------------------------------------
