@@ -1,0 +1,50 @@
+/* ObservabilityPage — scoped styles.
+ * 只引用 tokens.css 的变量（不新增 hex）。承载动效与微交互：
+ * 渐入、悬浮抬升、RUNNING 状态脉冲、耗时条过渡。
+ */
+
+/* 区块渐入（加载时的层次感） */
+.obs-fade {
+  animation: obs-fade 0.35s ease both;
+}
+@keyframes obs-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 明细面板展开 */
+.obs-detail {
+  animation: obs-fade 0.28s ease both;
+}
+
+/* trace 行 / 指标块：悬浮微抬升 */
+.obs-lift {
+  transition: transform var(--t-fast), box-shadow var(--t-fast), border-color var(--t-fast);
+}
+.obs-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+
+/* RUNNING 状态圆点脉冲（"系统还活着"的呼吸感） */
+.obs-pulse {
+  animation: obs-pulse 1.6s ease-in-out infinite;
+}
+@keyframes obs-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--live-halo); }
+  50%      { box-shadow: 0 0 0 5px var(--live-halo); }
+}
+
+/* 耗时条 / 状态分布条的宽度过渡 */
+.obs-bar-fill {
+  transition: width 0.4s ease;
+}
+
+/* span 行悬浮 */
+.obs-span {
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.obs-span:hover {
+  border-color: var(--teal);
+  background: var(--teal-pale);
+}

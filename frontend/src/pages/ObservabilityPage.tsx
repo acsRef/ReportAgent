@@ -9,20 +9,37 @@ import {
   fetchMetrics,
   fetchTraceDetail,
   fetchTraces,
+  type LlmCallDetail,
   type Metrics,
   type SpanDetail,
-  type LlmCallDetail,
   type TraceDetail,
   type TraceSummary,
 } from '../api/observabilityClient'
+import '../styles/observability.css'
 
 type Tone = 'green' | 'red' | 'amber' | 'default'
 
 function statusTone(status: string): Tone {
-  if (status === 'SUCCESS') return 'green'
-  if (status === 'FAILED') return 'red'
+  if (status === 'SUCCESS' || status === 'DONE') return 'green'
+  if (status === 'FAILED' || status === 'REJECTED') return 'red'
   if (status === 'RUNNING') return 'amber'
   return 'default'
+}
+
+/** 状态分布条的着色：完成=绿、失败=红、运行=青、等待=琥珀、其余=灰。只用 tokens。 */
+function statusBarColor(status: string): string {
+  if (status === 'DONE' || status === 'SUCCESS') return 'var(--green)'
+  if (status === 'FAILED' || status === 'REJECTED') return 'var(--red)'
+  if (status === 'RUNNING') return 'var(--teal)'
+  if (status.startsWith('AWAITING')) return 'var(--amber)'
+  return 'var(--dot)'
+}
+
+function statusDotColor(status: string): string {
+  if (status === 'DONE' || status === 'SUCCESS') return 'var(--green)'
+  if (status === 'FAILED' || status === 'REJECTED') return 'var(--red)'
+  if (status === 'RUNNING') return 'var(--teal)'
+  return 'var(--amber)'
 }
 
 function fmtDuration(ms: number | null): string {
@@ -40,35 +57,26 @@ function fmtNum(n: number | null): string {
   return n == null ? '—' : n.toLocaleString('zh-CN')
 }
 
-function MetricCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      style={{
-        background: 'var(--paper)',
-        border: '1px solid var(--line)',
-        borderRadius: 10,
-        padding: '16px 18px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-      }}
-    >
-      <span
-        style={{
-          font: '700 11px var(--font-ui)',
-          color: 'var(--muted)',
-          letterSpacing: '0.1em',
-          textTransform: 'uppercase',
-        }}
-      >
-        {label}
-      </span>
-      <span style={{ font: '700 26px var(--font-display)', color: 'var(--ink)', lineHeight: 1.1 }}>
-        {value}
-      </span>
-      {hint && <span style={{ fontSize: 12, color: 'var(--faint)' }}>{hint}</span>}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span style={{ fontSize: 11, color: 'var(--faint)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</span>
+      <span style={{ font: '600 17px var(--font-display)', color: 'var(--ink)' }}>{value}</span>
     </div>
+  )
+}
+
+function StatusDot({ status }: { status: string }) {
+  const running = status === 'RUNNING'
+  return (
+    <span
+      className={running ? 'obs-pulse' : undefined}
+      style={{
+        width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+        background: statusDotColor(status), display: 'inline-block',
+      }}
+      aria-hidden="true"
+    />
   )
 }
 
@@ -77,13 +85,7 @@ function SpanRow({ span, maxDuration }: { span: SpanDetail; maxDuration: number 
   const pct = maxDuration > 0 && span.duration_ms != null ? (span.duration_ms / maxDuration) * 100 : 0
   return (
     <div style={{ position: 'relative', paddingLeft: 20 }}>
-      {/* 时间线竖线 + 节点圆点 */}
-      <span
-        style={{
-          position: 'absolute', left: 5, top: 0, bottom: -12, width: 1,
-          background: 'var(--line-2)',
-        }}
-      />
+      <span style={{ position: 'absolute', left: 5, top: 0, bottom: -12, width: 1, background: 'var(--line-2)' }} />
       <span
         style={{
           position: 'absolute', left: 1, top: 6, width: 9, height: 9, borderRadius: '50%',
@@ -92,6 +94,7 @@ function SpanRow({ span, maxDuration }: { span: SpanDetail; maxDuration: number 
         }}
       />
       <div
+        className="obs-span"
         onClick={() => setOpen((v) => !v)}
         style={{
           cursor: 'pointer', padding: '8px 12px', marginBottom: 8,
@@ -108,9 +111,8 @@ function SpanRow({ span, maxDuration }: { span: SpanDetail; maxDuration: number 
             {fmtDuration(span.duration_ms)}
           </span>
         </div>
-        {/* 耗时条 */}
         <div style={{ marginTop: 6, height: 4, borderRadius: 2, background: 'var(--track)' }}>
-          <div style={{ width: `${Math.max(pct, 2)}%`, height: '100%', borderRadius: 2, background: 'var(--teal)' }} />
+          <div className="obs-bar-fill" style={{ width: `${Math.max(pct, 2)}%`, height: '100%', borderRadius: 2, background: 'var(--teal)' }} />
         </div>
         {span.error && (
           <div style={{ marginTop: 6, fontSize: 12, color: 'var(--red)' }}>错误：{span.error}</div>
@@ -129,17 +131,13 @@ function SpanRow({ span, maxDuration }: { span: SpanDetail; maxDuration: number 
 function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
   const maxDuration = Math.max(1, ...detail.spans.map((s) => s.duration_ms ?? 0))
   return (
-    <div style={{ padding: '16px 20px', background: 'var(--canvas)', borderBottomLeftRadius: 8, borderBottomRightRadius: 8 }}>
+    <div className="obs-detail" style={{ padding: '16px 20px', background: 'var(--canvas)', borderBottomLeftRadius: 8, borderBottomRightRadius: 8 }}>
       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 16 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>
           trace_id: <code style={{ fontFamily: 'var(--font-mono)' }}>{detail.trace.trace_id}</code>
         </Text>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          会话: {detail.trace.session_id ?? '—'}
-        </Text>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          总耗时: {fmtDuration(detail.trace.total_duration_ms)}
-        </Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>会话: {detail.trace.session_id ?? '—'}</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>总耗时: {fmtDuration(detail.trace.total_duration_ms)}</Text>
       </div>
 
       <Text strong style={{ fontSize: 12, color: 'var(--muted)', letterSpacing: '0.08em', display: 'block', marginBottom: 12 }}>
@@ -148,11 +146,7 @@ function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
       {detail.spans.length === 0 ? (
         <Text type="secondary" style={{ fontSize: 13 }}>无 span 记录</Text>
       ) : (
-        <div>
-          {detail.spans.map((s) => (
-            <SpanRow key={s.span_id} span={s} maxDuration={maxDuration} />
-          ))}
-        </div>
+        <div>{detail.spans.map((s) => <SpanRow key={s.span_id} span={s} maxDuration={maxDuration} />)}</div>
       )}
 
       <Text strong style={{ fontSize: 12, color: 'var(--muted)', letterSpacing: '0.08em', display: 'block', margin: '16px 0 10px' }}>
@@ -165,6 +159,7 @@ function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
           {detail.llm_calls.map((c: LlmCallDetail, i) => (
             <div
               key={i}
+              className="obs-lift"
               style={{
                 display: 'flex', gap: 16, alignItems: 'center', padding: '8px 12px',
                 background: 'var(--paper)', border: '1px solid var(--row-line)', borderRadius: 8, fontSize: 12,
@@ -227,11 +222,21 @@ export default function ObservabilityPage() {
 
   const successPct = metrics?.success_rate != null ? `${(metrics.success_rate * 100).toFixed(1)}%` : '—'
 
+  // 状态分布（用于完成率下方的堆叠条 + 图例）
+  const statusSegments = (() => {
+    const entries = Object.entries(metrics?.status_breakdown ?? {})
+    const total = entries.reduce((s, [, n]) => s + n, 0)
+    if (total === 0) return []
+    return entries.map(([status, count]) => ({
+      status, count, pct: (count / total) * 100, color: statusBarColor(status),
+    }))
+  })()
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--canvas)', overflow: 'auto' }}>
       <div style={{ maxWidth: 1080, margin: '0 auto', width: '100%', padding: 32 }}>
         {/* 页头 */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
+        <div className="obs-fade" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
             <Title level={4} style={{ margin: 0, color: 'var(--ink)' }}>
               <IconFund style={{ marginRight: 8 }} />
@@ -261,14 +266,50 @@ export default function ObservabilityPage() {
           </div>
         ) : (
           <>
-            {/* 指标卡片区 */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 28 }}>
-              <MetricCard label="Trace 总数" value={fmtNum(metrics?.trace_total ?? 0)} />
-              <MetricCard label="完成率" value={successPct} hint={metrics ? Object.entries(metrics.status_breakdown).map(([k, v]) => `${k} ${v}`).join(' · ') : undefined} />
-              <MetricCard label="平均耗时" value={fmtDuration(metrics?.avg_duration_ms ?? null)} />
-              <MetricCard label="P95 耗时" value={fmtDuration(metrics?.p95_duration_ms ?? null)} />
-              <MetricCard label="LLM 调用" value={fmtNum(metrics?.llm_call_total ?? 0)} hint={metrics?.llm_avg_latency_ms != null ? `平均延迟 ${fmtDuration(metrics.llm_avg_latency_ms)}` : undefined} />
-              <MetricCard label="LLM Tokens" value={fmtNum(metrics?.llm_tokens_total ?? 0)} />
+            {/* 系统总览带：大号总数 + 完成率（配状态分布条）+ 耗时 + LLM */}
+            <div
+              className="obs-fade obs-lift"
+              style={{
+                background: 'var(--paper)', border: '1px solid var(--line-2)', borderRadius: 12,
+                boxShadow: 'var(--shadow-card)', padding: '22px 26px', marginBottom: 28,
+                display: 'flex', flexWrap: 'wrap', alignItems: 'stretch',
+              }}
+            >
+              <div style={{ paddingRight: 28, marginRight: 28, borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <span style={{ font: '700 11px var(--font-ui)', color: 'var(--muted)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Trace 总数</span>
+                <span style={{ font: '700 42px var(--font-display)', color: 'var(--ink)', lineHeight: 1.05 }}>{fmtNum(metrics?.trace_total ?? 0)}</span>
+                <span style={{ fontSize: 12, color: 'var(--faint)' }}>已记录请求</span>
+              </div>
+
+              <div style={{ paddingRight: 28, marginRight: 28, borderRight: '1px solid var(--line)', flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                  <span style={{ font: '700 11px var(--font-ui)', color: 'var(--muted)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>完成率</span>
+                  <span style={{ font: '700 30px var(--font-display)', color: 'var(--green)' }}>{successPct}</span>
+                </div>
+                <div style={{ display: 'flex', height: 8, borderRadius: 4, overflow: 'hidden', background: 'var(--track)' }}>
+                  {statusSegments.map((seg) => (
+                    <div key={seg.status} className="obs-bar-fill" title={`${seg.status} ${seg.count}`} style={{ width: `${seg.pct}%`, background: seg.color }} />
+                  ))}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                  {statusSegments.map((seg) => (
+                    <span key={seg.status} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--muted)' }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 2, background: seg.color, display: 'inline-block' }} />
+                      {seg.status} {seg.count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ paddingRight: 28, marginRight: 28, borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 10 }}>
+                <MiniStat label="平均耗时" value={fmtDuration(metrics?.avg_duration_ms ?? null)} />
+                <MiniStat label="P95 耗时" value={fmtDuration(metrics?.p95_duration_ms ?? null)} />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 10 }}>
+                <MiniStat label="LLM 调用" value={fmtNum(metrics?.llm_call_total ?? 0)} />
+                <MiniStat label="LLM Tokens" value={fmtNum(metrics?.llm_tokens_total ?? 0)} />
+              </div>
             </div>
 
             {/* Trace 列表 */}
@@ -278,12 +319,13 @@ export default function ObservabilityPage() {
             {traces.length === 0 ? (
               <Empty description={<span style={{ fontSize: 13, color: 'var(--muted)' }}>暂无 trace 记录</span>} style={{ marginTop: 40 }} />
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {traces.map((t) => {
                   const active = selectedId === t.trace_id
                   return (
                     <div key={t.trace_id} style={{ marginBottom: 8 }}>
                       <div
+                        className="obs-lift"
                         onClick={() => selectTrace(t.trace_id)}
                         style={{
                           cursor: 'pointer', background: active ? 'var(--teal-pale)' : 'var(--paper)',
@@ -292,13 +334,12 @@ export default function ObservabilityPage() {
                           padding: '12px 18px', display: 'flex', alignItems: 'center', gap: 14,
                         }}
                       >
+                        <StatusDot status={t.status} />
                         <Tag tone={statusTone(t.status)}>{t.status}</Tag>
                         <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {t.user_query || '(无查询文本)'}
                         </span>
-                        <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
-                          {t.trace_id.slice(0, 8)}
-                        </span>
+                        <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>{t.trace_id.slice(0, 8)}</span>
                         <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--font-mono)', minWidth: 70, textAlign: 'right' }}>
                           {fmtDuration(t.total_duration_ms)}
                         </span>
