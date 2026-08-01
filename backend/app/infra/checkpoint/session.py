@@ -102,5 +102,42 @@ class SessionManager:
                 }
         return None
 
+    # --- 分层对话上下文 digest 状态（L2 摘要 / L2.5 归档） ---------------------
+    # 见 docs/plans/2026-08-01-memory-mechanism.md。digest 为覆盖重写的叙事摘要，
+    # digest_msg_count 记已压缩到的消息数，digest_version 为重写计数（每 N 次归档 L2.5）。
+
+    _CONTEXT_FIELDS = ("digest", "digest_msg_count", "digest_version", "mid_digest")
+
+    async def get_context_state(self, session_id: str) -> dict:
+        """读取 digest 状态；无 session 返回零值态（便于首次构建上下文）。"""
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT digest, digest_msg_count, digest_version, mid_digest "
+                "FROM agent.session WHERE thread_id = $1",
+                session_id,
+            )
+        if not row:
+            return {"digest": None, "digest_msg_count": 0, "digest_version": 0, "mid_digest": None}
+        return {
+            "digest": row["digest"],
+            "digest_msg_count": row["digest_msg_count"] or 0,
+            "digest_version": row["digest_version"] or 0,
+            "mid_digest": row["mid_digest"],
+        }
+
+    async def save_context_state(self, session_id: str, updates: dict) -> None:
+        """回写 digest 状态——只接受白名单内的 4 列，杜绝任意键注入。"""
+        fields = {k: updates[k] for k in self._CONTEXT_FIELDS if k in updates}
+        if not fields:
+            return
+        set_clause = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE agent.session SET {set_clause} WHERE thread_id = $1",
+                session_id, *fields.values(),
+            )
+
 
 session_manager = SessionManager()

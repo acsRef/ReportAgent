@@ -23,6 +23,7 @@ from app.infra.checkpoint.factory import get_checkpointer
 from app.agent.data_graph import build_data_graph
 from app.agent.sql_graph import build_sql_graph
 from app.agent.report_graph import build_report_graph
+from app.context import build_session_context
 from app.infra.db import requirement_repository, report_version_repository
 from app.infra.db.postgres import get_pool
 from app.infra.trace.sdk import get_tracer, traced_node
@@ -170,6 +171,13 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
     if not user_query.strip() and confirmed_requirement:
         user_query = f"生成报告：{confirmed_requirement}"
 
+    # 分层对话上下文（多轮连贯）：失败降级为空，不阻塞执行。
+    try:
+        conversation_context = await build_session_context(state["session_id"], state["user_id"])
+    except Exception as exc:
+        logger.warning("build_session_context failed: %s", exc)
+        conversation_context = ""
+
     ss = await sql_graph.ainvoke({
         "schema_context": schema_input,
         "user_query": user_query,
@@ -183,6 +191,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
         "trace_id": state.get("trace_id", ""),
         "chosen_tool": None,  # legacy field; ignored in new flow
         "confirmed_requirement": confirmed_requirement,
+        "conversation_context": conversation_context or None,
     })
     qr = ss.get("query_result")
     # Passthrough of error + last-tried SQL so the parent graph can emit

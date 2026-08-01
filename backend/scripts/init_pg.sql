@@ -247,6 +247,15 @@ ALTER TABLE agent.session
     ADD COLUMN IF NOT EXISTS current_phase VARCHAR(32) NOT NULL DEFAULT 'idle',
     ADD COLUMN IF NOT EXISTS last_failed_action VARCHAR(32);
 
+-- agent.session extensions for layered conversation context (L2 摘要 / L2.5 归档)
+-- 见 docs/plans/2026-08-01-memory-mechanism.md。digest 为覆盖重写的叙事摘要，
+-- digest_msg_count 记录已压缩到的消息数，digest_version 为重写计数（每 N 次归档 L2.5）。
+ALTER TABLE agent.session
+    ADD COLUMN IF NOT EXISTS digest TEXT,
+    ADD COLUMN IF NOT EXISTS digest_msg_count INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS digest_version INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS mid_digest TEXT;
+
 DO $$
 BEGIN
     IF NOT EXISTS (

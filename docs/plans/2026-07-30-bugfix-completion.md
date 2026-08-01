@@ -76,7 +76,7 @@
 |---|---|
 | **全量 async 重构**（`call_llm→ainvoke`、`sql_tools` psycopg2→asyncpg、13 node sync→async、`parse_requirement` async） | 经用户确认停在安全子集。`bug-review.md` 勘误已将其降为 P1：真正的 event-loop 阻塞全项目仅 2 处，均已用 `asyncio.to_thread` 修掉；其余仅是线程池/socket 压力（LangGraph 会自动线程池化 sync 节点）。全量改造需连带重写 5+ 个直接调用同步函数的测试文件，coroutine 陷阱多、边际收益低。 |
 | **C-5 PG 连接池**（psycopg2 每次新连接的 socket 风暴） | 与 async 重构的方案 B（asyncpg）绑定，随 async 一起做。当前仍每次新建 psycopg2 连接（已有 `connect_timeout`/`statement_timeout`）。 |
-| **conversation-context-system**（分层对话上下文 L1/L2/L3） | 新特性，非 bug，本轮不做。 |
+| ~~**conversation-context-system**（分层对话上下文 L1/L2/L3）~~ | ✅ 已由 [2026-08-01-memory-mechanism.md](2026-08-01-memory-mechanism.md) 落地（含 mem0 L3 抽取 + LFU/LRU 容量淘汰）。 |
 | **PostgresSaver 替代 MemorySaver** | 独立 PR（CLAUDE.md 已标注的生产改进）。 |
 | **P-4**（`_draft_id_from_state` 跨 PATCH 窗口不一致） | LOW，窗口极短、概率极低。 |
 | **P-5**（`_run_step` 转 async 的 coroutine 陷阱） | 仅在未来转 async 时触发；当前 sync 无影响，随 async 处理。 |

@@ -25,6 +25,7 @@ from app.agent.data_graph import build_data_graph
 from app.infra.checkpoint.factory import get_checkpointer
 from app.agent.requirement_parser import parse_requirement
 from app.agent.security_guard import SecurityGuard
+from app.context import build_session_context
 from app.infra.db import requirement_repository
 from app.infra.db.postgres import get_pool
 from app.infra.trace.sdk import get_tracer, traced_node
@@ -93,14 +94,23 @@ async def _data_agent(state: RequirementAnalysisState) -> dict:
 
 
 @traced_node("requirement_parse")
-def _requirement_parse(state: RequirementAnalysisState) -> dict:
-    """Pure CPU step: call the LLM + merge with controlled options.
+async def _requirement_parse(state: RequirementAnalysisState) -> dict:
+    """LLM 解析 + 与受控选项合并。
 
-    No DB I/O here; DB writes happen in `persist_draft`.
+    转 async 是为了接入分层对话上下文（build_session_context 需读 DB）；
+    上下文构建失败时降级为空，绝不阻塞需求解析。需求卡落库仍在 persist_draft。
     """
+    conversation_context = ""
+    try:
+        conversation_context = await build_session_context(
+            state["session_id"], state.get("user_id", 0) or 0,
+        )
+    except Exception as exc:
+        logger.warning("build_session_context failed: %s", exc)
     card = parse_requirement(
         user_query=state["user_query"],
         schema_context=state.get("schema_context"),
+        conversation_context=conversation_context or None,
     )
     return {"requirement_card": card}
 

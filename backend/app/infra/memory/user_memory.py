@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import math
 from typing import Optional
 
 from app.infra.db.postgres import get_pool
 from app.embedding.service import get_embedder
+
+logger = logging.getLogger(__name__)
+
+# 每用户语义记忆条数上限。超出后按 LFU/LRU+重要性混合分淘汰最冷的，防止
+# memory.semantic_entry 无限增长。淘汰是排序因子之外的「硬上限」补充——召回仍语义主导。
+USER_MEMORY_CAP = 200
 
 
 class RankedMemory:
@@ -23,8 +30,9 @@ class RankedMemory:
 
 
 class UserMemory:
-    def __init__(self, top_k: int = 5):
+    def __init__(self, top_k: int = 5, capacity: int = USER_MEMORY_CAP):
         self._top_k = top_k
+        self._capacity = capacity
 
     async def save(
         self,
@@ -35,6 +43,7 @@ class UserMemory:
         source: str = "",
     ) -> int:
         pool = get_pool()
+        is_new = False
         async with pool.acquire() as conn:
             existing = await conn.fetchrow(
                 "SELECT id, access_count FROM memory.semantic_entry "
@@ -47,19 +56,62 @@ class UserMemory:
                     "last_access_time=NOW() WHERE id=$1",
                     existing["id"],
                 )
-                return existing["id"]
+                entry_id = existing["id"]
+            else:
+                is_new = True
+                embedder = get_embedder()
+                embedding = await embedder.embed_or_none(content)
+                row = await conn.fetchrow(
+                    """INSERT INTO memory.semantic_entry
+                       (user_id, content, memory_type, importance_score, intent_embedding, source, access_count, last_access_time)
+                       VALUES ($1, $2, $3, $4, $5, $6, 1, NOW())
+                       RETURNING id""",
+                    user_id, content, memory_type, importance_score, embedding, source,
+                )
+                entry_id = row["id"]
 
-            embedder = get_embedder()
-            embedding = await embedder.embed_or_none(content)
+        # 只在新增时触发淘汰（去重更新不增加条数）。淘汰失败不拖垮写入主路径。
+        if is_new:
+            try:
+                await self.evict_over_capacity(user_id)
+            except Exception as exc:
+                logger.warning("evict_over_capacity failed for user_id=%s: %s", user_id, exc)
+        return entry_id
 
-            row = await conn.fetchrow(
-                """INSERT INTO memory.semantic_entry
-                   (user_id, content, memory_type, importance_score, intent_embedding, source, access_count, last_access_time)
-                   VALUES ($1, $2, $3, $4, $5, $6, 1, NOW())
-                   RETURNING id""",
-                user_id, content, memory_type, importance_score, embedding, source,
+    async def evict_over_capacity(self, user_id: str) -> int:
+        """容量上限淘汰：超过 capacity 时，按混合分升序删除最冷的若干条。
+
+        淘汰分 = LFU(log1p(access_count)/10, 截顶)×0.4 + LRU(2^(-h/72))×0.4
+                 + 重要性×0.2。**不含语义**（淘汰时无查询）；重要性项保护稳定
+        偏好不被误删。返回实际删除条数。
+        """
+        if self._capacity <= 0:
+            return 0
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT count(*) FROM memory.semantic_entry WHERE user_id=$1", user_id,
             )
-            return row["id"]
+            overflow = (count or 0) - self._capacity
+            if overflow <= 0:
+                return 0
+            deleted = await conn.execute(
+                """WITH ranked AS (
+                     SELECT id, (
+                       LEAST(LN(1+access_count)/10.0, 1.0) * 0.4
+                       + (CASE WHEN last_access_time IS NULL THEN 0.0
+                               ELSE POWER(2.0, -(EXTRACT(EPOCH FROM (NOW()-last_access_time))/3600.0)/72.0)
+                          END) * 0.4
+                       + LEAST(COALESCE(importance_score,0.0), 1.0) * 0.2
+                     ) AS evict_score
+                     FROM memory.semantic_entry WHERE user_id=$1
+                   )
+                   DELETE FROM memory.semantic_entry WHERE id IN (
+                     SELECT id FROM ranked ORDER BY evict_score ASC LIMIT $2
+                   )""",
+                user_id, overflow,
+            )
+            return int(str(deleted).split()[-1]) if deleted else 0
 
     async def search(
         self, user_id: str, query: str = "", top_k: Optional[int] = None

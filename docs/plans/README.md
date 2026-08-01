@@ -31,6 +31,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-01-memory-mechanism.md](2026-08-01-memory-mechanism.md) | 记忆机制完善：分层上下文 + mem0 抽取 + LFU/LRU 容量淘汰 | 5 轮 23 测试；全套 146 passed；合并 conversation-context |
 | [2026-08-01-postgres-checkpointer.md](2026-08-01-postgres-checkpointer.md) | PostgresSaver 替代 MemorySaver | 共享单例 + 三图接线 + lifespan；跨实例持久化测试通过 |
 | [2026-08-01-draft-id-consistency.md](2026-08-01-draft-id-consistency.md) | P-4：confirmed-execution 锁定与执行的 draft 一致性 | load 定 draft_id 入 state，下游不重查 |
 | [2026-08-01-extract-sql-multi-statement.md](2026-08-01-extract-sql-multi-statement.md) | P-8：extract_sql 多语句截断（安全加固） | 只取首条语句，截注入尾部 |
@@ -46,7 +47,6 @@
 | Plan | 主题 | 搁置原因 |
 |---|---|---|
 | [2026-07-30-backend-async-refactor.md](2026-07-30-backend-async-refactor.md) | 后端全量 async 重构 | 经确认停在安全子集；两个真 P0 已用 `asyncio.to_thread` 单独修掉；全量改造需重写 5+ 测试、收益 P1 |
-| [2026-07-30-conversation-context-system.md](2026-07-30-conversation-context-system.md) | 分层对话上下文系统 | 新特性（非 bug），本轮不做 |
 
 ## 只读评审
 

@@ -87,6 +87,9 @@ class SQLAgentState(TypedDict):
     # 层7/B-3: 声明 trace_id（调用点早已传入），避免 LangGraph 静默丢弃
     # 导致子图 span 落进共享 _local[""] 桶。
     trace_id: str
+    # 分层对话上下文（L1/L2/L2.5 渲染后的字符串），由调用方 build_session_context
+    # 构建后传入；_plan/_generate_sql 会前置进 prompt，让多轮对话连贯。
+    conversation_context: Optional[str]
 
 
 _PLAN_TABLE_HINTS = """常用表速查:
@@ -295,6 +298,11 @@ def _plan(state: SQLAgentState) -> dict:
 
 {_PLAN_FEWSHOT}"""
 
+    # 分层对话上下文前置（多轮连贯）：有才加，不打扰单轮场景。
+    conversation_context = state.get("conversation_context")
+    if conversation_context:
+        prompt = f"<对话上下文>\n{conversation_context}\n</对话上下文>\n\n{prompt}"
+
     plan_text = call_llm(prompt, max_tokens=1500)
 
     plan_dict = safe_json_parse(plan_text)
@@ -388,6 +396,11 @@ def _generate_sql(state: SQLAgentState) -> dict:
 {prev_sql}
 错误：{error_to_show}
 请针对该错误修正 SQL：只使用上面「可用表结构」中真实存在的表名和列名，不要臆造列。"""
+
+    # 分层对话上下文前置（与 _plan 一致）。
+    conversation_context = state.get("conversation_context")
+    if conversation_context:
+        prompt = f"<对话上下文>\n{conversation_context}\n</对话上下文>\n\n{prompt}"
 
     sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
 

@@ -85,9 +85,16 @@ def _schema_text(ctx: SchemaContext | None) -> str:
     return text
 
 
-def _call_llm_for_parse(user_query: str, schema: SchemaContext | None) -> dict:
+def _call_llm_for_parse(
+    user_query: str,
+    schema: SchemaContext | None,
+    conversation_context: str | None = None,
+) -> dict:
     """Call the LLM and parse the JSON response. Returns {} on parse failure."""
     prompt = _PARSE_PROMPT.format(user_query=user_query, schema_text=_schema_text(schema))
+    # 分层对话上下文前置：让需求解析感知先前轮次（如「再按产品细分」隐含的范围）。
+    if conversation_context:
+        prompt = f"<对话上下文>\n{conversation_context}\n</对话上下文>\n\n{prompt}"
     raw = call_llm(prompt, max_tokens=1500)  # reasoning model may write a long <think> block first
     logger.warning("parse_requirement LLM raw for user_query=%r:\n%s", user_query, raw[:2000])
     parsed = safe_json_parse(raw)
@@ -103,6 +110,7 @@ def parse_requirement(
     user_query: str,
     schema_context: SchemaContext | None,
     prior_card: RequirementCard | None = None,
+    conversation_context: str | None = None,
 ) -> RequirementCard:
     """Parse a user query into a RequirementCard.
 
@@ -118,7 +126,7 @@ def parse_requirement(
     5. If there are no missing fields and assumptions are all resolved,
        status='complete'; else 'missing'.
     """
-    parsed = _call_llm_for_parse(user_query, schema_context)
+    parsed = _call_llm_for_parse(user_query, schema_context, conversation_context)
     if not parsed:
         # LLM gave nothing usable; fall back to a 'missing' card with all
         # dimensions empty so the frontend can render a complete form.
