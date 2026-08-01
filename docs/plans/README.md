@@ -31,6 +31,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-01-postgres-checkpointer.md](2026-08-01-postgres-checkpointer.md) | PostgresSaver 替代 MemorySaver | 共享单例 + 三图接线 + lifespan；跨实例持久化测试通过 |
 | [2026-08-01-draft-id-consistency.md](2026-08-01-draft-id-consistency.md) | P-4：confirmed-execution 锁定与执行的 draft 一致性 | load 定 draft_id 入 state，下游不重查 |
 | [2026-08-01-extract-sql-multi-statement.md](2026-08-01-extract-sql-multi-statement.md) | P-8：extract_sql 多语句截断（安全加固） | 只取首条语句，截注入尾部 |
 | [2026-07-30-bugfix-completion.md](2026-07-30-bugfix-completion.md) | 本轮 bug 修复完成报告（权威记录） | 后端 107 / 前端 242 / 启动冒烟 |

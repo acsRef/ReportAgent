@@ -37,6 +37,7 @@ from app.agent.confirmed_execution_graph import (
 from app.api.templates import router as templates_router
 from app.db import get_connection, close_connection
 from app.infra.db.postgres import init_pool, close_pool
+from app.infra.checkpoint.factory import init_checkpointer, close_checkpointer
 from app.infra.checkpoint.session import session_manager
 from app.infra.trace.sdk import get_tracer
 from app.infra.auth.repository import ensure_default_user, verify_user
@@ -197,8 +198,13 @@ async def lifespan(app: FastAPI):
     await init_pool()
     await ensure_default_user()
     await _check_embedding_dimension()
+    # Checkpointer 单例（dev=MemorySaver / 非 dev=AsyncPostgresSaver）：必须先于
+    # build_parent_graph，让 legacy 图拿到正确的 checkpointer。非开发环境顺带
+    # 建 langgraph checkpoint 表。
+    await init_checkpointer()
     _agent = build_parent_graph()
     yield
+    await close_checkpointer()
     await close_pool()
     close_connection()
 

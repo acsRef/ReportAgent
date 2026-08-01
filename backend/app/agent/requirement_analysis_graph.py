@@ -18,11 +18,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional, TypedDict
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel
 
 from app.agent.data_graph import build_data_graph
+from app.infra.checkpoint.factory import get_checkpointer
 from app.agent.requirement_parser import parse_requirement
 from app.agent.security_guard import SecurityGuard
 from app.infra.db import requirement_repository
@@ -164,8 +164,9 @@ async def _persist_draft(state: RequirementAnalysisState) -> dict:
 def build_requirement_analysis_graph():
     """Compile and return the requirement-analysis graph.
 
-    Uses `MemorySaver` so a developer can step through the graph in a
-    notebook. Production deployments should swap in `PostgresSaver`.
+    Checkpointer comes from `get_checkpointer()`：开发环境是 MemorySaver
+    （便于 notebook 单步），非开发环境是 AsyncPostgresSaver（checkpoint
+    落 PG、跨重启持久）。见 app/infra/checkpoint/factory.py。
     """
     workflow = StateGraph(RequirementAnalysisState)
 
@@ -180,4 +181,4 @@ def build_requirement_analysis_graph():
     workflow.add_edge("requirement_parse", "persist_draft")
     workflow.add_edge("persist_draft", END)
 
-    return workflow.compile(checkpointer=MemorySaver())
+    return workflow.compile(checkpointer=get_checkpointer())

@@ -4,13 +4,13 @@ import asyncio
 import logging
 from typing import Any, Literal, Optional, TypedDict
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
 from app.agent.data_graph import build_data_graph
 from app.agent.sql_graph import ChatCard, build_sql_graph
 from app.agent.report_graph import build_report_graph
+from app.infra.checkpoint.factory import get_checkpointer
 from app.infra.memory.memory_manager import MemoryManager
 from app.infra.trace.sdk import get_tracer, traced_node
 from app.llm import call_llm
@@ -558,5 +558,4 @@ def build_parent_graph():
     workflow.add_edge("dashboard_agent", END)
     workflow.add_edge("clarify", "data_agent")
 
-    checkpointer = MemorySaver()
-    return workflow.compile(checkpointer=checkpointer)
+    return workflow.compile(checkpointer=get_checkpointer())

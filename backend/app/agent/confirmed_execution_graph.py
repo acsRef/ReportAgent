@@ -16,8 +16,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional, TypedDict
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+
+from app.infra.checkpoint.factory import get_checkpointer
 
 from app.agent.data_graph import build_data_graph
 from app.agent.sql_graph import build_sql_graph
@@ -516,4 +517,4 @@ def build_confirmed_execution_graph():
     )
     workflow.add_edge("persist_report", END)
 
-    return workflow.compile(checkpointer=MemorySaver())
+    return workflow.compile(checkpointer=get_checkpointer())
