@@ -44,6 +44,21 @@ def format_messages(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def format_context_block(conversation_context: str) -> str:
+    """把上下文包成 prompt 块，并显式声明其为「历史参考」。
+
+    防丢失/防漂移的关键护栏：压缩摘要（L2）与召回的文本事实都可能有损，
+    但**表名/列名/字段类型的权威来源永远是 prompt 里实时来自数据库的
+    「可用表结构」**。此声明让模型在两者冲突时以 schema 为准，避免把
+    int 列误记成 string 之类的类型漂移。三处注入（_plan/_generate_sql/
+    需求解析）统一复用此函数，护栏文案单一来源。
+    """
+    return (
+        "<对话上下文（历史参考；表名/列名/字段类型以下方「可用表结构」为准）>\n"
+        f"{conversation_context}\n</对话上下文>"
+    )
+
+
 def archive_to_l2_5(summary: str) -> str:
     """L2.5：从当前摘要归档一段长期脉络，硬截断到上限。"""
     return (summary or "")[:L2_5_MAX_CHARS]

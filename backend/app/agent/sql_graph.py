@@ -7,6 +7,7 @@ from typing import Literal, Optional, TypedDict
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
+from app.context import format_context_block
 from app.llm import call_llm, _format_tools_for_prompt
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
 from app.utils.text import extract_sql, safe_json_parse, strip_markdown_fence
@@ -301,7 +302,7 @@ def _plan(state: SQLAgentState) -> dict:
     # 分层对话上下文前置（多轮连贯）：有才加，不打扰单轮场景。
     conversation_context = state.get("conversation_context")
     if conversation_context:
-        prompt = f"<对话上下文>\n{conversation_context}\n</对话上下文>\n\n{prompt}"
+        prompt = f"{format_context_block(conversation_context)}\n\n{prompt}"
 
     plan_text = call_llm(prompt, max_tokens=1500)
 
@@ -400,7 +401,7 @@ def _generate_sql(state: SQLAgentState) -> dict:
     # 分层对话上下文前置（与 _plan 一致）。
     conversation_context = state.get("conversation_context")
     if conversation_context:
-        prompt = f"<对话上下文>\n{conversation_context}\n</对话上下文>\n\n{prompt}"
+        prompt = f"{format_context_block(conversation_context)}\n\n{prompt}"
 
     sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
 

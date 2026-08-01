@@ -98,7 +98,8 @@ def test_sql_plan_prepends_conversation_context(monkeypatch):
         "user_query": "再看看", "schema_context": None, "query_plan": None,
         "conversation_context": "历史上下文XYZ",
     })
-    assert "<对话上下文>\n历史上下文XYZ" in captured["p"]
+    assert "历史上下文XYZ" in captured["p"]
+    assert "可用表结构」为准" in captured["p"]  # 防字段类型漂移的权威声明
 
 
 def test_sql_plan_no_context_block_when_absent(monkeypatch):
@@ -117,4 +118,5 @@ def test_requirement_parser_prepends_conversation_context(monkeypatch):
     requirement_parser.parse_requirement(
         user_query="再按产品细分", schema_context=None, conversation_context=" prior-range-2024",
     )
-    assert "<对话上下文>\n prior-range-2024" in captured["p"]
+    assert " prior-range-2024" in captured["p"]
+    assert "可用表结构」为准" in captured["p"]  # 防字段类型漂移的权威声明

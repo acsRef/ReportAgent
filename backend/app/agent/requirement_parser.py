@@ -13,6 +13,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from app.context import format_context_block
 from app.llm import call_llm
 from app.models.contracts import SchemaContext
 from app.models.requirement import (
@@ -94,7 +95,7 @@ def _call_llm_for_parse(
     prompt = _PARSE_PROMPT.format(user_query=user_query, schema_text=_schema_text(schema))
     # 分层对话上下文前置：让需求解析感知先前轮次（如「再按产品细分」隐含的范围）。
     if conversation_context:
-        prompt = f"<对话上下文>\n{conversation_context}\n</对话上下文>\n\n{prompt}"
+        prompt = f"{format_context_block(conversation_context)}\n\n{prompt}"
     raw = call_llm(prompt, max_tokens=1500)  # reasoning model may write a long <think> block first
     logger.warning("parse_requirement LLM raw for user_query=%r:\n%s", user_query, raw[:2000])
     parsed = safe_json_parse(raw)

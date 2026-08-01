@@ -27,7 +27,7 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 
 关键语义：
 
-- **失败绝不伪装成功**：SQL 无数据 → `execution_status=FAILED` → 条件边跳过落库 → SSE `error` 事件 + `session.phase=error`，前端出现「重试当前任务」卡（`POST /sessions/{sid}/retry`）。
+- **三态分离，失败绝不伪装成功**：SQL 执行结果分 `SUCCESS` / `EMPTY`（合法零行）/ `FAILED`（执行出错）三态，**三者都落库**（`agent.report_version` append-only，失败/空也留版本供回溯）。FAILED/EMPTY 经 SSE 透出 `error_kind` + 尝试过的 SQL，前端 ErrorCard 按 kind 分类显示、ReportPaper 渲染「未找到匹配记录」或失败归档带；可恢复错误出现「重试当前任务」卡（`POST /sessions/{sid}/retry`）。
 - **reasoning 模型兼容**：`utils/text.extract_sql` 剥离 `
 </think>
 
@@ -42,12 +42,13 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 | UI | atelier 组件库（`components/atelier/`，antd 已移除）+ 手绘 SVG 图标（`components/ui/Icons.tsx`）+ `styles/tokens.css` / `styles/workbench.css` |
 | 渲染 | ECharts 6 (SVG) + ReportBlock 组件体系 |
 | API 协议 | SSE v2 流式推送（phase / requirement / report / error / done） |
-| 认证 | JWT（PyJWT，单 token，无 refresh，24h） |
-| Agent | LangGraph 双图 + psycopg2 + sqlglot |
+| 认证 | JWT（PyJWT，单 token，无 refresh，24h）；fail-closed 启动安全闸 |
+| Agent | LangGraph 双图 + psycopg2 + sqlglot；checkpoint 默认 MemorySaver（dev）/ **PostgresSaver**（非 dev，落 PG、跨重启持久） |
+| 记忆 | 分层对话上下文（L1 原始 / L2 摘要覆盖重写 / L2.5 归档 / L3 结构化事实）+ pgvector 语义召回（语义主导，LFU/LRU 作排序因子 + 容量上限淘汰）；mem0 可选作 L3 抽取引擎（`MEM0_ENABLED`） |
 | LLM | OpenAI 兼容（MiniMax，可配置） |
 | Embedding | SiliconFlow API（pgvector 语义搜索，失败降级关键字匹配） |
 | 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型 6 维 4 事实；数据覆盖 2020–2024） |
-| 测试 | pytest（107 通过，含 persistence；e2e 需 `REPORTAGENT_E2E`）+ vitest（242 通过） |
+| 测试 | pytest（146 通过，含 persistence；e2e 需 `REPORTAGENT_E2E`）+ vitest（242 通过） |
 
 ## 环境要求
 

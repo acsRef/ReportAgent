@@ -36,6 +36,13 @@ def test_format_messages_skips_empty():
     ) == "user: 有料"
 
 
+def test_format_context_block_declares_schema_authoritative():
+    """护栏：上下文块必须声明 schema 为字段名/类型的权威来源，防压缩导致类型漂移。"""
+    block = context.format_context_block("CTX")
+    assert "CTX" in block
+    assert "可用表结构」为准" in block
+
+
 # --- build_context：无压缩路径 -------------------------------------------------
 
 
