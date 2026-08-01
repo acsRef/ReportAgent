@@ -34,6 +34,23 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 ` 块；校验失败的 SQL + 错误信息会喂回重新生成的 prompt（重试不盲打）。
 - 旧的 `mode=legacy` 单图流程（interrupt + chosen_tool）仍保留一个兼容周期。
 
+### 记忆与对话上下文
+
+让多轮对话连贯（先问「2024 华东销售趋势」再说「再按产品细分」，第二轮知道「华东」）。分四层（`app/context.py`）：
+
+- **L1 原始消息**：最近 10 条对话**逐字保留**（不压缩），近期确切内容不丢。
+- **L2 叙事摘要**（`agent.session.digest`，≤800 字）：超出窗口的旧消息压缩成摘要，**覆盖重写**（绝不追加，防膨胀）。摘要只保留话题脉络/决策背景，**刻意不含具体字段名和数值**。
+- **L2.5 长期归档**（`mid_digest`，≤400 字）：每 5 次摘要重写归档一次长期脉络。
+- **L3 结构化事实**（`memory.semantic_entry`）：压缩时顺带抽取**字段映射 / 计算口径 / 用户偏好**，作为结构化记录存储——这些精确属性不走有损摘要。
+
+**字段类型为何不会因压缩漂移**（如 Amount int 被记成 string）：字段类型**永远从数据库 schema 实时取**（`get_table_ddl`/`search_tables`），不来自记忆；注入 prompt 的上下文块还显式声明「表名/列名/字段类型以可用表结构为准」（`format_context_block`），且 SQL 执行前过 `sqlglot` AST + `EXPLAIN` 用真实 schema 校验。三重保证下，有损摘要不会把字段类型带偏。
+
+**记忆召回**（`MemoryManager` → `UserMemory`/`QueryMemory`）：pgvector 语义搜索，综合打分 = 语义相似度×0.6 + 重要性×0.2 + LFU(访问频率)×0.1 + LRU(新鲜度)×0.1——**语义主导，LFU/LRU 作排序因子**（不做纯淘汰，避免高频噪声压过相关性）。每用户记忆有条数上限（默认 200），超出按 LFU/LRU+重要性混合分淘汰最冷的、保护高重要项。
+
+**mem0（可选）**：`MEM0_ENABLED=true` 时用 mem0 从对话自动抽取 L3 长期事实（自带去重/更新）；默认关闭，降级为纯 LLM 抽取。**mem0 只做抽取，不做召回**（召回主路径始终是 pgvector 语义排序）。
+
+**checkpoint 持久化**（`app/infra/checkpoint/factory.py`）：dev 用 `MemorySaver`（便于本地单步），非 dev 用 **`AsyncPostgresSaver`**（checkpoint 落 PG，跨进程重启不丢、支持多实例）。
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -48,7 +65,7 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 | LLM | OpenAI 兼容（MiniMax，可配置） |
 | Embedding | SiliconFlow API（pgvector 语义搜索，失败降级关键字匹配） |
 | 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型 6 维 4 事实；数据覆盖 2020–2024） |
-| 测试 | pytest（146 通过，含 persistence；e2e 需 `REPORTAGENT_E2E`）+ vitest（242 通过） |
+| 测试 | pytest（147 通过，含 persistence；e2e 需 `REPORTAGENT_E2E`）+ vitest（242 通过） |
 
 ## 环境要求
 
@@ -77,6 +94,9 @@ DATABASE_URL=postgresql://ragent:ragent@localhost:5432/ragent
 # 运行环境 + 开发逃生门（见下方「生产部署安全前置」）
 APP_ENV=development
 ALLOW_INSECURE_DEFAULT_AUTH=1
+
+# mem0 L3 事实抽取引擎（可选，默认 false → 纯 LLM 抽取）
+MEM0_ENABLED=false
 ```
 
 #### 生产部署安全前置（fail-closed 启动闸）
@@ -191,14 +211,17 @@ e2e 断言真实数据：`query_snapshot.sql` 非空、`answer.table` 有行、�
 ```
 backend/app/
   main.py                      — FastAPI 路由 + SSE v2 + confirm/retry 流
+  context.py                   — 分层对话上下文（L1/L2/L2.5/L3）+ build_session_context
   agent/
     requirement_analysis_graph.py — 需求分析图（仅 schema 工具）
-    confirmed_execution_graph.py  — 确认执行图（门控/锁定/FAILED 路由）
+    confirmed_execution_graph.py  — 确认执行图（门控/锁定/三态路由）
     sql_graph.py               — plan→generate→validate→execute→evaluate→build_output
     parent_graph.py            — 旧单图流程（mode=legacy）
   utils/text.py                — extract_sql / strip_think / safe_json_parse
   services/                    — requirement / report_version / snapshot / template
   infra/db/                    — asyncpg 池 + requirement/report_version 仓储
+  infra/memory/                — user_memory（pgvector 召回 + LFU/LRU 淘汰）/ query_memory / mem0_extractor
+  infra/checkpoint/            — factory（MemorySaver/PostgresSaver 按环境切换）/ session
 
 frontend/src/
   components/atelier/          — 18 个组件 + ToastProvider/useToast + atelier.css
@@ -220,7 +243,10 @@ docs/
 
 - [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) — 架构与操作指引
 - [docs/plans/README.md](docs/plans/README.md) — plan 永久索引（开发前必读入口）
-- [docs/plans/2026-07-30-bugfix-completion.md](docs/plans/2026-07-30-bugfix-completion.md) — 最近一轮 bug 修复完成报告
+- [docs/plans/2026-08-01-memory-mechanism.md](docs/plans/2026-08-01-memory-mechanism.md) — 记忆机制：分层上下文 + mem0 抽取 + LFU/LRU 淘汰
+- [docs/plans/2026-08-01-postgres-checkpointer.md](docs/plans/2026-08-01-postgres-checkpointer.md) — PostgresSaver checkpoint 持久化
+- [docs/plans/2026-07-30-bugfix-completion.md](docs/plans/2026-07-30-bugfix-completion.md) — bug 修复完成报告
+- [docs/memory-ranking-plan.md](docs/memory-ranking-plan.md) — 记忆排序设计（LFU/LRU 作排序因子的依据）
 - [docs/state-machine.md](docs/state-machine.md) — phase ↔ LangGraph 状态映射
 - [docs/persistence.md](docs/persistence.md) — DDL 权威
 - [docs/api-reference.md](docs/api-reference.md) / [docs/sse-v2.md](docs/sse-v2.md) — API 与事件协议
