@@ -16,6 +16,7 @@ import TextArea from '../components/atelier/TextArea'
 import { Text, Title, Paragraph } from '../components/atelier/Typography'
 import { IconArrowLeft, IconTrash, IconPlus } from '../components/ui/Icons'
 import '../styles/global.css'
+import '../styles/observability.css'
 
 function buildMinimalRequirement(): RC {
   return {
@@ -183,6 +184,7 @@ export default function TemplateLibraryPage() {
         }}
       >
         <aside
+          className="obs-fade"
           style={{
             background: 'var(--paper)',
             border: '1px solid var(--line)',
@@ -230,12 +232,14 @@ export default function TemplateLibraryPage() {
         </aside>
 
         <section
+          className="obs-fade"
           style={{
             background: 'var(--paper)',
             border: '1px solid var(--line)',
             borderRadius: 'var(--r-m)',
             padding: 'var(--sp-l)',
             minHeight: 480,
+            animationDelay: '60ms',
           }}
         >
           <div
@@ -274,6 +278,7 @@ export default function TemplateLibraryPage() {
                 return (
                   <div
                     key={t.id}
+                    className="obs-lift"
                     onClick={() => setSelected(t)}
                     style={{
                       padding: '12px 14px',
@@ -301,6 +306,7 @@ export default function TemplateLibraryPage() {
         </section>
 
         <aside
+          className="obs-fade"
           style={{
             background: 'var(--paper)',
             border: '1px solid var(--line)',
@@ -309,6 +315,7 @@ export default function TemplateLibraryPage() {
             display: 'flex',
             flexDirection: 'column',
             gap: 12,
+            animationDelay: '120ms',
           }}
         >
           {selected ? (

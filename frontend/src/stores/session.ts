@@ -63,7 +63,7 @@ interface SessionStore {
   error: string | null
   viewMode: ViewMode
   reportStyle: ReportStyle
-  sessions: Array<{ session_id: string; msg_count: number; first_message: string; last_message: string }>
+  sessions: Array<{ session_id: string; msg_count: number; first_message: string; last_message: string; title?: string; phase?: string }>
   chatMessages: ConversationMessage[]
   intentPhase: IntentPhase
   lastTraceAt: number

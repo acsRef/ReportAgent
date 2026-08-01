@@ -1,98 +1,49 @@
-import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Text, Title } from '../components/atelier/Typography'
-import { fetchReportVersion, type ReportVersionDetail } from '../api/sessionsClient'
-import Spinner from '../components/atelier/Spinner'
+import { Title } from '../components/atelier/Typography'
+import ReportPaper from '../components/workbench/ReportPaper'
 import '../styles/global.css'
+import '../styles/workbench.css'
 
+/**
+ * 报告分享/安全查看页。
+ *
+ * 直接复用工作台的 ReportPaper——报告按设计稿渲染（纸面、REPORT/v{n} 刊头、
+ * 核心发现、编号分节、失败归档带），而不是把 payload 当 JSON 裸 dump。
+ * ReportPaper 自行负责取数与 loading/error/三态渲染。
+ */
 export default function SecureReportPage() {
   const { sessionId, version } = useParams<{ sessionId: string; version: string }>()
-  const [report, setReport] = useState<ReportVersionDetail | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    if (!sessionId || !version) return
-    setLoading(true)
-    fetchReportVersion(sessionId, Number(version))
-      .then((r) => {
-        if (!cancelled) setReport(r.report)
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e).slice(0, 200))
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sessionId, version])
+  const versionNum = Number(version)
+  const valid = Boolean(sessionId) && !Number.isNaN(versionNum)
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--canvas)', display: 'flex', flexDirection: 'column' }}>
       <header
         style={{
           background: 'var(--ink)',
-          color: '#FFFFFF',
+          color: 'var(--on-ink)',
           padding: '0 22px',
           display: 'flex',
           alignItems: 'center',
           height: 48,
+          boxShadow: 'var(--shadow-topbar)',
         }}
       >
         <Title
           level={4}
-          style={{ color: '#FFFFFF', margin: 0, fontFamily: 'var(--font-display)', fontSize: 16 }}
+          style={{ color: 'var(--on-ink)', margin: 0, fontFamily: 'var(--font-display)', fontSize: 16 }}
         >
           ReportAgent — 报告 v{version}
         </Title>
       </header>
-      <main style={{ padding: 'var(--sp-xl)', flex: 1 }}>
-        <div
-          style={{
-            background: 'var(--paper)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--r-m)',
-            boxShadow: 'var(--shadow-card)',
-            padding: 'var(--sp-2xl)',
-            maxWidth: 1080,
-            margin: '0 auto',
-          }}
-        >
-          {loading ? (
-            <Spinner />
-          ) : error ? (
-            <Text type="danger">{error}</Text>
-          ) : report ? (
-            <>
-              <Title
-                level={2}
-                style={{ fontFamily: 'var(--font-display)', color: 'var(--ink)' }}
-              >
-                {report.title}
-              </Title>
-              <pre
-                style={{
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
-                  color: 'var(--ink-2)',
-                  background: 'var(--canvas)',
-                  padding: 'var(--sp-l)',
-                  borderRadius: 'var(--r-s)',
-                  border: '1px solid var(--line)',
-                }}
-              >
-                {JSON.stringify(report.report_payload, null, 2)}
-              </pre>
-            </>
-          ) : (
-            <Text type="secondary">未找到该报告版本</Text>
-          )}
-        </div>
+      <main style={{ padding: 'var(--sp-xl)', flex: 1, width: '100%', maxWidth: 1080, margin: '0 auto' }}>
+        {valid ? (
+          <ReportPaper sessionId={sessionId as string} version={versionNum} />
+        ) : (
+          <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
+            无效的报告链接
+          </div>
+        )}
       </main>
     </div>
   )
