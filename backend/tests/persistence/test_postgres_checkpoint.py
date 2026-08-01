@@ -76,6 +76,66 @@ def test_checkpoint_persists_across_saver_instances():
         _cleanup(thread_id)
 
 
+def test_init_checkpointer_non_dev_creates_working_postgres_saver():
+    """闭合 factory 非 dev 路径的验证缺口：APP_ENV != development 时，
+    init_checkpointer 应产出真正可读写 PG 的 AsyncPostgresSaver 单例。
+
+    说明：生产模式下「整个 app 的 lifespan 启动」无法在 dev 库冒烟——fail-closed
+    auth 闸门会拒绝弱密码 admin（闸门正确工作所致），属部署期验证。故在此单测层
+    验证 factory 的非 dev 路由 + 连接池 + setup + 实际读写。
+    """
+    from typing import TypedDict
+
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from langgraph.graph import END, StateGraph
+
+    from app.infra.checkpoint import factory
+
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        pytest.skip("DATABASE_URL not set")
+
+    class S(TypedDict, total=False):
+        x: int
+
+    def inc(state: S) -> dict:
+        return {"x": state.get("x", 0) + 1}
+
+    thread_id = f"ckpt-factory-{uuid.uuid4()}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    async def body():
+        # 用 monkeypatch 等价手段：直接替换 factory 内的 app_env 与 DATABASE_URL
+        orig_env, orig_url = factory.app_env, os.getenv("DATABASE_URL")
+        factory.app_env = lambda: "production"
+        os.environ["DATABASE_URL"] = url
+        try:
+            await factory.init_checkpointer()
+            cp = factory.get_checkpointer()
+            assert isinstance(cp, AsyncPostgresSaver), "非 dev 应产出 AsyncPostgresSaver"
+            # 真正读写一次，证明这个单例可用
+            g = StateGraph(S)
+            g.add_node("inc", inc)
+            g.set_entry_point("inc")
+            g.add_edge("inc", END)
+            app = g.compile(checkpointer=cp)
+            await app.ainvoke({"x": 100}, config)
+            snap = await app.aget_state(config)
+            return snap.values.get("x")
+        finally:
+            await factory.close_checkpointer()
+            factory._checkpointer = None
+            factory._pool = None
+            factory.app_env = orig_env
+            if orig_url is not None:
+                os.environ["DATABASE_URL"] = orig_url
+
+    try:
+        assert _run(body()) == 101
+    finally:
+        _cleanup(thread_id)
+
+
 def _cleanup(thread_id: str):
     """best-effort 清掉本次测试写入的 checkpoint 行，避免污染开发库。"""
     import psycopg
