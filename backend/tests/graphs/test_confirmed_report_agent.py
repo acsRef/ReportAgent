@@ -103,6 +103,11 @@ def test_report_agent_empty_result() -> None:
     assert answer.get("table") is None
     assert result["execution_status"] == "EMPTY"
     assert payload["execution_status"] == "EMPTY"
+    # 空结果话术：EMPTY 时 insight 写入「未找到匹配数据 + 放宽筛选条件」引导，
+    # 随 report SSE 下发并落入 report_version 历史，让用户知道这不是查询失败。
+    assert answer.get("insight") is not None
+    assert "未找到匹配数据" in answer["insight"]
+    assert "放宽筛选条件" in answer["insight"]
 
 
 def test_report_agent_no_result() -> None:

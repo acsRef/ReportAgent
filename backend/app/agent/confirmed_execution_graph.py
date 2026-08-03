@@ -305,7 +305,7 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
     elif not rows:
         status = "EMPTY"
         table = None
-        insight_text = None
+        insight_text = "未找到匹配数据。你可以尝试放宽筛选条件，比如扩大时间范围或调整关键词。"
         chart_cfg = None
     else:
         status = "SUCCESS"

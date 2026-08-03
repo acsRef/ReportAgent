@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 from typing import Literal, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -93,9 +94,19 @@ class SQLAgentState(TypedDict):
     conversation_context: Optional[str]
 
 
+# 事实表 → 维度表外键链路（单一来源）。v2 修订：抽成独立常量并同时拼进 _plan 与
+# _generate_sql——真正写 JOIN 的是 _generate_sql，必须能看到具体外键对照，不能只靠列名猜。
+_FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
+- fact_sales: date_id→dim_date, region_id→dim_region, product_id→dim_product, customer_id→dim_customer
+- fact_returns: return_date_id→dim_date, product_id→dim_product, sale_id→fact_sales
+- fact_inventory: date_id→dim_date, product_id→dim_product, warehouse_id→dim_warehouse
+- fact_attendance: date_id→dim_date, employee_id→dim_employee"""
+
 _PLAN_TABLE_HINTS = """常用表速查:
 - fact_sales(销售事实), fact_returns(退货事实), fact_inventory(库存事实), fact_attendance(考勤事实)
-- 维度表: dim_date, dim_region, dim_product, dim_customer, dim_warehouse, dim_employee"""
+- 维度表: dim_date, dim_region, dim_product, dim_customer, dim_warehouse, dim_employee
+
+""" + _FK_CHAIN_HINTS
 
 
 _PLAN_FEWSHOT = """[示例1]
@@ -109,6 +120,28 @@ _PLAN_FEWSHOT = """[示例1]
 [示例3]
 用户: "上个月退货最多的是哪个商品"
 输出: {"target_metric":"退货数","dimensions":["商品"],"filters":[{"field":"month","operator":"=","value":"上个月"}],"aggregation":"count","time_range":"上个月","clarify_decision":{"action":"run_direct","missing_dimensions":[],"predicted_table":"fact_returns","confidence":0.82,"reasoning":"时间(上个月)、商品、指标(退货)三维度均明确"}}"""
+
+
+# SQL 生成专项规则。与 _generate_sql 的 prompt 内联在规则块里；独立成常量
+# 便于测试断言 prompt 内容、也避免 f-string 把规则文本越嵌越乱。
+_SQL_GENERATION_RULES = """多表 JOIN 规则（必须逐条遵守）:
+- 多表关联优先使用 LEFT JOIN，禁止使用 RIGHT JOIN
+- FROM 后面的第一张表就是主表，其余表都是通过 JOIN 挂上来的维度表/关联表
+- JOIN 关联条件必须写在 ON 子句里，禁止把外键关联条件下沉到 WHERE
+- 维度表的过滤条件写在 ON 里（如 LEFT JOIN dim_region ON fact_sales.region_id = dim_region.region_id AND dim_region.tier = '一线'）；主表（FROM 首表）自身的过滤条件写在 WHERE
+- 有聚合函数（SUM/AVG/COUNT）时，GROUP BY 必须包含所有未聚合的查询列
+- 关联超过 3 张表时，拆成两层子查询：先在各子查询内完成单表/少表聚合，再在外层 JOIN 子查询结果；禁止在同一个 SELECT 里平铺 4 张以上表
+- 明细/非聚合查询（无 GROUP BY 且无聚合函数）默认追加 LIMIT 200，防止全表返回
+- 所有表名、列名、别名必须严格来自「可用表结构」，禁止臆造列
+
+时间维度规则:
+- 时间过滤一律通过 date_id 外键关联 dim_date 表，再对 dim_date.full_date 做区间过滤（注意 dim_date 没有 month/timestamp 列，只有 year / quarter_num / quarter / week_of_year / day_name / full_date）
+- 相对时间（今年/上月/近 7 天）与绝对时间（具体日期，如 2024-01-15）必须统一换算为左闭右开区间 [start, end)，例如整月用 full_date >= '2024-01-01' AND full_date < '2024-02-01'
+- 一个问题里同时出现相对时间和绝对时间时（如「对比 2024-01 与上月」），分别用两个带别名的子查询各算各的区间，最后 JOIN 拼接结果；禁止在同一个 WHERE 里混写两种时间逻辑
+
+数组类型规则:
+- 若目标列是数组类型（ARRAY，如标签字段），必须用 @> ARRAY['标签'] 判断包含关系，禁止用 LIKE '%标签%'（LIKE 对数组列恒为空）
+- 当前表结构中暂无数组列，遇到疑似数组字段先按上一条规则核实列类型再写"""
 
 
 @traced_node("intent_analyze")
@@ -260,7 +293,12 @@ def _plan(state: SQLAgentState) -> dict:
             f"{confirmed_requirement}\n"
         )
 
+    # v2 修订：注入当前日期——_plan 判断「今年/上月」是否可推断需要知道今天几号。
+    today = date.today().isoformat()
+
     prompt = f"""你是一个SQL规划器。任务：根据用户问题、可用表结构，一次性产出查询计划与澄清决策。
+
+当前日期: {today}
 
 用户问题: {state["user_query"]}
 {tool_hint}
@@ -346,7 +384,13 @@ def _generate_sql(state: SQLAgentState) -> dict:
         for t in schema.tables
     )
 
+    # v2 修订：注入当前日期（相对时间「今年/上月/近 N 天」换算成 [start,end) 的基准）
+    # + 外键链路（写 JOIN 的节点必须看到具体外键对照，不能只靠列名猜）。
+    today = date.today().isoformat()
+
     prompt = f"""你是一个SQL生成专家。根据查询计划生成SQL语句。
+
+当前日期: {today}
 
 查询计划:
 - 目标指标: {plan.target_metric if plan else ''}
@@ -358,6 +402,8 @@ def _generate_sql(state: SQLAgentState) -> dict:
 可用表结构:
 {schema_text}
 
+{_FK_CHAIN_HINTS}
+
 规则:
 - 数据库是 PostgreSQL，使用标准 PostgreSQL 兼容的 SQL 语法（不用 DuckDB 专属语法）
 - 不要使用 EXTRACT() 类的 DuckDB 函数做日期处理
@@ -365,7 +411,9 @@ def _generate_sql(state: SQLAgentState) -> dict:
 - 表名和列名必须严格使用上面列出的名称（注意 dim_date 没有 month 列，只有 year / quarter_num / quarter / week_of_year / day_name）
 - JOIN 条件使用外键关联（如 fact_sales.region_id = dim_region.region_id）
 - 使用中文别名（例如「销售额」「年份」）
-- 只输出纯 SQL，禁止解释，禁止 markdown 代码块"""
+- 只输出纯 SQL，禁止解释，禁止 markdown 代码块
+
+{_SQL_GENERATION_RULES}"""
 
     # Retry feedback loop: when regenerating after a failure, feed the failed
     # SQL and its error back to the LLM. Without this the retry loop is blind —
