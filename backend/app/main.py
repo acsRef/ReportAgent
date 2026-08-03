@@ -32,10 +32,12 @@ from app.agent.confirmed_execution_graph import (
     build_confirmed_execution_graph,
     ConfirmedExecutionState,
     RequirementIncompleteError,
+    SecurityRejectedError,
     SessionNotFoundError,
 )
 from app.api.templates import router as templates_router
 from app.api.observability import router as observability_router
+from app.utils.pii import mask_pii
 from app.db import get_connection, close_connection
 from app.infra.db.postgres import init_pool, close_pool
 from app.infra.checkpoint.factory import init_checkpointer, close_checkpointer
@@ -284,6 +286,10 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
     mode=adjust     → confirmed-execution (load latest draft, generate v2/v3)
     mode=legacy     → original 2-stage interrupt + chosen_tool flow
     """
+    # v2 修订：PII 脱敏——入口统一 mask，使手机号/邮箱/身份证不进 prompt/trace/
+    # conversations/report_version（对所有 mode 生效，含 legacy）。
+    request.user_query = mask_pii(request.user_query or "")
+
     # Legacy flow keeps the old behaviour for backward compatibility
     if request.mode == "legacy":
         return await _chat_legacy(request, req, user)
@@ -450,6 +456,21 @@ async def _chat_confirmed_execution(
                     "event": "report",
                     "data": json.dumps(report_payload, ensure_ascii=False, default=str),
                 }
+        except SecurityRejectedError as exc:
+            # v2 修订：confirmed/adjust 流补的安全闸命中（prompt 注入等）。
+            final_phase = "error"
+            await session_manager.update_phase(
+                session_id, "error", failed_action=request.mode,
+            )
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "code": "SECURITY_REJECTED",
+                    "message": str(exc)[:300],
+                    "recoverable": False,
+                    "failed_action": request.mode,
+                }, ensure_ascii=False),
+            }
         except RequirementIncompleteError as exc:
             final_phase = "error"
             await session_manager.update_phase(

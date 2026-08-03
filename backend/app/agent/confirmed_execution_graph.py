@@ -23,6 +23,7 @@ from app.infra.checkpoint.factory import get_checkpointer
 from app.agent.data_graph import build_data_graph
 from app.agent.sql_graph import build_sql_graph
 from app.agent.report_graph import build_report_graph
+from app.agent.security_guard import SecurityGuard
 from app.context import build_session_context
 from app.infra.db import requirement_repository, report_version_repository
 from app.infra.db.postgres import get_pool
@@ -69,7 +70,26 @@ class SessionNotFoundError(Exception):
     """Raised when the (user_id, session_id) pair is not owned by the user."""
 
 
+class SecurityRejectedError(Exception):
+    """Raised when the incoming user_query（adjust 模式即调整文本）被
+    SecurityGuard 判为高风险（prompt 注入等）。HTTP 层映射为 SECURITY_REJECTED。"""
+
+
 # --- Nodes ----------------------------------------------------------------
+
+
+@traced_node("confirmed_security_guard")
+async def _security_guard(state: ConfirmedExecutionState) -> dict:
+    """入口安全闸：对 user_query 过 SecurityGuard，拦 prompt 注入。
+
+    v2 修订：此前 confirmed/adjust 流没有任何安全闸（仅 new/supplement/legacy 过闸），
+    调整文本里的注入不被检查。mode=adjust 时 user_query 即调整文本；mode=confirm 时
+    user_query 为空串，SecurityGuard 不会误拦。命中高风险 → 抛 SecurityRejectedError。
+    """
+    result = SecurityGuard.check(state.get("user_query", "") or "")
+    if result.blocked:
+        raise SecurityRejectedError(result.reason or "检测到高风险输入")
+    return {}
 
 
 @traced_node("load_confirmed_requirement")
@@ -496,6 +516,7 @@ async def _draft_id_from_state(state: ConfirmedExecutionState) -> int:
 def build_confirmed_execution_graph():
     workflow = StateGraph(ConfirmedExecutionState)
 
+    workflow.add_node("security_guard", _security_guard)
     workflow.add_node("load_confirmed_requirement", _load_confirmed_requirement)
     workflow.add_node("sql_gate", _sql_gate)
     workflow.add_node("data_agent", _confirmed_data_agent)
@@ -503,7 +524,9 @@ def build_confirmed_execution_graph():
     workflow.add_node("report_agent", _confirmed_report_agent)
     workflow.add_node("persist_report", _persist_report)
 
-    workflow.set_entry_point("load_confirmed_requirement")
+    # v2 修订：入口先过安全闸，拦 prompt 注入后再加载需求。
+    workflow.set_entry_point("security_guard")
+    workflow.add_edge("security_guard", "load_confirmed_requirement")
     workflow.add_edge("load_confirmed_requirement", "sql_gate")
     workflow.add_edge("sql_gate", "data_agent")
     workflow.add_edge("data_agent", "sql_agent")
