@@ -54,6 +54,7 @@ metabase_data/
 # Logs
 *.log
 logs/
+.e2elogs/   # 临时 e2e 后端/mcp 调试日志（手动启动时自动生成）
 
 # OS
 .DS_Store
