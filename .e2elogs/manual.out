@@ -1,0 +1,7 @@
+1 chat 全角注入 (期望 SSE error/SECURITY_REJECTED): 200
+  body snippet: event: phase|data: {"phase": "parsing"}||event: error|data: {"code": "SECURITY_REJECTED", "message": "请求被安全规则拦截", "recoverable": false, "failed_action": "new"}||event: done|data: {"final_phase": "error"}||
+2 PATCH 卡字段注入 (期望 422): 422 {"detail":"SECURITY_REJECTED: 检测到高风险模式: ignore_previous"}
+3 observability/traces (own): 200 {"traces":[{"trace_id":"2465ceef-deb8-46a1-b55f-de823580abb8","session_id":"e2e-A","user_query":"ｉｇｎｏｒｅ all previous ins
+4 legacy 非法 chosen_tool (期望 200 SSE, 后端静默置 None): 200
+  body snippet: event: trace|data: {"step": "节点开始: security_guard", "status": "running", "detail": ""}||event: trace|data: {"step": "节点开始: _route_security", "status": "running", "detail": ""}||event: trace|data: {"step": "节点完成: _route_security", "status": "success", "detail": ""}||event: trace|data: {"ste
+5 ANALYSIS_DSN 真生效测试见 test_pg_role_least_privilege.py（已 4/4 过）
