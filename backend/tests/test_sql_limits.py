@@ -191,3 +191,62 @@ def test_validate_sql_sets_error_kind_too(monkeypatch):
     result = json.loads(sql_tools.validate_sql("SELECT"))
     assert result["valid"] is False
     assert result["error_kind"] == "syntax"
+
+
+# ── ANALYSIS_DSN 解析 + ragent_readonly 真连断言 ──────────────────────
+# docs/plans/2026-08-05-pg-role-least-privilege.md
+
+
+def test_analysis_dsn_falls_back_to_pg_dsn(monkeypatch):
+    """ANALYSIS_DSN 未设置 → 回退到 PG_DSN，向后兼容。"""
+    monkeypatch.delenv("ANALYSIS_DSN", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://only-via-dsn@host/db")
+    # 重新加载模块以触发常量重读
+    import importlib
+    import app.tools.sql_tools as sql_tools_mod
+    importlib.reload(sql_tools_mod)
+    assert sql_tools_mod._analysis_dsn() == "postgresql://only-via-dsn@host/db"
+    importlib.reload(sql_tools_mod)  # 还原
+
+
+def test_analysis_dsn_overrides_when_set(monkeypatch):
+    """ANALYSIS_DSN 优先于 DATABASE_URL——ragent_readonly 生效路径。"""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://ragent:ragent@host/db")
+    monkeypatch.setenv("ANALYSIS_DSN", "postgresql://ragent_readonly:ro@host/db")
+    import importlib
+    import app.tools.sql_tools as sql_tools_mod
+    importlib.reload(sql_tools_mod)
+    assert sql_tools_mod._analysis_dsn() == "postgresql://ragent_readonly:ro@host/db"
+    importlib.reload(sql_tools_mod)  # 还原
+
+
+def test_get_pg_conn_uses_analysis_dsn(monkeypatch):
+    """_get_pg_conn 必须走 ANALYSIS_DSN（深度防御），不直连 PG_DSN。"""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://ragent:super@host/db")
+    monkeypatch.setenv("ANALYSIS_DSN", "postgresql://ragent_readonly:ro@host/db")
+
+    captured = {}
+
+    def fake_psycopg2_connect(dsn, **kwargs):
+        captured["dsn"] = dsn
+        captured["kwargs"] = kwargs
+
+        class _Cursor:
+            def execute(self, sql): pass
+            def close(self): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        class _Conn:
+            def cursor(self, cursor_factory=None): return _Cursor()
+            def close(self): pass
+        return _Conn()
+
+    monkeypatch.setattr("app.tools.sql_tools.psycopg2.connect", fake_psycopg2_connect)
+    import importlib
+    import app.tools.sql_tools as sql_tools_mod
+    importlib.reload(sql_tools_mod)
+    conn = sql_tools_mod._get_pg_conn()
+    conn.close()
+    assert "ragent_readonly" in captured["dsn"], f"未走 ANALYSIS_DSN: {captured['dsn']}"
+    importlib.reload(sql_tools_mod)  # 还原

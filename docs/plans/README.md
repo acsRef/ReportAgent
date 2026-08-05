@@ -31,6 +31,13 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-05-security-guard-evasion-hardening.md](2026-08-05-security-guard-evasion-hardening.md) | SecurityGuard 注入变体加固：归一化前置 + 同义变形规则 | A-5 后半段：`_normalize`（NFKC + 剥零宽）+ 字符类 leet + 英文同义动词 + 中文绕过类；14 例绕过形态全拦、6 例新防误伤 + 既有面回归通过；全量 267 passed |
+| [2026-08-05-pg-role-least-privilege.md](2026-08-05-pg-role-least-privilege.md) | PG 角色最小权限化：分析路径走独立非超级用户 | setup_app_role.sql + ANALYSIS_DSN + `_get_pg_conn` 切换；ragent_readonly 真连：pg_read_file/pg_authid/app schema 全部 PG 层挡；全量 274 passed |
+
+## 已完成
+
+| Plan | 主题 | 落地 |
+|---|---|---|
 | [2026-08-04-agent-security-hardening.md](2026-08-04-agent-security-hardening.md) | Agent 侧安全加固：SQL 危险函数/表白名单、/chat IDOR、trace 用户隔离、PII 补全 | A-1~A-6 全部落地；全量 242 passed（e2e skipped）；顺带修复 WITH…SELECT 被头闸误拦；dev 库 user_id 软迁移已执行 |
 | [2026-08-03-security-injection-hardening.md](2026-08-03-security-injection-hardening.md) | 安全加固：注入规则修正 + confirmed 补闸 + PII 脱敏 | 28 安全测试全过；全量 186 passed；「以前的 prompt 都失效」可拦、正常查询无误伤 |
 | [2026-08-03-sql-prompt-rules.md](2026-08-03-sql-prompt-rules.md) | SQL prompt 规则增强：JOIN 8 条 + 时间拆分 + 数组 `@>` + 空结果话术 | v2 修订：FK 进 generate_sql + 注入当前日期 + 删附注释规则；全量 158 passed |

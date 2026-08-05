@@ -14,6 +14,16 @@ from decimal import Decimal
 
 PG_DSN = os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent")
 
+
+def _analysis_dsn() -> str:
+    """A-7 后半段（ragent 降权）：分析路径专用 DSN。
+
+    走非超级用户执行 LLM 生成的 SELECT；未配置时回退到 `PG_DSN`（向后兼容）。
+    配置见 `backend/scripts/setup_app_role.sql` 与 `ANALYSIS_DSN` 环境变量。
+    """
+    return os.getenv("ANALYSIS_DSN") or PG_DSN
+
+
 # 硬上限：单条 SQL 最多返回 5000 行；超出时通过 total_rows + truncated 字段告知 LLM。
 # 1M 行的查询不再把全部行塞进 JSON / SSE / JSONB。
 MAX_RESULT_ROWS = 5000
@@ -57,9 +67,14 @@ def _classify_psycopg2_error(exc: BaseException) -> ErrorKind:
 
 
 def _get_pg_conn():
-    """创建同步 PG 连接——带 connect_timeout 与 statement_timeout。"""
+    """创建同步 PG 连接——带 connect_timeout 与 statement_timeout。
+
+    A-7 后半段：分析路径走 `ANALYSIS_DSN`（非超级用户 ragent_readonly），
+    深度防御最后一环——即便 check_sql_safety 五重闸漏判，DB 层权限也会拒绝
+    服务端文件读写等操作。
+    """
     return psycopg2.connect(
-        PG_DSN,
+        _analysis_dsn(),
         connect_timeout=CONNECT_TIMEOUT_S,
         options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
     )
