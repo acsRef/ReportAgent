@@ -3,6 +3,9 @@
 可观测性运维闭环（见 docs/plans/2026-08-01-observability-ops.md）。
 - 全部只读，复用共享 asyncpg 池（TraceRepository 内部 get_pool）。
 - 需登录（与其他业务端点一致）。
+- A-3（docs/plans/2026-08-04-agent-security-hardening.md）：全部查询按
+  user_id 隔离——span 的 input/output 含 SQL 与查询结果，不能让任何登录
+  用户读到全量用户 trace。他人 trace_id → 404 TRACE_NOT_FOUND。
 - 不做 OpenTelemetry / 告警 / 实时流。
 """
 from __future__ import annotations
@@ -19,8 +22,8 @@ _repo = TraceRepository()
 
 @router.get("/metrics")
 async def get_metrics(user: dict = Depends(get_current_user)) -> dict:
-    """聚合运维指标：trace 总量/状态分布/成功率/耗时均值与 P95/LLM 用量。"""
-    return await _repo.get_metrics()
+    """聚合运维指标：trace 总量/状态分布/成功率/耗时均值与 P95/LLM 用量（仅本人）。"""
+    return await _repo.get_metrics(user_id=user["id"])
 
 
 @router.get("/traces")
@@ -30,17 +33,22 @@ async def list_traces(
     status: str | None = None,
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """trace 列表（按 start_time 倒序），支持分页与按 status 过滤。"""
+    """trace 列表（按 start_time 倒序，仅本人），支持分页与按 status 过滤。"""
     limit = max(1, min(limit, 200))   # 防一次性拉爆
     offset = max(0, offset)
-    traces = await _repo.list_traces(limit=limit, offset=offset, status=status)
+    traces = await _repo.list_traces(
+        user_id=user["id"], limit=limit, offset=offset, status=status,
+    )
     return {"traces": traces, "limit": limit, "offset": offset}
 
 
 @router.get("/traces/{trace_id}")
 async def get_trace_detail(trace_id: str, user: dict = Depends(get_current_user)) -> dict:
-    """trace 明细：trace 本体 + span 执行链路 + 关联的 LLM 调用。"""
-    trace = await _repo.get_trace(trace_id)
+    """trace 明细：trace 本体 + span 执行链路 + 关联的 LLM 调用。
+
+    A-3：先查归属——他人 trace 与不存在的 trace 同样 404 TRACE_NOT_FOUND。
+    """
+    trace = await _repo.get_trace(trace_id, user_id=user["id"])
     if trace is None:
         raise HTTPException(status_code=404, detail="TRACE_NOT_FOUND")
     spans = await _repo.get_spans(trace_id)

@@ -95,7 +95,7 @@ def test_execute_sql_truncates_at_5000_rows(monkeypatch):
 
     monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
 
-    result = json.loads(sql_tools.execute_sql("SELECT * FROM big"))
+    result = json.loads(sql_tools.execute_sql("SELECT * FROM fact_sales"))
     assert result["truncated"] is True
     assert result["row_count"] == 5001
     assert len(result["rows"]) == 5000
@@ -120,7 +120,7 @@ def test_execute_sql_untruncated_when_under_cap(monkeypatch):
         def close(self): pass
 
     monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
-    result = json.loads(sql_tools.execute_sql("SELECT * FROM t"))
+    result = json.loads(sql_tools.execute_sql("SELECT * FROM dim_date"))
     assert result["truncated"] is False
     assert result["row_count"] == 6
     assert len(result["rows"]) == 6
@@ -144,7 +144,10 @@ def test_execute_sql_timeout_returns_classified_error(monkeypatch):
         def close(self): pass
 
     monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
-    result = json.loads(sql_tools.execute_sql("SELECT pg_sleep(999)"))
+    # 注意：不能用 SELECT pg_sleep(...) 触发超时——A-1 危险函数黑名单会在
+    # AST 闸直接拦下（见 test_sql_safety_gate.py）。超时分类用正常业务 SQL
+    # + FakeCursor 抛 QueryCanceled 模拟。
+    result = json.loads(sql_tools.execute_sql("SELECT * FROM fact_sales"))
     assert result["error_kind"] == "timeout"
     assert result["row_count"] == 0
     assert result["rows"] == []

@@ -18,7 +18,10 @@ class MemoryManager:
     ) -> str:
         lines = []
 
-        queries = await self._query_memory.search_similar(query, top_k=top_k_queries)
+        # A-4：历史查询召回按 user_id 隔离（透传给 query_template 查询）。
+        queries = await self._query_memory.search_similar(
+            query, top_k=top_k_queries, user_id=int(user_id),
+        )
         for q in queries:
             lines.append(
                 f"[历史查询] {q['question']} → {q['sql'][:80]} "
@@ -40,8 +43,13 @@ class MemoryManager:
         sql: str,
         schema: dict | None = None,
         target_metric: str = "",
+        *,
+        user_id: int,
     ) -> int:
-        return await self._query_memory.save_query(question, sql, schema, target_metric)
+        # A-4：user_id 必传——query_template 按用户隔离，落库即带归属。
+        return await self._query_memory.save_query(
+            question, sql, schema, target_metric, user_id=user_id,
+        )
 
     async def remember_preference(
         self,

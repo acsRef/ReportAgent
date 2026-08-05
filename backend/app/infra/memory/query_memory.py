@@ -16,12 +16,17 @@ class QueryMemory:
         sql: str,
         schema: Optional[dict] = None,
         target_metric: str = "",
+        *,
+        user_id: int,
     ) -> int:
+        """A-4：query_template 按用户隔离——去重键为 (sql_text, user_id)，
+        A 的成功 SQL 不再被召回给 B。"""
         pool = get_pool()
         async with pool.acquire() as conn:
             existing = await conn.fetchrow(
-                "SELECT id, success_count FROM memory.query_template WHERE sql_text=$1",
-                sql,
+                "SELECT id, success_count FROM memory.query_template "
+                "WHERE sql_text=$1 AND user_id=$2",
+                sql, user_id,
             )
             if existing:
                 await conn.execute(
@@ -36,10 +41,11 @@ class QueryMemory:
 
             row = await conn.fetchrow(
                 """INSERT INTO memory.query_template
-                   (intent_embedding, question, sql_text, schema_context, target_metric,
+                   (user_id, intent_embedding, question, sql_text, schema_context, target_metric,
                     success_count, failure_count, access_count, verified)
-                   VALUES ($1, $2, $3, $4, $5, 1, 0, 1, FALSE)
+                   VALUES ($1, $2, $3, $4, $5, $6, 1, 0, 1, FALSE)
                    RETURNING id""",
+                user_id,
                 embedding,
                 question,
                 sql,
@@ -48,7 +54,9 @@ class QueryMemory:
             )
             return row["id"]
 
-    async def search_similar(self, question: str, top_k: int = 3) -> list[dict]:
+    async def search_similar(self, question: str, top_k: int = 3, *, user_id: int) -> list[dict]:
+        """A-4：只召回本人 query_template。历史 NULL user_id 行不再被召回
+        （安全优先，不做回填迁移）。"""
         pool = get_pool()
         embedder = get_embedder()
         embedding = await embedder.embed_or_none(question)
@@ -61,10 +69,10 @@ class QueryMemory:
                               success_count, failure_count, access_count, last_used_at,
                               GREATEST(0, 1 - (intent_embedding <=> $1::vector)) AS sem_sim
                        FROM memory.query_template
-                       WHERE intent_embedding IS NOT NULL
+                       WHERE intent_embedding IS NOT NULL AND user_id = $2
                        ORDER BY sem_sim DESC
-                       LIMIT $2""",
-                    embedding, top_k * 3,
+                       LIMIT $3""",
+                    embedding, user_id, top_k * 3,
                 )
             else:
                 keywords = [w for w in question.lower().replace(",", " ").split() if len(w) > 1]
@@ -76,10 +84,11 @@ class QueryMemory:
                               success_count, failure_count, access_count, last_used_at,
                               0.0 AS sem_sim
                        FROM memory.query_template
-                       WHERE question ILIKE ANY($1::text[]) OR sql_text ILIKE ANY($1::text[])
+                       WHERE (question ILIKE ANY($1::text[]) OR sql_text ILIKE ANY($1::text[]))
+                         AND user_id = $2
                        ORDER BY success_count DESC, last_used_at DESC
-                       LIMIT $2""",
-                    patterns, top_k * 3,
+                       LIMIT $3""",
+                    patterns, user_id, top_k * 3,
                 )
 
         ranked = []

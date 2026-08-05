@@ -26,6 +26,7 @@ from app.models.requirement import RequirementCard
 from app.agent.security_guard import SecurityGuard
 from app.tools.registry import registry
 from app.tools.__init__ import register_all_tools
+from app.utils.pii import mask_pii
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +276,8 @@ async def _run_sql_agent(state: AgentState) -> dict:
                 sql=qr.sql,
                 schema=schema.model_dump() if schema else None,
                 target_metric=ss["query_plan"].target_metric if ss.get("query_plan") else "",
+                # A-4：query_template 按用户隔离，落库带归属。
+                user_id=state.get("user_id", 0) or 0,
             )
         except Exception as exc:  # Detail D
             logger.warning("remember_query failed: %s", exc)
@@ -452,7 +455,9 @@ async def _run_report_agent(state: AgentState) -> dict:
             mm = MemoryManager()
             await mm.remember_preference(
                 user_id=state.get("user_id", 0) or 0,
-                content=insight,
+                # A-4：insight 源自查询结果，可能含库内 PII——落记忆（之后会
+                # 回注 prompt）前先过 mask_pii。
+                content=mask_pii(insight),
                 source="report_agent",
                 memory_type="insight",
                 importance=0.3,

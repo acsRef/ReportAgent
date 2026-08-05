@@ -161,6 +161,7 @@ curl -N -X POST http://localhost:8100/api/v1/chat \
 | `/api/v1/sessions/{sid}/confirm` | POST | 是 | SSE v2：执行确认图，成功出 `report`，失败出 `error` |
 | `/api/v1/sessions/{sid}/retry` | POST | 是 | 按 `last_failed_action` 恢复（清标记后委托 confirm） |
 | `/api/v1/sessions/{sid}/reports/{version}` | GET | 是 | 报告版本详情（纯 PG 读，无 LLM） |
+| `/api/v1/sessions/{sid}/reports/{version}/export.xlsx` | GET | 是 | 报告数据集 Excel 导出：全量读 `query_snapshot`（用户实际执行的数据，非 UI 预览；数据量仍受执行层 `MAX_RESULT_ROWS`=5000 约束） |
 | `/api/v1/conversations/{sid}` | GET | 是 | 会话消息明细 |
 | `/api/v1/templates` | POST/GET/PATCH/DELETE | 是 | PG 模板 CRUD |
 

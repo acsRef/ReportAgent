@@ -71,12 +71,74 @@ DANGEROUS_KEYWORDS = [
     "EXECUTE", "EXEC", "CALL", "MERGE", "LOAD",
 ]
 
+# A-1：危险函数黑名单——服务端文件读写 / 目录列举 / 大对象导入导出 / 进程操控 /
+# 配置篡改。这些函数即使是 SELECT 调用也有真实副作用（读服务器文件、杀其它会话）。
+# 精确名在小写集合里匹配；变体族（pg_sleep / pg_sleep_for / pg_sleep_until，
+# dblink / dblink_exec / dblink_connect…）走前缀匹配。
+_DANGEROUS_FUNCTIONS = {
+    "pg_read_file", "pg_read_binary_file", "pg_write_file", "pg_write_binary_file",
+    "pg_ls_dir", "pg_ls_logdir", "pg_ls_waldir", "pg_stat_file",
+    "lo_import", "lo_export", "lo_unlink", "lo_put",
+    "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf", "set_config",
+}
+_DANGEROUS_FUNCTION_PREFIXES = ("pg_sleep", "dblink")
+
+# A-1：表白名单——分析库只有 public 下的 dim_* / fact_* 星型模型表。
+# pg_catalog / information_schema / app / agent / memory / observability
+# 以及裸系统表（pg_authid 等）全部落在闸外。
+_ALLOWED_TABLE_PREFIXES = ("dim_", "fact_")
+
+
+def _check_dangerous_functions(parsed: sql_exp.Expression) -> tuple[bool, str]:
+    """A-1 闸 1：遍历 AST 全部函数节点，命中危险函数黑名单即拒。
+
+    sqlglot 把 PG 专有函数（pg_read_file / dblink 等）解析为 ``sql_exp.Anonymous``，
+    函数名在 ``.this``；已知内建函数子类取类名兜底，防止个别函数被 sqlglot
+    建模为具名类时漏检。
+    """
+    for node in parsed.find_all(sql_exp.Func):
+        if isinstance(node, sql_exp.Anonymous):
+            name = str(node.this).lower()
+        else:
+            name = type(node).__name__.lower()
+        if name in _DANGEROUS_FUNCTIONS or name.startswith(_DANGEROUS_FUNCTION_PREFIXES):
+            return False, f"禁止调用危险函数 {name}，仅支持对业务表的只读查询"
+    return True, ""
+
+
+def _check_table_whitelist(parsed: sql_exp.Expression) -> tuple[bool, str]:
+    """A-1 闸 2：只允许 public（或省略 schema）下的 dim_* / fact_* 表。
+
+    CTE 别名不是真实表，跳过；带 catalog（``db.schema.table``）一律拒绝。
+    """
+    cte_aliases = {cte.alias_or_name.lower() for cte in parsed.find_all(sql_exp.CTE)}
+    for table in parsed.find_all(sql_exp.Table):
+        name = (table.name or "").lower()
+        if not name or name in cte_aliases:
+            continue
+        if table.catalog:
+            return False, f"禁止跨 catalog 访问: {name}"
+        schema = (table.db or "").lower()
+        if schema and schema != "public":
+            return False, f"只允许查询 public schema 下的业务表，拒绝 {schema}.{name}"
+        if not name.startswith(_ALLOWED_TABLE_PREFIXES):
+            return False, f"只允许查询 dim_/fact_ 前缀的业务表，拒绝 {name}"
+    return True, ""
+
 
 def check_sql_safety(sql: str) -> tuple[bool, str]:
-    """SQL 安全检查：白名单 + 黑名单 + AST 解析三重校验。"""
+    """SQL 安全检查：SELECT-only + 关键字黑名单 + AST 五重校验。
+
+    校验链：(1) 顶层必须是 SELECT（允许 WITH…SELECT 的 CTE 写法）；
+    (2) DDL/DML 关键字黑名单；(3) sqlglot AST 顶层节点必须是 Select；
+    (4) 危险函数黑名单（A-1 闸 1）；(5) dim_/fact_ 表白名单（A-1 闸 2）。
+    任一失败返回 (False, 原因)。
+    """
     sql_upper = sql.strip().upper()
 
-    if not sql_upper.startswith("SELECT"):
+    # WITH 前缀放行给 CTE 写法；`WITH x AS (…) INSERT/UPDATE…` 会先撞关键字
+    # 黑名单，剩下的由 AST「顶层必须是 Select」兜底。
+    if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
         return False, "只允许 SELECT 查询语句"
 
     tokens = set(sql_upper.replace("(", " ").replace(")", " ").replace(";", " ").split())
@@ -92,6 +154,14 @@ def check_sql_safety(sql: str) -> tuple[bool, str]:
     except Exception as e:
         return False, f"SQL 语法解析失败: {e}"
 
+    # A-1 两道 AST 闸：危险函数黑名单 + 表白名单（复用同一个 parsed 对象）
+    ok, msg = _check_dangerous_functions(parsed)
+    if not ok:
+        return False, msg
+    ok, msg = _check_table_whitelist(parsed)
+    if not ok:
+        return False, msg
+
     return True, ""
 
 
@@ -99,7 +169,8 @@ def validate_sql(sql: str) -> str:
     """三重校验 SQL 语法和安全性，不执行查询。
     用途：每次 execute_sql 前的安全检查。必须校验通过后才能执行。
     校验链：(1) 黑名单检查（禁止 INSERT/UPDATE/DELETE/DROP 等 DDL/DML）
-           (2) AST 解析（sqlglot 验证是标准 SELECT）
+           (2) AST 解析（sqlglot 验证是标准 SELECT；危险函数黑名单；
+               只允许 public 下 dim_/fact_ 前缀的业务表）
            (3) EXPLAIN 执行（在实际 PG 连接上跑 EXPLAIN 捕获语法错误）
     输入：sql（要校验的 SQL 文本）
     输出：{"valid": bool, "error": string}

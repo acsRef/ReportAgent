@@ -131,8 +131,11 @@ Important root `.env` variables:
 | `DATABASE_URL` | `postgresql://ragent:ragent@localhost:5432/ragent` |
 | `JWT_SECRET` | Development fallback exists; set explicitly outside local development |
 | `DEFAULT_USERNAME` / `DEFAULT_PASSWORD` | `admin` / `admin123` |
+| `APP_ENV` | `development` / `staging` / `production`; **fail-closed: unset means `production`** |
+| `ALLOW_INSECURE_DEFAULT_AUTH` | `1` bypasses the auth gate, **only honored when `APP_ENV=development`** |
+| `MEM0_ENABLED` | Optional mem0-based L3 fact extraction (default `false` → pure LLM extraction) |
 
-Startup initializes the async PostgreSQL pool, creates the default user if missing, checks embedding dimensions, and compiles the graphs. Embedding failures degrade memory search to keyword matching rather than blocking startup.
+Startup runs the **fail-closed auth gate** ([backend/app/infra/auth/startup_guard.py](backend/app/infra/auth/startup_guard.py)) before anything else: in non-dev environments it refuses to boot when `JWT_SECRET` is missing / equals the public dev default / is shorter than 32 chars, or when `DEFAULT_PASSWORD` is still `admin123` (even for an already-existing admin row). Local development therefore needs `APP_ENV=development` + `ALLOW_INSECURE_DEFAULT_AUTH=1` in `.env`. After the gate, startup initializes the async PostgreSQL pool, creates the default user if missing, checks embedding dimensions, and compiles the graphs. Embedding failures degrade memory search to keyword matching rather than blocking startup.
 
 ## Architecture
 
@@ -149,13 +152,38 @@ Startup initializes the async PostgreSQL pool, creates the default user if missi
 `POST /api/v1/chat` accepts `mode: new | supplement | adjust | legacy` and streams SSE v2. The two-graph split:
 
 1. **Requirement analysis** — [backend/app/agent/requirement_analysis_graph.py](backend/app/agent/requirement_analysis_graph.py) exposes only schema tools (`search_tables`, `get_table_ddl`, `list_tables`); SQL/Report tools are unreachable (pinned by `tests/graphs/test_requirement_analysis_sqlgate.py`). It produces a `RequirementCard` (shared contract: [backend/app/models/requirement.py](backend/app/models/requirement.py) ↔ [frontend/src/types/requirement.ts](frontend/src/types/requirement.ts), parity enforced by `tests/contracts/test_requirement_card_mirror.py`).
-2. **Confirmed execution** — `PATCH /api/v1/sessions/{sid}/requirement` normalizes the card server-side (fills `selected_value` into structured fields, recomputes `status`). `POST /api/v1/sessions/{sid}/confirm` runs [backend/app/agent/confirmed_execution_graph.py](backend/app/agent/confirmed_execution_graph.py): gate (`status == 'complete'`, no missing fields, assumptions resolved, owner check) → lock draft → schema → `sql_agent` (reuses `sql_graph`: plan → generate → validate → execute) → `report_agent` → `persist_report`.
+2. **Confirmed execution** — `PATCH /api/v1/sessions/{sid}/requirement` normalizes the card server-side (fills `selected_value` into structured fields, recomputes `status`). `POST /api/v1/sessions/{sid}/confirm` runs [backend/app/agent/confirmed_execution_graph.py](backend/app/agent/confirmed_execution_graph.py): `security_guard` entry node (injection check on adjust text; raises `SecurityRejectedError` → SSE `SECURITY_REJECTED`) → gate (`status == 'complete'`, no missing fields, assumptions resolved, owner check) → lock draft → schema → `sql_agent` (reuses `sql_graph`: plan → generate → validate → execute → evaluate → build_output) → `report_agent` → `persist_report`. Recoverable failures stamp `session.last_failed_action` and resume via `POST /api/v1/sessions/{sid}/retry` (clears the flag, delegates back to confirm).
 
 Key semantics:
 
-- **FAILED never fakes success**: `report_agent` builds `answer.table` from real rows and sets `execution_status=FAILED` when there are none; a conditional edge then **skips `persist_report`**, so `main.py` emits an SSE `error` event (`{code, message, recoverable, failed_action}`) and stamps `session.phase='error'` + `last_failed_action='confirm'` instead of writing a hollow report.
-- **SQL generation hardening** ([backend/app/utils/text.py](backend/app/utils/text.py)): reasoning models emit `
-</think>
+- **Three-state verdict, never faking success**: SQL execution resolves to `SUCCESS` / `EMPTY` (legitimate zero rows) / `FAILED` (execution error) in the report node. **All three persist an append-only row** into `agent.report_version` — `persist_confirmed_run` / `persist_adjust_run`, `persist_empty_run`, `persist_error_run` in [backend/app/services/report_version_service.py](backend/app/services/report_version_service.py) — so version history keeps failed/empty attempts for traceback. FAILED/EMPTY surface through the SSE `report`/`error` events with `error_kind` + the attempted SQL; the front-end ErrorCard branches on kind and ReportPaper renders a "未找到匹配记录" band for EMPTY instead of a fake table.
+- **SQL generation hardening** ([backend/app/utils/text.py](backend/app/utils/text.py)): reasoning models wrap output in think blocks, which `strip_think` removes before `extract_sql` strips markdown fences, anchors on the first `SELECT`, and **truncates at the first `;`** — keeping only the first statement kills both `SELECT…; DELETE…`-style injection tails and `sqlglot.parse_one` parse failures. `safe_json_parse` / `extract_json_from_llm` tolerate prose around structured output. Validation failures (blacklist → `sqlglot` AST must be a `Select` → `EXPLAIN` against the real schema) feed the rejected SQL **plus the error message** back into the regeneration prompt — retries are not blind.
+- **Input guardrails**: every entry point passes the `SecurityGuard` regex gate (score ≥ 3 → block) — requirement-analysis routing, the confirmed graph's `security_guard` entry node (`SecurityRejectedError` → SSE `SECURITY_REJECTED`, `recoverable=false`), and the legacy graph node. `mask_pii` ([backend/app/utils/pii.py](backend/app/utils/pii.py)) masks phone/email/ID numbers in `user_query` before any graph, prompt, trace, or persistence layer sees it.
+- **SQL generation prompt rules** ([backend/app/agent/sql_graph.py](backend/app/agent/sql_graph.py)): `_plan` / `_generate_sql` prompts inject `_FK_CHAIN_HINTS` (fact → dim foreign-key chains), `_SQL_GENERATION_RULES` (LEFT JOIN preferred, GROUP BY completeness, detail `LIMIT 200`, half-open time intervals via `dim_date`, `@>` for array columns), and `date.today()` so relative time expressions resolve; prompt-content assertions pin this in `tests/graphs/test_sql_generation.py`. Execution wraps the SQL in a CTE capped at `MAX_RESULT_ROWS` = 5000 and reports `total_rows` + `truncated`.
+- **Scope and identity**: requirement analysis is read-only by construction (schema tools only); every session endpoint (`/chat` included, v2 and legacy alike) is owner-checked (404 `SESSION_NOT_FOUND` otherwise), and persistence writes are scoped by `(user_id, session_id)` from the JWT context, never from the request body. Traces and `query_template` are per-user isolated (legacy NULL-owner rows are invisible to everyone); `check_sql_safety` enforces a dangerous-function blacklist plus a `dim_`/`fact_` table allowlist on top of the SELECT-only + AST gates; PATCH card fields pass both `mask_pii` and the `SecurityGuard`. Full audit trail: [docs/plans/2026-08-04-agent-security-hardening.md](docs/plans/2026-08-04-agent-security-hardening.md).
+
+### Memory and conversation context
+
+Multi-turn coherence ("先问 2024 华东趋势，再说『再按产品细分』") comes from four layers in [backend/app/context.py](backend/app/context.py):
+
+- **L1 raw** — the last 10 messages kept verbatim.
+- **L2 narrative digest** — `agent.session.digest` (≤800 chars), **rewritten in place** on compression, never appended; deliberately holds no field names or values.
+- **L2.5 long-term archive** — `mid_digest` (≤400 chars), archived every 5 digest rewrites.
+- **L3 structured facts** — field mappings / calculation semantics / user preferences extracted into `memory.semantic_entry`; precise attributes never pass through lossy summarization.
+
+Field types cannot drift under compression because they always come from live schema tools (`get_table_ddl` / `search_tables`), never from memory. Recall ([backend/app/infra/memory/](backend/app/infra/memory/)) is pgvector semantic search scored `0.6×similarity + 0.2×importance + 0.1×LFU + 0.1×LRU`, with a per-user capacity cap (default 200) evicting the coldest entries; embedding failures degrade to keyword matching. `MEM0_ENABLED=true` swaps the L3 extractor to mem0 — extraction only, recall always stays pgvector.
+
+### Checkpoint persistence
+
+[backend/app/infra/checkpoint/factory.py](backend/app/infra/checkpoint/factory.py) selects by environment: `APP_ENV=development` → `MemorySaver` (local step-through); anything else (unset `APP_ENV` fails closed to production) → a process-wide `AsyncPostgresSaver` singleton, so checkpoints survive restarts and multi-instance deploys.
+
+### Observability
+
+Traces, spans, and LLM calls land in the `observability` schema through the shared `asyncpg` pool ([backend/app/infra/trace/repository.py](backend/app/infra/trace/repository.py) — no separate connection). [backend/app/api/observability.py](backend/app/api/observability.py) exposes the metrics and trace-visualization reads used by the ops surface.
+
+### Frontend
+
+React 19 + Vite + TypeScript + Zustand/immer. **antd is fully removed** — UI is the in-house `components/atelier/` kit plus hand-drawn SVG icons (`components/ui/Icons.tsx`); visual tokens live only in `src/styles/tokens.css` (no hardcoded hex elsewhere). `analysisReducer` is the **single writer of `phase`** — components dispatch discriminated-union actions only; `api/confirmStream.ts` is the confirm/retry SSE client. The workbench follows the approved prototype `docs/intelligent-analysis-workbench.html` 1:1, and report content renders strictly from real payloads — never fabricated demo data.
 
 ## Planning Discipline
 

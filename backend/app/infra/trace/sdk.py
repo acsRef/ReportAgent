@@ -34,14 +34,17 @@ def current_tracer() -> Optional["Tracer"]:
 class Tracer:
     """Accumulates trace/spans in memory; caller must await flush() at the end."""
 
-    def __init__(self, trace_id: str, session_id: Optional[str] = None, user_query: Optional[str] = None):
+    def __init__(self, trace_id: str, session_id: Optional[str] = None,
+                 user_query: Optional[str] = None, user_id: Optional[int] = None):
         self.trace_id = trace_id
         self.session_id = session_id
         self.user_query = user_query
+        self.user_id = user_id
         self._start_time = datetime.now()
         self._trace = Trace(
             trace_id=trace_id,
             session_id=session_id,
+            user_id=user_id,
             user_query=user_query,
             status="RUNNING",
             start_time=self._start_time,
@@ -49,6 +52,21 @@ class Tracer:
         self._spans: list[Span] = []
         self._llm_calls: list[LLMCall] = []
         self._stack: list[Span] = []
+
+    def backfill_identity(self, session_id: Optional[str] = None,
+                          user_query: Optional[str] = None,
+                          user_id: Optional[int] = None) -> None:
+        """A-3：tracer 可能先被 traced_node 无主创建（只有 trace_id），
+        main.py 的四个 trace 起点随后 priming 时把身份补齐。只补不覆盖。"""
+        if session_id is not None and self.session_id is None:
+            self.session_id = session_id
+            self._trace.session_id = session_id
+        if user_query is not None and self.user_query is None:
+            self.user_query = user_query
+            self._trace.user_query = user_query
+        if user_id is not None and self.user_id is None:
+            self.user_id = user_id
+            self._trace.user_id = user_id
 
     def start(self):
         pass
@@ -124,9 +142,13 @@ class Tracer:
 
 
 def get_tracer(trace_id: str, session_id: Optional[str] = None,
-               user_query: Optional[str] = None) -> Tracer:
+               user_query: Optional[str] = None,
+               user_id: Optional[int] = None) -> Tracer:
     if trace_id not in _local:
-        _local[trace_id] = Tracer(trace_id, session_id, user_query)
+        _local[trace_id] = Tracer(trace_id, session_id, user_query, user_id=user_id)
+    else:
+        # A-3：已存在则回填——traced_node 先建的无主 tracer 在 priming 时补齐身份。
+        _local[trace_id].backfill_identity(session_id, user_query, user_id)
     return _local[trace_id]
 
 

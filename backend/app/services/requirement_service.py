@@ -14,10 +14,76 @@ from app.infra.db import requirement_repository
 from app.infra.db.requirement_repository import LockError
 from app.infra.db.postgres import get_pool
 from app.models.requirement import RequirementCard, RequirementMissingField
+from app.utils.pii import mask_pii
+
+# A-4/A-5：卡里所有用户可控的文本字段——脱敏与安全闸共用这份清单。
+_CARD_TEXT_FIELDS = ("summary", "time_range")
+_CARD_LIST_FIELDS = ("scope", "target_metrics", "dimensions", "analysis_methods")
 
 
 class RequirementLockedError(Exception):
     """The draft is already locked; no further modifications allowed."""
+
+
+def _mask_value(value: Any) -> Any:
+    """对 str / list[str] 形态的字段值做 PII 脱敏，其它形态原样返回。"""
+    if isinstance(value, str):
+        return mask_pii(value)
+    if isinstance(value, list):
+        return [mask_pii(v) if isinstance(v, str) else v for v in value]
+    return value
+
+
+def _mask_card_pii(card_dict: dict) -> dict:
+    """A-4：卡字段 PII 脱敏——chat 入口只 mask 了 user_query，PATCH 卡字段
+    是遗漏的盲区（scope/assumption.text 等会原样注入 SQL 生成 prompt）。
+
+    纯函数：不改入参，返回新 dict。覆盖 summary / time_range / scope /
+    target_metrics / dimensions / analysis_methods / assumptions.text /
+    missing_fields.selected_value。
+    """
+    masked = dict(card_dict)
+    for key in _CARD_TEXT_FIELDS + _CARD_LIST_FIELDS:
+        if key in masked:
+            masked[key] = _mask_value(masked[key])
+    masked["assumptions"] = [
+        ({**a, "text": mask_pii(a.get("text", ""))} if isinstance(a, dict) else a)
+        for a in masked.get("assumptions", [])
+    ]
+    masked["missing_fields"] = [
+        ({**mf, "selected_value": _mask_value(mf.get("selected_value"))}
+         if isinstance(mf, dict) else mf)
+        for mf in masked.get("missing_fields", [])
+    ]
+    return masked
+
+
+def card_guard_text(card_dict: dict) -> str:
+    """A-5：拼接卡里全部用户可控文本字段，供 SecurityGuard.check。
+
+    与 _mask_card_pii 共用字段清单——确保闸覆盖的面与脱敏面一致。
+    """
+    parts: list[str] = []
+    for key in _CARD_TEXT_FIELDS:
+        value = card_dict.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    for key in _CARD_LIST_FIELDS:
+        value = card_dict.get(key)
+        if isinstance(value, list):
+            parts.extend(v for v in value if isinstance(v, str))
+    for a in card_dict.get("assumptions", []):
+        if isinstance(a, dict) and isinstance(a.get("text"), str):
+            parts.append(a["text"])
+    for mf in card_dict.get("missing_fields", []):
+        if not isinstance(mf, dict):
+            continue
+        sel = mf.get("selected_value")
+        if isinstance(sel, str):
+            parts.append(sel)
+        elif isinstance(sel, list):
+            parts.extend(v for v in sel if isinstance(v, str))
+    return "\n".join(parts)
 
 
 async def patch_requirement(
@@ -38,8 +104,11 @@ async def patch_requirement(
     5. Update `agent.session.latest_requirement_draft_id` + current_phase.
     6. Persist a conversation pointer (`message_type='requirement_patch'`).
     """
+    # A-4：卡字段 PII 脱敏——在任何落库/进 prompt 之前。selected_value 会在
+    # Step 1 合入结构化字段，所以必须先脱敏再合并。
+    card_dict = _mask_card_pii(incoming.model_dump(mode="json"))
+
     # Step 1: apply selected_value → structured fields, drop filled ones.
-    card_dict = incoming.model_dump(mode="json")
     remaining_missing: list[dict] = []
     for mf in card_dict.get("missing_fields", []):
         sel = mf.get("selected_value")

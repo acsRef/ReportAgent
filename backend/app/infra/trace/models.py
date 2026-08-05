@@ -33,6 +33,9 @@ class LLMCall(BaseModel):
 class Trace(BaseModel):
     trace_id: str
     session_id: Optional[str] = None
+    # A-3：trace 归属。observability 只读查询一律按 user_id 过滤，
+    # NULL（历史无主行）对所有人不可见。
+    user_id: Optional[int] = None
     user_query: Optional[str] = None
     status: str = "RUNNING"
     start_time: Optional[datetime] = None

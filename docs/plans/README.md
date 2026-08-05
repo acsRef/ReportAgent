@@ -31,6 +31,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-04-agent-security-hardening.md](2026-08-04-agent-security-hardening.md) | Agent 侧安全加固：SQL 危险函数/表白名单、/chat IDOR、trace 用户隔离、PII 补全 | A-1~A-6 全部落地；全量 242 passed（e2e skipped）；顺带修复 WITH…SELECT 被头闸误拦；dev 库 user_id 软迁移已执行 |
 | [2026-08-03-security-injection-hardening.md](2026-08-03-security-injection-hardening.md) | 安全加固：注入规则修正 + confirmed 补闸 + PII 脱敏 | 28 安全测试全过；全量 186 passed；「以前的 prompt 都失效」可拦、正常查询无误伤 |
 | [2026-08-03-sql-prompt-rules.md](2026-08-03-sql-prompt-rules.md) | SQL prompt 规则增强：JOIN 8 条 + 时间拆分 + 数组 `@>` + 空结果话术 | v2 修订：FK 进 generate_sql + 注入当前日期 + 删附注释规则；全量 158 passed |
 | [2026-08-01-observability-ops.md](2026-08-01-observability-ops.md) | 可观测性运维闭环：指标 + trace 可视化 + agent 执行链路明细 | 后端 150 / 前端 245 passed；冒烟验证观测端点 |

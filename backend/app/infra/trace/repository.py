@@ -14,9 +14,9 @@ class TraceRepository:
         async with pool.acquire() as conn:
             await conn.execute(
                 """INSERT INTO observability.agent_trace
-                   (trace_id, session_id, user_query, status, start_time, end_time, total_duration_ms)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                trace.trace_id, trace.session_id, trace.user_query,
+                   (trace_id, session_id, user_id, user_query, status, start_time, end_time, total_duration_ms)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                trace.trace_id, trace.session_id, trace.user_id, trace.user_query,
                 trace.status, trace.start_time, trace.end_time, trace.total_duration_ms,
             )
 
@@ -72,8 +72,11 @@ class TraceRepository:
         }
 
     async def list_traces(
-        self, limit: int = 50, offset: int = 0, status: Optional[str] = None,
+        self, *, user_id: int, limit: int = 50, offset: int = 0,
+        status: Optional[str] = None,
     ) -> list[dict]:
+        """A-3：一律按 user_id 过滤——他人 trace 不可见，
+        历史无主行（user_id IS NULL）对所有人不可见。"""
         pool = get_pool()
         async with pool.acquire() as conn:
             if status:
@@ -81,30 +84,33 @@ class TraceRepository:
                     """SELECT trace_id, session_id, user_query, status,
                               start_time, end_time, total_duration_ms
                        FROM observability.agent_trace
-                       WHERE status = $1
+                       WHERE user_id = $1 AND status = $2
                        ORDER BY start_time DESC NULLS LAST
-                       LIMIT $2 OFFSET $3""",
-                    status, limit, offset,
+                       LIMIT $3 OFFSET $4""",
+                    user_id, status, limit, offset,
                 )
             else:
                 rows = await conn.fetch(
                     """SELECT trace_id, session_id, user_query, status,
                               start_time, end_time, total_duration_ms
                        FROM observability.agent_trace
+                       WHERE user_id = $1
                        ORDER BY start_time DESC NULLS LAST
-                       LIMIT $1 OFFSET $2""",
-                    limit, offset,
+                       LIMIT $2 OFFSET $3""",
+                    user_id, limit, offset,
                 )
             return [self._trace_row(r) for r in rows]
 
-    async def get_trace(self, trace_id: str) -> Optional[dict]:
+    async def get_trace(self, trace_id: str, *, user_id: int) -> Optional[dict]:
+        """A-3：归属校验内置于查询——他人 trace_id 返回 None（API 层转 404）。"""
         pool = get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """SELECT trace_id, session_id, user_query, status,
                           start_time, end_time, total_duration_ms
-                   FROM observability.agent_trace WHERE trace_id = $1""",
-                trace_id,
+                   FROM observability.agent_trace
+                   WHERE trace_id = $1 AND user_id = $2""",
+                trace_id, user_id,
             )
             return self._trace_row(row) if row else None
 
@@ -156,8 +162,12 @@ class TraceRepository:
                 for r in rows
             ]
 
-    async def get_metrics(self) -> dict:
-        """聚合运维指标：trace 总量/状态分布/成功率/耗时均值与 P95/LLM 用量。"""
+    async def get_metrics(self, *, user_id: int) -> dict:
+        """聚合运维指标：trace 总量/状态分布/成功率/耗时均值与 P95/LLM 用量。
+
+        A-3：全部按 user_id 过滤；llm_call 本身无 user_id 列，经
+        span JOIN trace 间接归属。
+        """
         pool = get_pool()
         async with pool.acquire() as conn:
             trace_stats = await conn.fetchrow(
@@ -165,16 +175,24 @@ class TraceRepository:
                           avg(total_duration_ms) AS avg_duration,
                           percentile_cont(0.95) WITHIN GROUP
                             (ORDER BY total_duration_ms) AS p95_duration
-                   FROM observability.agent_trace"""
+                   FROM observability.agent_trace
+                   WHERE user_id = $1""",
+                user_id,
             )
             status_rows = await conn.fetch(
-                "SELECT status, count(*) AS n FROM observability.agent_trace GROUP BY status"
+                """SELECT status, count(*) AS n FROM observability.agent_trace
+                   WHERE user_id = $1 GROUP BY status""",
+                user_id,
             )
             llm_stats = await conn.fetchrow(
                 """SELECT count(*) AS total,
-                          sum(COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0)) AS tokens,
-                          avg(latency_ms) AS avg_latency
-                   FROM observability.llm_call"""
+                          sum(COALESCE(lc.prompt_tokens, 0) + COALESCE(lc.completion_tokens, 0)) AS tokens,
+                          avg(lc.latency_ms) AS avg_latency
+                   FROM observability.llm_call lc
+                   JOIN observability.agent_trace_span s ON s.span_id = lc.span_id
+                   JOIN observability.agent_trace t ON t.trace_id = s.trace_id
+                   WHERE t.user_id = $1""",
+                user_id,
             )
         total = trace_stats["total"] or 0
         status_breakdown = {r["status"]: r["n"] for r in status_rows}

@@ -35,6 +35,7 @@ from app.agent.confirmed_execution_graph import (
     SecurityRejectedError,
     SessionNotFoundError,
 )
+from app.agent.security_guard import SecurityGuard
 from app.api.templates import router as templates_router
 from app.api.observability import router as observability_router
 from app.utils.pii import mask_pii
@@ -277,6 +278,23 @@ async def get_conversation(session_id: str, user: dict = Depends(get_current_use
     return {"messages": messages}
 
 
+async def _require_session_owner(session_id: str | None, user_id: int) -> None:
+    """A-2：/chat 入口的会话归属校验，堵 resume 他人会话的 IDOR。
+
+    三分支：
+    - session_id 为空或会话不存在 → 放行（新会话合法创建）；
+    - 会话存在且 user_id 匹配 → 放行；
+    - 会话存在但属于他人 → 404 SESSION_NOT_FOUND，与 PATCH/confirm/retry 端点一致。
+
+    在 SSE 流开始前抛出，前端收到标准 HTTP 404（而不是流内 error 事件）。
+    """
+    if not session_id:
+        return
+    sess = await session_manager.get_session(session_id)
+    if sess is not None and sess.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
+
+
 @app.post("/api/v1/chat")
 async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_current_user)):
     """Conversational Workbench v2 entry.
@@ -289,6 +307,10 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
     # v2 修订：PII 脱敏——入口统一 mask，使手机号/邮箱/身份证不进 prompt/trace/
     # conversations/report_version（对所有 mode 生效，含 legacy）。
     request.user_query = mask_pii(request.user_query or "")
+
+    # A-2：v2 与 legacy 共用本入口，mode 分发前统一校验会话归属，
+    # 防止 resume 他人 legacy checkpoint / 写他人会话（IDOR）。
+    await _require_session_owner(request.session_id, user["id"])
 
     # Legacy flow keeps the old behaviour for backward compatibility
     if request.mode == "legacy":
@@ -327,6 +349,9 @@ async def _chat_requirement_analysis(
 ):
     """SSE stream for requirement-analysis mode."""
     trace_id = str(uuid.uuid4())
+    # A-3：trace 起点抢占创建带身份的 tracer，避免 traced_node 先建出无主 tracer。
+    get_tracer(trace_id, session_id=session_id, user_id=user["id"],
+               user_query=request.user_query)
     graph = build_requirement_analysis_graph()
     config = {"configurable": {"thread_id": session_id}}
 
@@ -412,6 +437,9 @@ async def _chat_confirmed_execution(
 ):
     """SSE stream for confirmed-execution (mode=adjust)."""
     trace_id = str(uuid.uuid4())
+    # A-3：trace 起点抢占创建带身份的 tracer（user_query 即调整文本）。
+    get_tracer(trace_id, session_id=session_id, user_id=user["id"],
+               user_query=request.user_query)
     graph = build_confirmed_execution_graph()
     config = {"configurable": {"thread_id": session_id}}
 
@@ -533,6 +561,14 @@ async def _chat_confirmed_execution(
     return EventSourceResponse(event_generator())
 
 
+# A-6：chosen_tool 后端白名单——与 IntentOption.tool 的 5 个 Literal 值一致。
+# chosen_tool 从 body 直取，此前无校验（当前仅作 _plan 的 prompt hint）。
+_VALID_CHOSEN_TOOLS = frozenset({
+    "group_compare", "trend_analysis", "detect_anomaly",
+    "chart_advisor", "insight_analyst",
+})
+
+
 async def _chat_legacy(
     request: ChatRequest,
     req: Request,
@@ -566,6 +602,9 @@ async def _chat_legacy(
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         trace_id = str(uuid.uuid4())
+        # A-3：legacy trace 起点同样 priming 身份。
+        get_tracer(trace_id, session_id=session_id, user_id=user["id"],
+                   user_query=request.user_query)
         report_result = None
         error_result = None
         clarify_result = None
@@ -600,6 +639,15 @@ async def _chat_legacy(
                 "pending_card": None,
                 "cards": [],
             } if is_new else None
+
+            # A-6：非法 chosen_tool 记 warning 并置 None（回退 stage-1 intent
+            # card）。防御纵深，不 4xx——不改变前端契约。
+            if request.chosen_tool and request.chosen_tool not in _VALID_CHOSEN_TOOLS:
+                logger.warning(
+                    "unknown chosen_tool=%r rejected; falling back to intent card",
+                    request.chosen_tool,
+                )
+                request.chosen_tool = None
 
             # If the user already chose an intent tool (round-2 of the
             # intent_card flow), inject it into the LangGraph state before
@@ -842,6 +890,18 @@ async def patch_requirement(
     sess = await session_manager.get_session(session_id)
     if sess is None or sess.get("user_id") != user["id"]:
         raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
+
+    # A-5：卡字段过 SecurityGuard——PATCH 字段是 new/supplement/legacy 入口闸
+    # 从未覆盖的盲区，注入在这里提前拦截（confirm 流的 SQL 层另有 A-1 兜底）。
+    guard_result = SecurityGuard.check(requirement_service.card_guard_text(
+        payload.requirement.model_dump(mode="json"),
+    ))
+    if guard_result.blocked:
+        raise HTTPException(
+            status_code=422,
+            detail=f"SECURITY_REJECTED: {guard_result.reason}",
+        )
+
     try:
         saved = await requirement_service.patch_requirement(
             session_id=session_id,
@@ -865,6 +925,9 @@ async def confirm_session(
         raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
 
     trace_id = str(uuid.uuid4())
+    # A-3：trace 起点抢占创建带身份的 tracer。confirm 流 user_query 为空串
+    # （A-5 的卡字段闸在 PATCH 端点，SQL 层由 A-1 兜底）。
+    get_tracer(trace_id, session_id=session_id, user_id=user["id"], user_query="")
     graph = build_confirmed_execution_graph()
     config = {"configurable": {"thread_id": session_id}}
 

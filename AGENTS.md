@@ -1,4 +1,12 @@
+# AGENTS.md
+
+This file provides guidance to Qoder (qoder.com) when working with code in this repository.
+
 # ReportAgent — Agent Instructions
+
+## Communication
+
+Always reply to the user in **Chinese (中文)**. Keep code, file paths, type/function names, error codes, commands, and SQL fragments in their original form — never translate them.
 
 ## Startup Order (CRITICAL)
 
@@ -20,7 +28,7 @@ User ←SSE→ React+Vite (:3000) → proxy /api → FastAPI+LangGraph (:8100)
 
 **PostgreSQL schemas:** `public` (6 dim + 4 fact tables via `seed_pg.sql`, data 2020–2024), `app` (users, conversations, templates), `agent` (session, requirement_draft, report_version append-only), `memory` (query_template VECTOR(1536), semantic_entry), `observability` (trace spans, LLM calls).
 
-**Two graphs (v2 active path):** `requirement_analysis_graph` exposes ONLY schema tools (`search_tables`/`get_table_ddl`/`list_tables`) and produces a `RequirementCard`; `confirmed_execution_graph` gates (status=complete, no missing fields, assumptions resolved, owner check) → locks draft → schema → sql_agent (plan→generate→validate(EXPLAIN)→execute) → report_agent → persist_report. Legacy single graph (`parent_graph.py`, `mode=legacy`) kept for one compat cycle.
+**Two graphs (v2 active path):** `requirement_analysis_graph` exposes ONLY schema tools (`search_tables`/`get_table_ddl`/`list_tables`) and produces a `RequirementCard`; `confirmed_execution_graph` starts with a `security_guard` entry node (injection check; `SecurityRejectedError` → SSE `SECURITY_REJECTED`), then gates (status=complete, no missing fields, assumptions resolved, owner check) → locks draft → schema → sql_agent (plan→generate→validate(EXPLAIN)→execute→evaluate→build_output) → report_agent → persist_report (three-state persist: SUCCESS/EMPTY/FAILED all write a row). Legacy single graph (`parent_graph.py`, `mode=legacy`) kept for one compat cycle.
 
 ## Setup & Environment
 
@@ -119,7 +127,8 @@ curl http://localhost:8100/health
 | `error` | `{code, message, recoverable, failed_action}` |
 | `done` | `{final_phase}` |
 
-**v2 flow:** `POST /api/v1/chat` with `mode: new|supplement` → `phase` → `requirement` → PATCH requirement → `POST /confirm` → `phase: generating` → `report` → `done`.
+**v2 flow:** `POST /api/v1/chat` with `mode: new|supplement` → `phase` → `requirement` → PATCH requirement → `POST /confirm` → `phase: generating` → `report` → `done`. Recoverable failures emit SSE `error` and can be resumed via `POST /api/v1/sessions/{sid}/retry` (clears `last_failed_action` flag, delegates to confirm).
+**FAILED never fakes success:** SQL execution has three states `SUCCESS` / `EMPTY` / `FAILED`, and **all three persist to append-only `agent.report_version`** (`persist_confirmed_run`/`persist_adjust_run`, `persist_empty_run`, `persist_error_run`). FAILED/EMPTY rows carry `error_kind` + the attempted SQL so the front-end ErrorCard/ReportPaper renders the error or empty band; recoverable failures stamp `session.last_failed_action` and resume via `POST /api/v1/sessions/{sid}/retry`.
 **Legacy flow:** `mode=legacy` → `intent_card` → user picks tool → `chosen_tool` in next request → SQL/report → `report` → `done`.
 
 ## Agent Graph (Legacy)
@@ -134,11 +143,18 @@ User Query → security_guard (score ≥ 3 → block)
 
 - `clarify` is the only node calling `interrupt()`. SubGraphs run via `.ainvoke()` (not LangGraph sub-graphs). Checkpoint saves Parent State only. `original_query` frozen; `current_query` enhanced with clarification context.
 
-## SQL Safety (3 Layers)
+## SQL Safety
 
-1. Blacklist: reject non-SELECT (DDL/DML keywords)
-2. AST: `sqlglot` verifies parsed result is `Select`
-3. EXPLAIN: run `EXPLAIN <sql>` before execution
+`check_sql_safety` → EXPLAIN chain (called by `validate_sql` before every execution):
+
+1. SELECT-only (CTE `WITH…SELECT` allowed; `WITH…INSERT` dies at layer 2/3)
+2. Keyword blacklist: DDL/DML (INSERT/UPDATE/DELETE/DROP/…)
+3. AST: `sqlglot` top-level must be `Select`
+4. Dangerous-function blacklist (A-1): `pg_read_file` / `lo_export` / `dblink*` / `pg_sleep*` / `set_config` / …
+5. Table allowlist (A-1): only `public` (or unqualified) `dim_*` / `fact_*` tables; CTE aliases skipped, cross-catalog rejected
+6. EXPLAIN: run `EXPLAIN <sql>` on a real PG connection
+
+Session endpoints (including `/chat`) are owner-checked (A-2); traces and `query_template` are per-user isolated (A-3/A-4); PATCH card fields pass `mask_pii` + `SecurityGuard` (A-4/A-5). See `docs/plans/2026-08-04-agent-security-hardening.md`.
 
 ## Git Conventions
 
@@ -194,4 +210,7 @@ Each plan doc uses these sections:
 - TSD-encrypted `.py` files: read via `git show HEAD:<path>` instead of working tree bytes
 - Embedding uses SiliconFlow API (`.env`: `SILICONFLOW_API_KEY`), separate from LLM (MiniMax). Falls back to `ILIKE ANY($1::text[])` on failure; startup degrades to keyword matching (non-blocking) if embedding dimension mismatches
 - No `pyproject.toml`, `Makefile`, `docker-compose.yml`, or CI configs exist
+- `backend/app/db.py` + `backend/report.duckdb` are a **legacy DuckDB compat path**; PostgreSQL is the only active database — don't build new features on it
+- Checkpoint persistence (`app/infra/checkpoint/factory.py`): dev uses `MemorySaver`, non-dev uses `AsyncPostgresSaver` (checkpoints survive restarts)
+- `scripts/dev-server.cjs` is a minimal static server for previewing the atelier docs (`node scripts/dev-server.cjs docs 8765` → `http://127.0.0.1:8765/atelier/index.html`); not part of the runtime stack
 - Backend test files use module-level `pytestmark = pytest.mark.<marker_name>`; fixtures in `tests/conftest.py` (`dummy_jwt_user`, `mock_pool`, `pg_pool`)

@@ -76,6 +76,7 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS memory.query_template (
     id SERIAL PRIMARY KEY,
+    user_id INT,
     intent_embedding VECTOR(1536),
     question TEXT NOT NULL,
     sql_text TEXT NOT NULL,
@@ -93,6 +94,23 @@ CREATE INDEX IF NOT EXISTS idx_query_template_embedding
     ON memory.query_template
     USING ivfflat (intent_embedding vector_cosine_ops)
     WITH (lists = 100);
+
+-- Soft-migrate query_template.user_id (A-4): 旧库没有该列时补上。
+-- 历史行保持 NULL——安全优先：NULL 行不再被任何用户召回。
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'memory'
+          AND table_name = 'query_template'
+          AND column_name = 'user_id'
+    ) THEN
+        ALTER TABLE memory.query_template ADD COLUMN user_id INT;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_query_template_user ON memory.query_template (user_id);
 
 CREATE TABLE IF NOT EXISTS memory.semantic_entry (
     id SERIAL PRIMARY KEY,
@@ -137,6 +155,7 @@ CREATE TABLE IF NOT EXISTS observability.agent_trace (
     id BIGSERIAL PRIMARY KEY,
     trace_id VARCHAR(64) UNIQUE NOT NULL,
     session_id VARCHAR(64),
+    user_id INT,
     user_query TEXT,
     status VARCHAR(32),
     start_time TIMESTAMP DEFAULT NOW(),
@@ -147,6 +166,23 @@ CREATE TABLE IF NOT EXISTS observability.agent_trace (
 
 CREATE INDEX IF NOT EXISTS idx_agent_trace_session ON observability.agent_trace (session_id);
 CREATE INDEX IF NOT EXISTS idx_agent_trace_trace_id ON observability.agent_trace (trace_id);
+
+-- Soft-migrate agent_trace.user_id (A-3): 旧库没有该列时补上。
+-- 历史无主行保持 NULL——审计数据、非业务数据，对所有人不可见（安全优先）。
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'observability'
+          AND table_name = 'agent_trace'
+          AND column_name = 'user_id'
+    ) THEN
+        ALTER TABLE observability.agent_trace ADD COLUMN user_id INT;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_agent_trace_user ON observability.agent_trace (user_id);
 
 CREATE TABLE IF NOT EXISTS observability.agent_trace_span (
     id BIGSERIAL PRIMARY KEY,
