@@ -25,7 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
-| —（当前无） | — | 新任务开 plan 后登记于此 |
+| [2026-08-06-rag-dictionary-mcp-bridge.md](2026-08-06-rag-dictionary-mcp-bridge.md) | 数据字典 RAG 桥：ragent-py MCP + 字段语义澄清闭环 | 跨仓库：ragent-py 新增 MCP 服务与 `/retrieve`；本库补 COMMENT、字典工具、assumptions 澄清 |
 
 ## 已完成
 
