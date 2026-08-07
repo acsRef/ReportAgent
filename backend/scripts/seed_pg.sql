@@ -365,3 +365,94 @@ INSERT INTO fact_attendance VALUES
 (18, 3, 20240501, '正常', 8.0),
 (19, 5, 20240501, '正常', 8.0),
 (20, 8, 20240501, '正常', 8.0);
+
+-- ── 字段语义注释（数据字典 RAG 桥的权威语义源，mcp_server.introspect 读取） ──
+
+COMMENT ON TABLE dim_date IS '日期维度表，包含年/季度/月/周以及节假日标记';
+COMMENT ON COLUMN dim_date.date_id IS '日期主键，格式 yyyymmdd';
+COMMENT ON COLUMN dim_date.full_date IS '完整日期';
+COMMENT ON COLUMN dim_date.year IS '年份';
+COMMENT ON COLUMN dim_date.quarter_num IS '季度序号（1-4）';
+COMMENT ON COLUMN dim_date.quarter IS '季度标签（Q1-Q4）';
+COMMENT ON COLUMN dim_date.week_of_year IS '年内周数';
+COMMENT ON COLUMN dim_date.day_name IS '星期（中文）';
+COMMENT ON COLUMN dim_date.is_holiday IS '节假日标记：0=工作日，1=节假日';
+
+COMMENT ON TABLE dim_region IS '区域和城市映射表，包含大区及对应省市';
+COMMENT ON COLUMN dim_region.region_id IS '区域主键';
+COMMENT ON COLUMN dim_region.region_name IS '大区名称（华北/华东/华南/西南/西北/东北）';
+COMMENT ON COLUMN dim_region.province IS '省份';
+COMMENT ON COLUMN dim_region.city IS '城市';
+COMMENT ON COLUMN dim_region.tier IS '城市等级（一线/二线/三线）';
+
+COMMENT ON TABLE dim_product IS '产品信息表，包含品类、品牌与价格';
+COMMENT ON COLUMN dim_product.product_id IS '产品主键';
+COMMENT ON COLUMN dim_product.product_name IS '产品名称';
+COMMENT ON COLUMN dim_product.category IS '产品大类（电子产品/服装鞋帽/食品饮料/家电/日用品）';
+COMMENT ON COLUMN dim_product.sub_category IS '产品子品类';
+COMMENT ON COLUMN dim_product.brand IS '品牌';
+COMMENT ON COLUMN dim_product.unit_price IS '单价（元）';
+COMMENT ON COLUMN dim_product.cost_price IS '成本价（元）';
+COMMENT ON COLUMN dim_product.supplier IS '供应商';
+
+COMMENT ON TABLE dim_customer IS '客户维度表，包含等级、行业与注册信息';
+COMMENT ON COLUMN dim_customer.customer_id IS '客户主键';
+COMMENT ON COLUMN dim_customer.customer_name IS '客户名称';
+COMMENT ON COLUMN dim_customer.customer_tier IS '客户等级（钻石/金卡/银卡/普通）';
+COMMENT ON COLUMN dim_customer.industry IS '所属行业';
+COMMENT ON COLUMN dim_customer.city IS '所在城市';
+COMMENT ON COLUMN dim_customer.register_date IS '注册日期';
+
+COMMENT ON TABLE dim_warehouse IS '仓库维度表';
+COMMENT ON COLUMN dim_warehouse.warehouse_id IS '仓库主键';
+COMMENT ON COLUMN dim_warehouse.warehouse_name IS '仓库名称';
+COMMENT ON COLUMN dim_warehouse.city IS '所在城市';
+COMMENT ON COLUMN dim_warehouse.capacity IS '容量上限（件）';
+
+COMMENT ON TABLE dim_employee IS '员工维度表';
+COMMENT ON COLUMN dim_employee.employee_id IS '员工主键';
+COMMENT ON COLUMN dim_employee.employee_name IS '员工姓名';
+COMMENT ON COLUMN dim_employee.department IS '部门';
+COMMENT ON COLUMN dim_employee.position IS '岗位';
+COMMENT ON COLUMN dim_employee.city IS '工作城市';
+COMMENT ON COLUMN dim_employee.hire_date IS '入职日期';
+
+COMMENT ON TABLE fact_sales IS '销售记录事实表，每条记录代表一笔销售';
+COMMENT ON COLUMN fact_sales.sale_id IS '销售记录主键';
+COMMENT ON COLUMN fact_sales.date_id IS '销售日期（关联 dim_date.date_id）';
+COMMENT ON COLUMN fact_sales.product_id IS '产品（关联 dim_product.product_id）';
+COMMENT ON COLUMN fact_sales.region_id IS '区域（关联 dim_region.region_id）';
+COMMENT ON COLUMN fact_sales.customer_id IS '客户（关联 dim_customer.customer_id）';
+COMMENT ON COLUMN fact_sales.channel IS '销售渠道（线上/线下）';
+COMMENT ON COLUMN fact_sales.quantity IS '销售数量';
+COMMENT ON COLUMN fact_sales.unit_price IS '成交单价（元）';
+COMMENT ON COLUMN fact_sales.discount IS '折扣率（如 0.90 表示九折）';
+COMMENT ON COLUMN fact_sales.total_amount IS '销售金额（元），等于 quantity × unit_price × discount';
+COMMENT ON COLUMN fact_sales.cost_amount IS '成本金额（元）';
+COMMENT ON COLUMN fact_sales.profit IS '毛利（元），等于 total_amount − cost_amount';
+
+COMMENT ON TABLE fact_returns IS '退货记录事实表，关联销售记录';
+COMMENT ON COLUMN fact_returns.return_id IS '退货记录主键';
+COMMENT ON COLUMN fact_returns.sale_id IS '关联销售记录（关联 fact_sales.sale_id）';
+COMMENT ON COLUMN fact_returns.product_id IS '退货产品（关联 dim_product.product_id）';
+COMMENT ON COLUMN fact_returns.return_date_id IS '退货日期（关联 dim_date.date_id）';
+COMMENT ON COLUMN fact_returns.return_quantity IS '退货数量';
+COMMENT ON COLUMN fact_returns.return_amount IS '退货金额（元）';
+COMMENT ON COLUMN fact_returns.return_reason IS '退货原因（质量问题/不适用/运输损坏/描述不符）';
+COMMENT ON COLUMN fact_returns.handling IS '处理方式（退款/换货）';
+
+COMMENT ON TABLE fact_inventory IS '库存记录事实表，按产品+仓库+日期记录';
+COMMENT ON COLUMN fact_inventory.inventory_id IS '库存记录主键';
+COMMENT ON COLUMN fact_inventory.product_id IS '产品（关联 dim_product.product_id）';
+COMMENT ON COLUMN fact_inventory.warehouse_id IS '仓库（关联 dim_warehouse.warehouse_id）';
+COMMENT ON COLUMN fact_inventory.date_id IS '快照日期（关联 dim_date.date_id）';
+COMMENT ON COLUMN fact_inventory.quantity_on_hand IS '在库数量';
+COMMENT ON COLUMN fact_inventory.quantity_reserved IS '预留数量';
+COMMENT ON COLUMN fact_inventory.quantity_available IS '可售数量，等于 quantity_on_hand − quantity_reserved';
+
+COMMENT ON TABLE fact_attendance IS '考勤记录事实表，关联员工';
+COMMENT ON COLUMN fact_attendance.attendance_id IS '考勤记录主键';
+COMMENT ON COLUMN fact_attendance.employee_id IS '员工（关联 dim_employee.employee_id）';
+COMMENT ON COLUMN fact_attendance.date_id IS '考勤日期（关联 dim_date.date_id）';
+COMMENT ON COLUMN fact_attendance.status IS '考勤状态（正常/请假 等）';
+COMMENT ON COLUMN fact_attendance.work_hours IS '工时（小时）';
