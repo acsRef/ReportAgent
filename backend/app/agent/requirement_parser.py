@@ -43,6 +43,14 @@ _PARSE_PROMPT = """你是 ReportAgent 需求解析器。给定用户的中文业
 可用表结构:
 {schema_text}
 
+{dictionary_block}
+
+字段释义规则：
+- 「数据字典参考」中给出释义的字段，直接采用其含义，不要再生成对应假设
+- 用户提及的字段在字典中无释义或释义歧义时，输出 assumption：
+  key 固定为 "field_meaning:<字段名>"，text 写你的最佳猜测释义（注明「请确认」），
+  alternatives 给候选释义（可为空数组）。用户确认前该字段含义不得用于 SQL 生成
+
 维度判断规则：
 - time_range: 是否包含明确的时间范围或可推断的相对时间词（本月/上月/今年/最近30天 等）
 - scope: 是否包含明确的区域/产品/客户范围；可缺省（默认 ALL）
@@ -86,13 +94,27 @@ def _schema_text(ctx: SchemaContext | None) -> str:
     return text
 
 
+# C-7 同款边界：字典片段来自外部 RAG，长度不受信任。
+# 超过此上限的尾部会被截断，避免撑爆 LLM 上下文窗口。
+MAX_DICTIONARY_CHARS = 4000
+
+
 def _call_llm_for_parse(
     user_query: str,
     schema: SchemaContext | None,
     conversation_context: str | None = None,
+    dictionary_context: str | None = None,
 ) -> dict:
     """Call the LLM and parse the JSON response. Returns {} on parse failure."""
-    prompt = _PARSE_PROMPT.format(user_query=user_query, schema_text=_schema_text(schema))
+    dictionary_block = ""
+    if dictionary_context:
+        bounded = dictionary_context[:MAX_DICTIONARY_CHARS]
+        dictionary_block = f"【数据字典参考】\n{bounded}"
+    prompt = _PARSE_PROMPT.format(
+        user_query=user_query,
+        schema_text=_schema_text(schema),
+        dictionary_block=dictionary_block,
+    )
     # 分层对话上下文前置：让需求解析感知先前轮次（如「再按产品细分」隐含的范围）。
     if conversation_context:
         prompt = f"{format_context_block(conversation_context)}\n\n{prompt}"
@@ -112,6 +134,7 @@ def parse_requirement(
     schema_context: SchemaContext | None,
     prior_card: RequirementCard | None = None,
     conversation_context: str | None = None,
+    dictionary_context: str | None = None,
 ) -> RequirementCard:
     """Parse a user query into a RequirementCard.
 
@@ -127,7 +150,9 @@ def parse_requirement(
     5. If there are no missing fields and assumptions are all resolved,
        status='complete'; else 'missing'.
     """
-    parsed = _call_llm_for_parse(user_query, schema_context, conversation_context)
+    parsed = _call_llm_for_parse(
+        user_query, schema_context, conversation_context, dictionary_context,
+    )
     if not parsed:
         # LLM gave nothing usable; fall back to a 'missing' card with all
         # dimensions empty so the frontend can render a complete form.
