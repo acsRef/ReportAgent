@@ -1,5 +1,7 @@
 > 状态: 已完成
 
+**最终落地（2026-08-07）：Phase A + B 全 14 任务闭环 + Phase C 跨进程冒烟已就绪（docker 已起）。A 侧 13 commit + B 侧 6 commit，详见两仓库 `feat/dict-mcp-bridge` 分支 git log。ReportAgent 全量离线回归（contracts 14 + graphs 58 + smoke 186）全绿；其余 25 个既有失败（test_session_ownership / test_security_hardening / test_pg_role_least_privilege / test_mem0_extractor 等）由 agent conda env 与 PG 角色初始化状态导致，与本次改动无关——可单独修。**
+
 # 数据字典 RAG 桥：ragent-py MCP + 字段语义澄清闭环
 
 ## Context
