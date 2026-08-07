@@ -92,3 +92,56 @@ def test_empty_result_semantics(monkeypatch, dict_env):
     out = json.loads(search_interface_dictionary.invoke({"query": "不存在的字段"}))
     assert out["matches"] == []
     assert "无匹配" in out["note"]
+
+
+def test_second_401_returns_login_failed_text(monkeypatch, dict_env):
+    """重登后仍 401（账号被锁等）→ 登录失败文案 + 原始响应体，而非通用 HTTP 401。
+
+    终审 I-3：对齐 ragent-py 侧 6d31a80 的 original_detail 保留模式。
+    """
+    from app.tools.interface_dict_tools import search_interface_dictionary
+    import app.tools.interface_dict_tools as mod
+
+    def fake_post(url, **kw):
+        return _Resp(200, {"access_token": "t"})
+
+    def fake_request(method, url, **kw):
+        if url.endswith("/api/v1/kb"):
+            return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
+        return _Resp(401, {"detail": "account locked"})  # 两次 retrieve 都 401
+
+    monkeypatch.setattr(mod.httpx, "post", fake_post)
+    monkeypatch.setattr(mod.httpx, "request", fake_request)
+    mod._token_cache.clear()
+    mod._kb_id_cache.clear()
+
+    out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
+    assert "登录失败" in out["error"], f"未翻译为登录失败文案: {out!r}"
+    assert "account locked" in out["error"], f"未保留原始响应诊断体: {out!r}"
+
+
+def test_second_403_returns_permission_text(monkeypatch, dict_env):
+    """重登后 403 → 无权读取文案（I-3 的 status 分支）。"""
+    from app.tools.interface_dict_tools import search_interface_dictionary
+    import app.tools.interface_dict_tools as mod
+
+    calls = {"retrieve": 0}
+
+    def fake_post(url, **kw):
+        return _Resp(200, {"access_token": "t"})
+
+    def fake_request(method, url, **kw):
+        if url.endswith("/api/v1/kb"):
+            return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
+        calls["retrieve"] += 1
+        return _Resp(401, {"detail": "expired"}) if calls["retrieve"] == 1 \
+            else _Resp(403, {"detail": "kb forbidden"})
+
+    monkeypatch.setattr(mod.httpx, "post", fake_post)
+    monkeypatch.setattr(mod.httpx, "request", fake_request)
+    mod._token_cache.clear()
+    mod._kb_id_cache.clear()
+
+    out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
+    assert "无权读取" in out["error"], f"未翻译为无权读取文案: {out!r}"
+    assert "kb forbidden" in out["error"]

@@ -11,7 +11,7 @@ import logging
 import os
 import threading
 
-import httpx
+import httpx  # 关键：模块级 `httpx.post`/`httpx.request` 调用，单测以 `monkeypatch.setattr(mod.httpx, ...)` 替换；不要改成 `from httpx import post, request`，会破坏 monkeypatch
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,7 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
             timeout=30,
         )
         if resp.status_code == 401:  # token 过期 → 清缓存重登一次
+            original_detail = resp.text[:200]
             with _TOKEN_LOCK:
                 _token_cache.pop(base, None)
             token = _login_token(base)
@@ -91,6 +92,22 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
                 json={"query": query, "kb_ids": [kb_id], "top_k": top_k},
                 timeout=30,
             )
+            # 重登后仍失败（账号被锁、无权等）→ 按 status 翻译，别退回通用 HTTP 文案。
+            # 与 ragent-py 侧 6d31a80 的 original_detail 保留模式对齐。
+            if resp.status_code == 401:
+                return json.dumps(
+                    {"error": f"登录失败：请检查 RAGENT_USER / RAGENT_PASSWORD；原始响应：{original_detail}"},
+                    ensure_ascii=False,
+                )
+            if resp.status_code == 403:
+                return json.dumps(
+                    {"error": f"无权读取字典知识库：{resp.text[:200]}"}, ensure_ascii=False,
+                )
+            if resp.status_code != 200:
+                return json.dumps(
+                    {"error": f"字典检索失败：HTTP {resp.status_code} {resp.text[:200]}"},
+                    ensure_ascii=False,
+                )
         resp.raise_for_status()
         items = resp.json().get("items", [])
         if not items:

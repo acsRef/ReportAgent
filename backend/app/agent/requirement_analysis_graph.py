@@ -15,6 +15,7 @@ graph imports the SQL/Report tools.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Optional, TypedDict
@@ -117,7 +118,10 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
     dictionary_context = ""
     try:
         from app.tools.interface_dict_tools import search_interface_dictionary
-        raw = search_interface_dictionary.invoke({"query": state["user_query"], "top_k": 5})
+        # 同步阻塞 httpx（timeout 30s）→ 丢线程池，别占事件循环（同本文件其他 sync 调用风格）
+        raw = await asyncio.to_thread(
+            search_interface_dictionary.invoke, {"query": state["user_query"], "top_k": 5},
+        )
         parsed = json.loads(raw) if isinstance(raw, str) else raw
         matches = parsed.get("matches") or []
         if matches:
