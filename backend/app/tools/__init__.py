@@ -1,5 +1,5 @@
 from app.tools.registry import registry, ToolMetadata
-from app.tools import data_tools, sql_tools, report_tools
+from app.tools import data_tools, sql_tools, report_tools, interface_dict_tools
 
 
 # 工具描述是模型选择工具的主要依据：每条描述都按「用途 + 输入 + 输出 +
@@ -66,6 +66,25 @@ def register_all_tools():
             agent_type="data",
             risk_level="low",
             output_schema={"tables": "array"},
+        ),
+    )
+
+    registry.register(
+        "search_interface_dictionary", interface_dict_tools.search_interface_dictionary,
+        ToolMetadata(
+            name="search_interface_dictionary",
+            description=(
+                "在数据字典知识库中检索字段/接口/表的含义释义，返回命中片段与来源。"
+                "输入：query 中文自然语言（如 'total_amount 是什么'），top_k 返回条数（默认 5）。"
+                "输出：JSON，matches=[{text, source, score}]；无匹配时 matches=[]；字典服务未配置/不可达时返回 error 字段。"
+                "用于：用户问题涉及接口字段或字段含义不明确时查释义；写 SQL 前确认业务口径。"
+                "不要用来找数据表——用 search_tables；此工具只读字典文档，不查业务数据行。"
+            ),
+            capability="dictionary_search",
+            agent_type="data",
+            risk_level="low",
+            input_schema={"query": "string", "top_k": "int"},
+            output_schema={"matches": "array"},
         ),
     )
 
