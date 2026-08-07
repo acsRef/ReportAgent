@@ -15,6 +15,7 @@ graph imports the SQL/Report tools.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional, TypedDict
 
@@ -99,6 +100,10 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
 
     转 async 是为了接入分层对话上下文（build_session_context 需读 DB）；
     上下文构建失败时降级为空，绝不阻塞需求解析。需求卡落库仍在 persist_draft。
+
+    字典上下文（dictionary_context）走程序化检索——同 conversation_context 一样
+    单次拉取、失败降级空串、绝不影响主流程；命中片段以 "- source: text[:300]"
+    形式序列化，由 parse_requirement 拼到 prompt 的「数据字典参考」段。
     """
     conversation_context = ""
     try:
@@ -107,10 +112,26 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
         )
     except Exception as exc:
         logger.warning("build_session_context failed: %s", exc)
+
+    # 数据字典程序化检索：命中则注入释义上下文；任何失败降级为空（同 conversation_context 策略）
+    dictionary_context = ""
+    try:
+        from app.tools.interface_dict_tools import search_interface_dictionary
+        raw = search_interface_dictionary.invoke({"query": state["user_query"], "top_k": 5})
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        matches = parsed.get("matches") or []
+        if matches:
+            dictionary_context = "\n".join(
+                f"- {m.get('source', '')}: {(m.get('text') or '')[:300]}" for m in matches
+            )
+    except Exception as exc:
+        logger.warning("dictionary lookup in requirement analysis failed: %s", exc)
+
     card = parse_requirement(
         user_query=state["user_query"],
         schema_context=state.get("schema_context"),
         conversation_context=conversation_context or None,
+        dictionary_context=dictionary_context or None,
     )
     return {"requirement_card": card}
 

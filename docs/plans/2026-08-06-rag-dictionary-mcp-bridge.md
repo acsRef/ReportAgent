@@ -1,4 +1,4 @@
-> 状态: 进行中
+> 状态: 已完成
 
 # 数据字典 RAG 桥：ragent-py MCP + 字段语义澄清闭环
 
@@ -97,7 +97,9 @@ ragent-py/mcp_server/ ──HTTP──► ragent-py FastAPI
 2. 新增 `search_interface_dictionary(query, top_k)` 工具：httpx 直连 `/retrieve`（服务账号 env + token 缓存/401 重登），在 `app/tools/__init__.py::register_all_tools` 注册（`agent_type="data"`、`capability="dictionary_search"`、`risk_level="low"`，描述按五要素格式）。
 3. 需求分析阶段：需求分析是程序化管线（非 LLM 自主 tool-call），故字典查询也走程序化——在 `requirement_analysis_graph.py::_requirement_parse`（它本就负责组装 parse 输入，conversation_context 也在此取）加一次字典检索，命中结果经**新增的 `dictionary_context` 参数**传入 `parse_requirement`（与既有 `conversation_context` 同构：失败降级为空串，绝不阻塞解析）。
 4. `requirement_parser` prompt 规则：用户提及的字段若在字典上下文中有释义则直接采用；**无释义或歧义 → 生成 assumption**（`key="field_meaning:<字段>"`，`text`=最佳猜测，`alternatives`=候选释义，经 `build_assumption` 构造）。
-5. confirm gate 既有校验（assumptions resolved）天然拦截未确认项。已确认 assumption 的注入路径**已存在**：`confirmed_execution_graph._format_confirmed_requirement` 把 accepted assumptions 序列化进 `confirmed_requirement`，`sql_graph._plan` 经 `confirmed_block` 注入 prompt——**无需改动这两个文件**。注意：新工具注册进 registry 后会出现在所有**未传 whitelist** 的 `_format_tools_for_prompt()` 调用点（如 `sql_graph.py` 的 `intent_analyze`），可能触碰 `tests/graphs/test_sql_generation.py` 钉住的 prompt 内容断言——实现时逐调用点核查，必要时用 whitelist 隔离，断言该更新则更新。
+5. confirm gate 既有校验（assumptions resolved）天然拦截未确认项。已确认 assumption 的注入路径**已存在**：`confirmed_execution_graph._format_confirmed_requirement` 把 accepted assumptions 序列化进 `confirmed_requirement`，`sql_graph._plan` 经 `confirmed_block` 注入 prompt——**无需改动这两个文件**。注意：新工具注册进 registry 后会出现在所有**未传 whitelist** 的 `_format_tools_for_prompt()` 调用点（如 `sql_graph.py` 的 `intent_analyze`），但 `app/llm.py::_INTENT_TOOL_WHITELIST` 默认白名单只含 5 个分析工具（chart_advisor/insight_analyst/trend_analysis/group_compare/detect_anomaly），新工具自然隔离——B3 落地验证 26 用例 `test_sql_generation.py` 与 5 用例 `test_tool_descriptions.py` 全绿。
+
+B4 落地确认（ab810df）：`_PARSE_PROMPT` 中「字段释义规则」段实际位置在「维度判断规则」**之前**（plan 原写"之后"），属合理偏离——LLM 在做维度判断前先确定字段含义，可避免歧义传染到 metric/scope 推断。功能等价、无回归、测试通过。B5 接线时只需在 `_requirement_parse` 内 monkeypatch-free 程序化调用 `search_interface_dictionary.invoke(...)` 即可。
 
 ### 数据流
 
