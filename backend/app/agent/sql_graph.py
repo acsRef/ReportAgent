@@ -141,7 +141,14 @@ _SQL_GENERATION_RULES = """多表 JOIN 规则（必须逐条遵守）:
 
 数组类型规则:
 - 若目标列是数组类型（ARRAY，如标签字段），必须用 @> ARRAY['标签'] 判断包含关系，禁止用 LIKE '%标签%'（LIKE 对数组列恒为空）
-- 当前表结构中暂无数组列，遇到疑似数组字段先按上一条规则核实列类型再写"""
+- 当前表结构中暂无数组列，遇到疑似数组字段先按上一条规则核实列类型再写
+
+字面量与转义规则:
+- 日期/字符串字面量使用标准 PostgreSQL 单引号：full_date >= '2024-01-01' AND full_date < '2024-02-01'
+- 字面量内部若需单引号，用两个单引号转义：'O''Brien'——**禁止使用反斜杠转义**（不要写 'O\'Brien'、不要写 \n \t 等）
+- 数字字面量直接写：WHERE id = 42，不要加引号
+- 布尔字面量写 TRUE / FALSE，不要加引号
+- 输出 SQL 时**纯文本**，不要附加 markdown 代码块、不要附加注释、不要附加解释"""
 
 
 @traced_node("intent_analyze")
@@ -408,10 +415,11 @@ def _generate_sql(state: SQLAgentState) -> dict:
 - 数据库是 PostgreSQL，使用标准 PostgreSQL 兼容的 SQL 语法（不用 DuckDB 专属语法）
 - 不要使用 EXTRACT() 类的 DuckDB 函数做日期处理
 - 只生成 SELECT 语句，WHERE 条件必须完整
-- 表名和列名必须严格使用上面列出的名称（注意 dim_date 没有 month 列，只有 year / quarter_num / quarter / week_of_year / day_name）
+- 表名和列名必须严格使用上面列出的名称（注意 dim_date 没有 month 列，只有 year / quarter_num / quarter / week_of_year / day_name / full_date）
 - JOIN 条件使用外键关联（如 fact_sales.region_id = dim_region.region_id）
 - 使用中文别名（例如「销售额」「年份」）
-- 只输出纯 SQL，禁止解释，禁止 markdown 代码块
+- 只输出纯 SQL，禁止解释，禁止 markdown 代码块，禁止反斜杠转义
+- 字面量规则（重要）— 见 _SQL_GENERATION_RULES 末尾「字面量与转义规则」段
 
 {_SQL_GENERATION_RULES}"""
 

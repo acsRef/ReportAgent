@@ -40,9 +40,18 @@ function ToastProvider({ children }: { children: ReactNode }) {
   const add = useCallback(
     (message: string, type: ToastType) => {
       const id = nextId++
-      setToasts(prev => [...prev, { id, message, type }])
-      const timer = setTimeout(() => remove(id), 3000)
-      timersRef.current.set(id, timer)
+      // Defer the setState past the current render cycle: if a caller
+      // invokes add() synchronously from another component's render
+      // (e.g. via a useEffect fired by a store update during the initial
+      // WorkbenchPage mount), React 19 logs "Cannot update a component
+      // while rendering a different component". Microtask deferral is
+      // cheap and safe — the toast appears on the next tick, which the
+      // user cannot perceive.
+      queueMicrotask(() => {
+        setToasts(prev => [...prev, { id, message, type }])
+        const timer = setTimeout(() => remove(id), 3000)
+        timersRef.current.set(id, timer)
+      })
     },
     [remove],
   )
