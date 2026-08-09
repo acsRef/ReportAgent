@@ -47,6 +47,10 @@ _PARSE_PROMPT = """你是 ReportAgent 需求解析器。给定用户的中文业
 
 字段释义规则：
 - 「数据字典参考」中给出释义的字段，直接采用其含义，不要再生成对应假设
+- **关键**：data_source_type=stream 的字段（接口/长连接/实时推送）**不在任何 fact_* 事实表里**——严禁生成"该字段可能存在于 fact_sales.total_amount 这类事实表"这种假设！必须生成一个 data_source assumption：
+  key 固定为 "data_source:<接口名>"，text 写「该字段来自实时流接口，未在当前分析数据库中；如需聚合查询需先接入数据通道」，
+  alternatives 给「实时流聚合服务 / 离线 ETL 同步表（需先建）/ 用户提供的其他查询路径」之类。
+  释义本身的 field_meaning 假设仍可生成（用户可采用），但 data_source assumption 与 field_meaning 是两个独立概念。
 - 用户提及的字段在字典中无释义或释义歧义时，输出 assumption：
   key 固定为 "field_meaning:<字段名>"，text 写你的最佳猜测释义（注明「请确认」），
   alternatives 给候选释义（可为空数组）。用户确认前该字段含义不得用于 SQL 生成

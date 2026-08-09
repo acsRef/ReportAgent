@@ -58,6 +58,35 @@ def test_happy_path_serializes_matches(monkeypatch, dict_env):
     out = json.loads(search_interface_dictionary.invoke({"query": "total_amount 是什么", "top_k": 3}))
     assert out["matches"][0]["text"].startswith("total_amount")
     assert out["matches"][0]["source"] == "dict-table_public_fact_sales.md"
+    assert out["matches"][0]["data_source_type"] == "table"  # 表名命中 → table
+
+
+def test_data_source_type_marked_stream_for_websocket(monkeypatch, dict_env):
+    """接口/长连接/推送类字典块必须标 data_source_type=stream，让 LLM 别写 SQL。"""
+    from app.tools.interface_dict_tools import search_interface_dictionary
+    import app.tools.interface_dict_tools as mod
+
+    def fake_post(url, **kw): return _Resp(200, {"access_token": "t"})
+    def fake_request(method, url, **kw):
+        if url.endswith("/api/v1/kb"):
+            return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
+        return _Resp(200, {"items": [
+            {"chunk_id": "c1", "document_id": "d1", "text": "amt = 实付金额",
+             "title": "market-push心跳与on_message字段说明", "section_path": "接口字典: market-push > 消息 `heartbeat` 字段",
+             "score": 0.8},
+            {"chunk_id": "c2", "document_id": "d2", "text": "total_amount = 销售金额",
+             "title": "dict-table_public_fact_sales.md", "section_path": "表 `public.fact_sales` > 字段",
+             "score": 0.7},
+        ], "degraded": False})
+
+    monkeypatch.setattr(mod.httpx, "post", fake_post)
+    monkeypatch.setattr(mod.httpx, "request", fake_request)
+    mod._token_cache.clear()
+
+    out = json.loads(search_interface_dictionary.invoke({"query": "amt", "top_k": 5}))
+    by_source = {m["source"]: m for m in out["matches"]}
+    assert by_source["market-push心跳与on_message字段说明"]["data_source_type"] == "stream"
+    assert by_source["dict-table_public_fact_sales.md"]["data_source_type"] == "table"
 
 
 def test_unreachable_returns_error_text(monkeypatch, dict_env):

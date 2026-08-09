@@ -23,6 +23,22 @@ _kb_id_cache: dict[str, str] = {}
 _MAX_MATCH_TEXT = 400
 _MAX_MATCHES = 8
 
+# data_source_type 推断：字典块文本里若显式说「长连接/流/推送/长轮询」之类，
+# 就是实时流/外部通道，不在 fact_sales / fact_returns 等事实表里。
+# LLM 看到这个标记就不该写 SQL，而应在 requirement 里建议接入实时数据。
+_STREAM_KEYWORDS = (
+    "长连接", "websocket", "sse ", "server-sent", "server sent",
+    "长轮询", "long poll", "long-poll", "推送", "实时", "push", "stream",
+)
+
+
+def _infer_data_source(title: str, text: str) -> str:
+    blob = f"{title or ''}\n{text or ''}".lower()
+    for kw in _STREAM_KEYWORDS:
+        if kw in blob:
+            return "stream"
+    return "table"
+
 
 def _base() -> str:
     return os.getenv("RAGENT_URL", "").rstrip("/")
@@ -115,7 +131,9 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
         matches = [
             {"text": (it.get("text") or "")[:_MAX_MATCH_TEXT],
              "source": it.get("title") or it.get("document_id", ""),
-             "score": it.get("score", 0.0)}
+             "section_path": it.get("section_path", ""),
+             "score": it.get("score", 0.0),
+             "data_source_type": _infer_data_source(it.get("title", ""), it.get("text", ""))}
             for it in items[:_MAX_MATCHES]
         ]
         return json.dumps({"matches": matches}, ensure_ascii=False)
