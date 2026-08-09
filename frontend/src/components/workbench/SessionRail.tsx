@@ -15,6 +15,10 @@ interface Props {
   onSelect: (sessionId: string) => void
   onSelectVersion: (version: number) => void
   onNew: () => void
+  // Plan B 步骤 2：分页"加载更多"按钮 — Plan B 在 89+ 历史会话下让 SessionRail 30s 内能完成
+  hasMore?: boolean
+  loadingMore?: boolean
+  onLoadMore?: () => void
 }
 
 const DAY = 86_400_000
@@ -38,6 +42,9 @@ export default function SessionRail({
   onSelect,
   onSelectVersion,
   onNew,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: Props) {
   const [showAllVersions, setShowAllVersions] = useState(false)
   const now = Date.now()
@@ -158,6 +165,30 @@ export default function SessionRail({
             {renderBucket('今天', today)}
             {renderBucket('过去 7 天', pastWeek)}
             {renderBucket('更早', older)}
+            {/* Plan B 步骤 2：分页「加载更多」按钮 — 仅当 hasMore 为真时显示。
+                loadingMore 期间显示「加载中…」并禁用，防双击。 */}
+            {hasMore && onLoadMore && (
+              <button
+                type="button"
+                className="wb-load-more"
+                onClick={onLoadMore}
+                disabled={loadingMore}
+                style={{
+                  width: 'calc(100% - 16px)',
+                  margin: '8px 8px 4px',
+                  padding: '6px 10px',
+                  background: 'var(--paper)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  color: 'var(--ink-2)',
+                  cursor: loadingMore ? 'wait' : 'pointer',
+                  opacity: loadingMore ? 0.6 : 1,
+                }}
+              >
+                {loadingMore ? '加载中…' : '加载更多会话'}
+              </button>
+            )}
           </>
         )}
       </div>

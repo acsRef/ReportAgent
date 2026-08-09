@@ -26,7 +26,8 @@ describe('sessionsClient', () => {
     await fetchSessions()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit?]
-    expect(url).toBe('/api/v1/sessions')
+    // Plan B (2026-08-09): 分页参数默认 limit=30&offset=0
+    expect(url).toBe('/api/v1/sessions?limit=30&offset=0')
     const headers = (init?.headers ?? {}) as Record<string, string>
     expect(headers.Authorization).toBe('Bearer tk-1')
   })

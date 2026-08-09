@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { IconLogout } from '../components/ui/Icons'
 import Avatar from '../components/atelier/Avatar'
@@ -22,12 +22,13 @@ import {
 import { useAnalysisStore } from '../stores/analysisStore'
 import { canRetryFailedAction, isBusyPhase } from '../stores/analysisReducer'
 import { useAuthStore } from '../stores/authStore'
-import { fetchSessions, patchRequirement } from '../api/sessionsClient'
+import { fetchSessions, patchRequirement, SESSIONS_PAGE_SIZE } from '../api/sessionsClient'
 import { openChat } from '../api/analysisClient'
 import { postConfirmStream, type ToastApi, type Dispatcher } from '../api/confirmStream'
 import RequirementCardView from '../components/workbench/RequirementCardView'
 import ReportPaper from '../components/workbench/ReportPaper'
 import type { AnalysisPhase, ReportVersionStatus } from '../types/analysis'
+import type { SessionSummary as ApiSessionSummary } from '../api/sessionsClient'
 import type { RequirementCard as RC } from '../types/requirement'
 import '../styles/global.css'
 import '../styles/workbench.css'
@@ -41,6 +42,9 @@ export default function WorkbenchPage() {
   const dispatch = useAnalysisStore((s) => s.dispatch)
   const activeSessionId = useAnalysisStore((s) => s.activeSessionId)
   const sessions = useAnalysisStore((s) => s.sessions)
+  const sessionsOffset = useAnalysisStore((s) => s.sessionsOffset)
+  const hasMoreSessions = useAnalysisStore((s) => s.hasMoreSessions)
+  const sessionsPageLoading = useAnalysisStore((s) => s.sessionsPageLoading)
   const requirement = useAnalysisStore((s) => s.requirement)
   const reportVersions = useAnalysisStore((s) => s.reportVersions)
   const selectedReportVersion = useAnalysisStore((s) => s.selectedReportVersion)
@@ -52,6 +56,26 @@ export default function WorkbenchPage() {
   const [patching, setPatching] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const busy = isBusyPhase(phase)
+
+  // SessionSummary ← API 响应的字段映射；两处共用（useEffect + loadMore）。
+  function mapSessions(raw: ApiSessionSummary[]) {
+    return raw.map((s) => ({
+      session_id: s.session_id,
+      title: s.title ?? '',
+      phase: ((s.phase ?? 'idle') as any),
+      msg_count: s.msg_count ?? 0,
+      updated_at: s.updated_at ?? '',
+      report_versions: (s.report_versions ?? []).map((v: { version: number; title?: string; status?: string; created_at?: string; favorite?: boolean }) => ({
+        version: v.version,
+        title: v.title,
+        status: v.status as any,
+        created_at: v.created_at,
+        favorite: v.favorite,
+      })),
+      first_message: s.first_message ?? '',
+      last_message: s.last_message ?? '',
+    } as any))
+  }
   const [focusMode, setFocusMode] = useState(false)
   const [lastQuestion, setLastQuestion] = useState<string | null>(null)
   const composerRef = useRef<HTMLInputElement>(null)
@@ -101,26 +125,13 @@ export default function WorkbenchPage() {
   useEffect(() => {
     let cancelled = false
     setSessionsLoading(true)
-    fetchSessions()
+    fetchSessions(SESSIONS_PAGE_SIZE, 0)
       .then((res) => {
         if (!cancelled) {
-          const mapped = res.sessions.map((s) => ({
-            session_id: s.session_id,
-            title: s.title ?? '',
-            phase: ((s.phase ?? 'idle') as any),
-            msg_count: s.msg_count ?? 0,
-            updated_at: s.updated_at ?? '',
-            report_versions: (s.report_versions ?? []).map((v) => ({
-              version: v.version,
-              title: v.title,
-              status: v.status as any,
-              created_at: v.created_at,
-              favorite: v.favorite,
-            })),
-            first_message: s.first_message,
-            last_message: s.last_message,
-          } as any))
-          dispatch({ type: 'sessions/received', sessions: mapped })
+          const mapped = mapSessions(res.sessions)
+          // Plan B 步骤 2：分页。hasMore = 本次返回数 == page size（服务端可能还有）
+          const hasMore = res.sessions.length === SESSIONS_PAGE_SIZE
+          dispatch({ type: 'sessions/page-received', sessions: mapped, hasMore })
         }
       })
       .catch((err) => {
@@ -133,6 +144,21 @@ export default function WorkbenchPage() {
       cancelled = true
     }
   }, [dispatch, toast])
+
+  // Plan B 步骤 2：loadMore — 点击 SessionRail 底部"加载更多"时触发
+  const loadMoreSessions = useCallback(async () => {
+    if (!hasMoreSessions || sessionsPageLoading) return
+    dispatch({ type: 'sessions/page-loading', loading: true })
+    try {
+      const res = await fetchSessions(SESSIONS_PAGE_SIZE, sessionsOffset)
+      const mapped = mapSessions(res.sessions)
+      const hasMore = res.sessions.length === SESSIONS_PAGE_SIZE
+      dispatch({ type: 'sessions/page-appended', sessions: mapped, hasMore })
+    } catch (err) {
+      toast.error(`加载更多会话失败：${String(err).slice(0, 100)}`)
+      dispatch({ type: 'sessions/page-loading', loading: false })
+    }
+  }, [hasMoreSessions, sessionsPageLoading, sessionsOffset, dispatch, toast])
 
   function handleLogout() {
     auth.logout()
@@ -312,6 +338,9 @@ export default function WorkbenchPage() {
             handleNewAnalysis()
             composerRef.current?.focus()
           }}
+          hasMore={hasMoreSessions}
+          loadingMore={sessionsPageLoading}
+          onLoadMore={() => { void loadMoreSessions() }}
         />
 
         <main

@@ -123,6 +123,37 @@ describe('analysisReducer', () => {
   })
 })
 
+it('sessions/page-received replaces sessions and sets offset/hasMore', () => {
+    const page: SessionSummary[] = [
+      { session_id: 's-1', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] },
+      { session_id: 's-2', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] },
+    ]
+    const state: AnalysisState = { ...initialAnalysisState }
+    const next = analysisReducer(state, { type: 'sessions/page-received', sessions: page, hasMore: true })
+    expect(next.sessions).toEqual(page)
+    expect(next.sessionsOffset).toBe(2)
+    expect(next.hasMoreSessions).toBe(true)
+    expect(next.sessionsPageLoading).toBe(false)
+  })
+
+  it('sessions/page-appended appends and accumulates offset', () => {
+    const page1: SessionSummary[] = [{ session_id: 's-1', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] }]
+    const page2: SessionSummary[] = [{ session_id: 's-2', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] }]
+    let state: AnalysisState = { ...initialAnalysisState }
+    state = analysisReducer(state, { type: 'sessions/page-received', sessions: page1, hasMore: true })
+    state = analysisReducer(state, { type: 'sessions/page-appended', sessions: page2, hasMore: false })
+    expect(state.sessions.map((s) => s.session_id)).toEqual(['s-1', 's-2'])
+    expect(state.sessionsOffset).toBe(2)
+    expect(state.hasMoreSessions).toBe(false)
+  })
+
+  it('sessions/page-loading toggles loading flag', () => {
+    const state: AnalysisState = { ...initialAnalysisState }
+    expect(state.sessionsPageLoading).toBe(false)
+    const next = analysisReducer(state, { type: 'sessions/page-loading', loading: true })
+    expect(next.sessionsPageLoading).toBe(true)
+  })
+
 describe('isBusyPhase', () => {
   const busy: AnalysisPhase[] = ['parsing', 'generating', 'adjusting']
   const idle: AnalysisPhase[] = ['idle', 'awaiting_missing', 'awaiting_confirm', 'report_ready', 'error']

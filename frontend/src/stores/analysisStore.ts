@@ -48,6 +48,10 @@ export const useAnalysisStore: AnalysisStoreApi = create<AnalysisStore>()(
         draft.selectedReportVersion = next.selectedReportVersion
         draft.timeline = next.timeline
         draft.error = next.error
+        // Plan B 步骤 2：分页状态字段（reducer 算出来，store 必须显式写回）
+        draft.sessionsOffset = next.sessionsOffset
+        draft.hasMoreSessions = next.hasMoreSessions
+        draft.sessionsPageLoading = next.sessionsPageLoading
       }),
     isBusy: (): boolean => isBusyPhase(get().phase),
     reset: () => set(() => ({ ...initialAnalysisState })),

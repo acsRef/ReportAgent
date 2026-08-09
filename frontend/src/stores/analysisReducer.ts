@@ -7,6 +7,8 @@ import type {
 import type { RequirementCard } from '../types/requirement'
 import type { TimelineEntry } from '../types/report'
 
+export const SESSIONS_PAGE_SIZE = 30
+
 export interface AnalysisState {
   phase: AnalysisPhase
   activeSessionId: string | null
@@ -16,11 +18,20 @@ export interface AnalysisState {
   selectedReportVersion: number | null
   timeline: TimelineEntry[]
   error: AnalysisError | null
+  // Pagination (Plan B 步骤 2, 2026-08-09) — session 列表分页状态：
+  // sessionsOffset = 已加载条数；hasMoreSessions = 服务端是否还有下一页；
+  // sessionsPageLoading = loadMore 触发中（防双击 / 防覆盖旧 sessions）。
+  sessionsOffset: number
+  hasMoreSessions: boolean
+  sessionsPageLoading: boolean
 }
 
 export type AnalysisAction =
   | { type: 'phase/received'; phase: AnalysisPhase }
   | { type: 'session/selected'; sessionId: string }
+  | { type: 'sessions/page-received'; sessions: SessionSummary[]; hasMore: boolean }
+  | { type: 'sessions/page-appended'; sessions: SessionSummary[]; hasMore: boolean }
+  | { type: 'sessions/page-loading'; loading: boolean }
   | { type: 'sessions/received'; sessions: SessionSummary[] }
   | { type: 'requirement/received'; requirement: RequirementCard }
   | { type: 'report/received'; report: ReportVersion }
@@ -38,6 +49,9 @@ export const initialAnalysisState: AnalysisState = {
   selectedReportVersion: null,
   timeline: [],
   error: null,
+  sessionsOffset: 0,
+  hasMoreSessions: true,
+  sessionsPageLoading: false,
 }
 
 const BUSY_PHASES: ReadonlySet<AnalysisPhase> = new Set([
@@ -99,8 +113,34 @@ export function analysisReducer(
         sessions: state.sessions,
       }
 
-    case 'sessions/received':
+    case 'sessions/received': {
+      // 兼容旧 dispatch（一次性把整批替换，但**不再**设置 sessionsOffset），
+      // 由调用方在新逻辑中改用 'sessions/page-received'。
       return { ...state, sessions: action.sessions }
+    }
+
+    case 'sessions/page-received':
+      // 首次拉取（reset + 第一页），覆盖 sessions 与 offset
+      return {
+        ...state,
+        sessions: action.sessions,
+        sessionsOffset: action.sessions.length,
+        hasMoreSessions: action.hasMore,
+        sessionsPageLoading: false,
+      }
+
+    case 'sessions/page-appended':
+      // loadMore（增量追加），offset 累加
+      return {
+        ...state,
+        sessions: [...state.sessions, ...action.sessions],
+        sessionsOffset: state.sessionsOffset + action.sessions.length,
+        hasMoreSessions: action.hasMore,
+        sessionsPageLoading: false,
+      }
+
+    case 'sessions/page-loading':
+      return { ...state, sessionsPageLoading: action.loading }
 
     case 'requirement/received':
       if (

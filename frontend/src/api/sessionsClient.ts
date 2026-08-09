@@ -112,3 +112,6 @@ export async function patchRequirement(
     body: JSON.stringify({ requirement }),
   })
 }
+
+// Plan B (2026-08-09) — 跟 backend 的 list_sessions default 30 对齐
+export const SESSIONS_PAGE_SIZE = 30
