@@ -46,10 +46,17 @@ async def get_messages(session_id: str, user_id: int) -> list[dict]:
         ]
 
 
-async def list_sessions(user_id: int) -> list[dict]:
+async def list_sessions(user_id: int, limit: int = 30, offset: int = 0) -> list[dict]:
     """List sessions for a user. Joins `app.conversations` (for msg_count +
     first/last message) with `agent.session` (for title / phase /
     current_phase / updated_at / report_versions).
+
+    Pagination (2026-08-09 Plan B): LIMIT + OFFSET for SessionRail render.
+    Without it, accumulated test sessions slow SessionRail fetch past the
+    30s Playwright wait and the chat input never becomes visible.
+    Frontend uses a single default page (limit=30) plus a "Load more" button
+    that increments offset. Total count is returned in headers by
+    get_sessions() so the UI can decide whether to show the button.
     """
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -74,8 +81,9 @@ async def list_sessions(user_id: int) -> list[dict]:
                  GROUP BY session_id
                ) conv ON conv.session_id = s.thread_id
                WHERE s.user_id = $1
-               ORDER BY updated_at DESC""",
-            user_id,
+               ORDER BY updated_at DESC
+               LIMIT $2 OFFSET $3""",
+            user_id, limit, offset,
         )
         return [
             {

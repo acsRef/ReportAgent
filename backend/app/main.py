@@ -267,8 +267,19 @@ async def register(request: RegisterRequest):
 
 
 @app.get("/api/v1/sessions")
-async def get_sessions(user: dict = Depends(get_current_user)):
-    sessions = await list_sessions(user["id"])
+async def get_sessions(
+    user: dict = Depends(get_current_user),
+    limit: int = 30,
+    offset: int = 0,
+):
+    """List current user's sessions, paginated.
+
+    Pagination: `limit` caps response size (default 30; UI uses default for
+    initial SessionRail load). `offset` is for the "load more" button. The
+    UI can use response size < limit as a "no more" sentinel without needing
+    a separate count endpoint.
+    """
+    sessions = await list_sessions(user["id"], limit=limit, offset=offset)
     return {"sessions": sessions}
 
 
