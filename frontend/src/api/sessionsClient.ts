@@ -82,8 +82,12 @@ export interface ReportVersionDetail {
   execution_status?: 'SUCCESS' | 'EMPTY' | 'FAILED' | null
 }
 
-export function fetchSessions(): Promise<{ sessions: SessionSummary[] }> {
-  return jsonFetch('/api/v1/sessions')
+export function fetchSessions(
+  limit: number = 30,
+  offset: number = 0,
+): Promise<{ sessions: SessionSummary[] }> {
+  const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) }).toString()
+  return jsonFetch(`/api/v1/sessions?${qs}`)
 }
 
 export function fetchSession(sessionId: string): Promise<SessionSnapshot | null> {
