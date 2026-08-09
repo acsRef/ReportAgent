@@ -54,7 +54,11 @@ metabase_data/
 # Logs
 *.log
 logs/
-.e2elogs/   # 临时 e2e 后端/mcp 调试日志（手动启动时自动生成）
+
+# 临时 e2e 后端/mcp 调试日志（手动启动时自动生成）
+.e2elogs/
+# 前端 Playwright 烟测截图/产物（.e2elogs 规则只匹配根目录，子目录需单独忽略）
+frontend/.e2elogs/
 
 # OS
 .DS_Store
