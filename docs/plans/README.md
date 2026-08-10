@@ -30,6 +30,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-10-llm-resilience.md](2026-08-10-llm-resilience.md) | LLM 韧性：令牌桶 10 req/s + 指数退避重试 + 90s 总超时 | 新建 llm_resilience.py（`_TokenBucket`/`_classify_retryable`/`invoke_with_retry`）；`call_llm` 走 `invoke_with_retry` + `max_retries=0` 关 langchain 内建重试；10+307 tests 全绿 |
 | [2026-08-10-pg-pool-and-flush-timeout.md](2026-08-10-pg-pool-and-flush-timeout.md) | PG 连接池 10→20 + 60s 监控；trace flush 10s 总超时 | postgres.py `PG_POOL_MAX_SIZE=20` + `start/stop_pool_monitor`（`get_size/get_idle_size` 耗尽告警）；sdk.py `flush` 包 `wait_for` 10s 超时不重抛；main.py lifespan 接线；7+300 tests 全绿 |
 | [2026-08-10-embedding-resilience.md](2026-08-10-embedding-resilience.md) | Embedding 韧性：超时 + 错误分类重试 + LRU 缓存 + trace span | service.py 单文件：`EMBEDDING_TIMEOUT/RETRIES/CACHE_SIZE` 可配；网络/限流/5xx 退避重试、认证/参数错误直接失败；LRU 只缓存成功；`current_tracer` span 埋点；12+300 tests 全绿 |
 | [2026-08-05-e2e-regression-verification.md](2026-08-05-e2e-regression-verification.md) | e2e 回归验证：2026-08-04 / 2026-08-05 三份安全加固 plan | test_full_flow.py 1 passed in 62.12s（真实 LLM + PG，fact_sales.total_amount=3,502,666.04）；手工矩阵 5 项全过（chat 全角注入→SSE SECURITY_REJECTED；PATCH 卡字段→422；observability 隔离；非法 chosen_tool→静默置 None；ANALYSIS_DSN 真连 4/4 过） |

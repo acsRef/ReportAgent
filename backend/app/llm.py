@@ -7,11 +7,16 @@ import logging
 
 from langchain_openai import ChatOpenAI
 
+from app.llm_resilience import invoke_with_retry
+
 _LLM_CONFIG = {
     "model": os.getenv("LLM_MODEL", "MiniMax-M2.7-highspeed"),
     "api_key": os.getenv("LLM_API_KEY") or os.getenv("MINIMAX_API_KEY"),
     "base_url": os.getenv("LLM_BASE_URL", "https://api.minimax.chat/v1"),
     "temperature": 0.1,
+    # max_retries=0：关闭 langchain 内建重试，让 llm_resilience 成为唯一重试层，
+    # 避免双重退避叠加（429 内部重试 + 本层重试）。
+    "max_retries": 0,
 }
 
 # Whitelist of tool names exposed to the user-facing intent analysis step
@@ -82,7 +87,7 @@ def get_chat_llm(**kwargs) -> ChatOpenAI:
 def call_llm(prompt: str | list, **kwargs) -> str:
     llm = get_chat_llm(**kwargs)
     start = time.monotonic()
-    resp = llm.invoke(prompt)
+    resp = invoke_with_retry(lambda: llm.invoke(prompt))
     elapsed_ms = int((time.monotonic() - start) * 1000)
     # Reasoning models (DeepSeek, MiniMax-M2.7-highspeed) often put
     # the final JSON answer inside a <think> block. We keep the FULL
