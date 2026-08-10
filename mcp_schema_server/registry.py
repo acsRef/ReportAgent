@@ -1,6 +1,31 @@
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# Schema RAG Phase 1：FAQ 知识库单一数据源（与 backend/app/tools/faq_tools.py 读同一份 JSON）。
+_FAQ_PATH = Path(__file__).resolve().parent.parent / "backend" / "scripts" / "schema_faq.json"
+_FAQ_ENTRIES: list[dict] | None = None
+
+
+def _load_faq() -> list[dict]:
+    """惰性加载 FAQ 知识库；文件缺失/损坏降级为空列表。"""
+    global _FAQ_ENTRIES
+    if _FAQ_ENTRIES is not None:
+        return _FAQ_ENTRIES
+    try:
+        if _FAQ_PATH.exists():
+            with open(_FAQ_PATH, encoding="utf-8") as f:
+                _FAQ_ENTRIES = json.load(f)
+    except Exception:
+        _FAQ_ENTRIES = []
+    if _FAQ_ENTRIES is None:
+        _FAQ_ENTRIES = []
+    return _FAQ_ENTRIES
 
 
 # ── Hardcoded schema — matches backend/seed_data.sql ──────────────────────
@@ -260,6 +285,42 @@ class SchemaRegistry:
                 "column_count": len(t["columns"]),
             }
             for t in self._tables_cache
+        ]
+
+    def search_faq(self, query: str, top_k: int = 3) -> list[dict]:
+        """检索 FAQ 知识库（常见问题 + SQL 模板 + 业务口径要点）。
+
+        scoring 与 backend faq_tools 一致：keywords 子串命中 ×3、question 含核心词 +1。
+        空/无命中返回 []。
+        """
+        entries = _load_faq()
+        if not query or not query.strip() or not entries:
+            return []
+
+        qlower = query.lower()
+        scored: list[tuple[float, dict]] = []
+        for e in entries:
+            score = 0.0
+            for kw in (e.get("keywords", []) or []):
+                if isinstance(kw, str) and kw and kw.lower() in qlower:
+                    score += 3.0
+            q_terms = set(str(e.get("question", "")).lower().replace(",", " ").split())
+            for term in q_terms:
+                if term and len(term) > 1 and term in qlower:
+                    score += 1.0
+            if score > 0:
+                scored.append((score, e))
+
+        scored.sort(key=lambda x: -x[0])
+        return [
+            {
+                "question": e.get("question", ""),
+                "sql": e.get("sql", ""),
+                "note": e.get("note", ""),
+                "tables": e.get("tables", []),
+                "score": round(score, 2),
+            }
+            for score, e in scored[:top_k]
         ]
 
     def _format_table(self, t: dict) -> dict:

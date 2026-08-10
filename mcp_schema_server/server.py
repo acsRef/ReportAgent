@@ -100,6 +100,51 @@ async def handle_list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="search_faq",
+            description=(
+                "根据中文业务关键词检索历史 FAQ 知识库，返回最相关的常见问题、示例 SQL 和业务口径要点。\n"
+                "\n"
+                "用途：写 SQL 前查「这类问题以前怎么算」——业务口径（毛利率、退货率、出勤率、库存周转等）"
+                "和常见分组/排序模板都在这。不知道指标怎么算时先查这里。\n"
+                "\n"
+                "输入：\n"
+                "  query（必填）— 中文自然语言描述，如 '区域退货率'、'月度销售趋势'\n"
+                "  top_k（可选，默认 3）— 返回前 N 个案例\n"
+                "\n"
+                "输出：JSON 数组，每项包含：\n"
+                "  question（问题）\n"
+                "  sql（示例 SQL）\n"
+                "  note（业务口径要点，为什么这么算）\n"
+                "  tables（涉及的表）\n"
+                "  score（匹配分，越高越相关）\n"
+                "\n"
+                "示例：\n"
+                "  search_faq('退货率') → 返回退货率口径（退货金额/销售额，经 sale_id 关联）\n"
+                "  search_faq('毛利率') → 返回毛利率口径（SUM(profit)/SUM(total_amount)）\n"
+                "\n"
+                "不要用来：\n"
+                "  - 找数据在哪个表 → 用 search_tables\n"
+                "  - 查具体业务数据行 → 这不是数据查询工具\n"
+                "\n"
+                "失败处理：无匹配案例时返回空数组，不报错。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "中文自然语言查询，描述你要算的指标/口径，如 '退货率'、'各区域销售额排名'",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "返回前 N 个案例（默认 3）",
+                        "default": 3,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
             name="list_tables",
             description=(
                 "列出数据库中所有表的表名、中文描述和字段数量。\n"
@@ -155,6 +200,15 @@ async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> list[
         if ddl:
             return [TextContent(type="text", text=ddl)]
         return [TextContent(type="text", text=f"Table '{table_name}' not found")]
+
+    elif name == "search_faq":
+        query = arguments.get("query", "")
+        top_k = arguments.get("top_k", 3)
+        results = registry.search_faq(query, top_k)
+        return [TextContent(
+            type="text",
+            text=json.dumps(results, ensure_ascii=False, indent=2),
+        )]
 
     elif name == "list_tables":
         tables = registry.list_tables()

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.context import format_context_block
 from app.llm import call_llm, _format_tools_for_prompt
+from app.tools.faq_tools import search_faq
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
 from app.utils.text import extract_sql, safe_json_parse, strip_markdown_fence
 from app.infra.trace.sdk import traced_node
@@ -395,6 +396,26 @@ def _generate_sql(state: SQLAgentState) -> dict:
     # + 外键链路（写 JOIN 的节点必须看到具体外键对照，不能只靠列名猜）。
     today = date.today().isoformat()
 
+    # Schema RAG Phase 1：把与当前问题最相关的历史案例（FAQ）注入 prompt，
+    # 给 LLM 提供业务口径与 SQL 模板参考。命中失败不影响主流程（降级为空块）。
+    faq_block = ""
+    try:
+        faq_rows = search_faq(state.get("user_query", ""), top_k=3)
+        if faq_rows:
+            faq_lines = "\n\n".join(
+                f"【参考案例 {i}】问题：{r['question']}\n"
+                f"示例 SQL：\n{r['sql']}\n"
+                f"要点：{r['note']}"
+                for i, r in enumerate(faq_rows, 1)
+            )
+            faq_block = (
+                "\n\n以下历史案例与示例 SQL 仅作参考——表名/字段名必须以上面"
+                "「可用表结构」里的真实名称为准，若与案例冲突以可用表结构为准：\n"
+                f"{faq_lines}\n"
+            )
+    except Exception as exc:
+        logger.warning("search_faq failed, generating SQL without FAQ context: %s", exc)
+
     prompt = f"""你是一个SQL生成专家。根据查询计划生成SQL语句。
 
 当前日期: {today}
@@ -411,6 +432,7 @@ def _generate_sql(state: SQLAgentState) -> dict:
 
 {_FK_CHAIN_HINTS}
 
+{faq_block}
 规则:
 - 数据库是 PostgreSQL，使用标准 PostgreSQL 兼容的 SQL 语法（不用 DuckDB 专属语法）
 - 不要使用 EXTRACT() 类的 DuckDB 函数做日期处理

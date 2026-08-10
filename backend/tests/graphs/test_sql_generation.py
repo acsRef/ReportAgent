@@ -237,6 +237,68 @@ def test_generate_sql_prompt_contains_join_rules(monkeypatch) -> None:
     assert "说明关联逻辑" not in prompt
 
 
+def test_generate_sql_prompt_injects_faq(monkeypatch) -> None:
+    """Schema RAG：命中 FAQ 时把示例 SQL + 业务口径注入 prompt，并带「仅作参考」防御。"""
+    from app.agent.sql_graph import _generate_sql
+    captured = _capture_prompt(monkeypatch)
+    monkeypatch.setattr(
+        "app.agent.sql_graph.search_faq",
+        lambda query, top_k=3: [{
+            "question": "区域退货率",
+            "sql": "SELECT rc.region_name, ROUND(SUM(rt.return_amount)/NULLIF(SUM(f.total_amount),0)*100,2) AS 退货率 FROM fact_returns rt JOIN fact_sales f ON rt.sale_id=f.sale_id JOIN dim_region rc ON f.region_id=rc.region_id GROUP BY rc.region_name",
+            "note": "退货率 = 退货金额/销售额，经 sale_id 关联",
+            "tables": ["fact_returns", "fact_sales"],
+            "score": 6.0,
+        }],
+    )
+    state = {
+        **_minimal_state(),
+        "user_query": "各区域退货率排名",
+        "schema_context": _multi_table_schema(),
+    }
+    _generate_sql(state)
+
+    prompt = captured["text"]
+    assert "参考案例 1" in prompt
+    assert "退货率 = 退货金额/销售额" in prompt
+    assert "仅作参考" in prompt
+
+
+def test_generate_sql_no_faq_when_no_match(monkeypatch) -> None:
+    """Schema RAG：无命中时 prompt 不含 FAQ 块，主流程正常。"""
+    from app.agent.sql_graph import _generate_sql
+    captured = _capture_prompt(monkeypatch)
+    monkeypatch.setattr("app.agent.sql_graph.search_faq", lambda query, top_k=3: [])
+    state = {
+        **_minimal_state(),
+        "user_query": "完全无关的乱码查询",
+        "schema_context": _multi_table_schema(),
+    }
+    _generate_sql(state)
+
+    prompt = captured["text"]
+    assert "参考案例" not in prompt
+
+
+def test_generate_sql_faq_error_degrades(monkeypatch) -> None:
+    """Schema RAG：search_faq 抛错时降级为无 FAQ，不影响 SQL 生成。"""
+    from app.agent.sql_graph import _generate_sql
+    captured = _capture_prompt(monkeypatch)
+
+    def _boom(query, top_k=3):
+        raise RuntimeError("faq unavailable")
+
+    monkeypatch.setattr("app.agent.sql_graph.search_faq", _boom)
+    state = {
+        **_minimal_state(),
+        "user_query": "各区域销售额排名",
+        "schema_context": _multi_table_schema(),
+    }
+    result = _generate_sql(state)
+    assert captured["calls"] == 1
+    assert "参考案例" not in captured["text"]
+
+
 def test_generate_sql_prompt_contains_time_split_rules(monkeypatch) -> None:
     """时间维度规则：date_id 关联 dim_date.full_date 区间过滤 + 左闭右开 +
     相对/绝对时间混用时子查询分算禁混写。"""
