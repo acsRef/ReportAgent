@@ -30,6 +30,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-10-embedding-resilience.md](2026-08-10-embedding-resilience.md) | Embedding 韧性：超时 + 错误分类重试 + LRU 缓存 + trace span | service.py 单文件：`EMBEDDING_TIMEOUT/RETRIES/CACHE_SIZE` 可配；网络/限流/5xx 退避重试、认证/参数错误直接失败；LRU 只缓存成功；`current_tracer` span 埋点；12+300 tests 全绿 |
 | [2026-08-05-e2e-regression-verification.md](2026-08-05-e2e-regression-verification.md) | e2e 回归验证：2026-08-04 / 2026-08-05 三份安全加固 plan | test_full_flow.py 1 passed in 62.12s（真实 LLM + PG，fact_sales.total_amount=3,502,666.04）；手工矩阵 5 项全过（chat 全角注入→SSE SECURITY_REJECTED；PATCH 卡字段→422；observability 隔离；非法 chosen_tool→静默置 None；ANALYSIS_DSN 真连 4/4 过） |
 | [2026-08-06-rag-dictionary-mcp-bridge.md](2026-08-06-rag-dictionary-mcp-bridge.md) | 数据字典 RAG 桥：ragent-py MCP + 字段语义澄清闭环 | A1-A8 ragent-py + B1-B6 ReportAgent + Phase C 跨进程冒烟已就绪；graphs 58 + contracts 14 + smoke 186 全绿，sqlgate 不回归；ragent-py 侧全量 195 passed；详见 plan 文档「最终落地」段 |
 | [2026-08-05-security-guard-evasion-hardening.md](2026-08-05-security-guard-evasion-hardening.md) | SecurityGuard 注入变体加固：归一化前置 + 同义变形规则 | A-5 后半段：`_normalize`（NFKC + 剥零宽）+ 字符类 leet + 英文同义动词 + 中文绕过类；14 例绕过形态全拦、6 例新防误伤 + 既有面回归通过；全量 267 passed |
