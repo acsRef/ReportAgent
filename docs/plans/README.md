@@ -30,6 +30,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-10-ragent-token-cache.md](2026-08-10-ragent-token-cache.md) | ragent-py 登录 token 跨进程共享缓存（根治 429） | 三处同格式文件缓存（ragent mcp_server / interface_dict / mcp_schema_server）；401 自动失效重登；真实跨进程 E2E：进程 B 复用 A token 0 次新登录 |
 | [2026-08-10-schema-from-rag.md](2026-08-10-schema-from-rag.md) | Schema 从 rag 来：删硬编码 _TABLES，三工具改查 ragent-py 字典 KB | rag_schema.py + data_tools 委托 + mcp registry 双份解析；过滤 dim_*/fact_*（系统表不污染）；词典 KB 已有 10 张表数据无需重灌；真实 E2E 全命中；351 passed |
 | [2026-08-10-schema-faq-mcp-client.md](2026-08-10-schema-faq-mcp-client.md) | Schema FAQ RAG：ReportAgent stdio MCP client 连 ragent-py | 新 mcp_faq_client.py（持久后台循环 + stdio 会话，单例复用）；faq_tools.search_faq 优先 MCP、失败降级本地；_generate_sql 兼容 MCP chunk text 注入；真实 E2E：灌 20 FAQ + 5 查询全命中 |
 | [2026-08-10-schema-faq-rag.md](2026-08-10-schema-faq-rag.md) | Schema RAG Phase 1：FAQ 知识库 + search_faq + SQL Agent 融合 | 知识库用 JSON 单一数据源（改 PG 表方案因 MCP/本地无 PG 依赖）；faq_tools.search_faq + `_generate_sql` prompt 注入（带「仅作参考」防御）；MCP 注册 search_faq 工具；20 条核实 SQL；9+317 tests 全绿 |

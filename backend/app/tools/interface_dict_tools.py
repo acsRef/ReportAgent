@@ -14,6 +14,8 @@ import threading
 import httpx  # 关键：模块级 `httpx.post`/`httpx.request` 调用，单测以 `monkeypatch.setattr(mod.httpx, ...)` 替换；不要改成 `from httpx import post, request`，会破坏 monkeypatch
 from langchain_core.tools import tool
 
+from app.tools import ragent_token_cache
+
 logger = logging.getLogger(__name__)
 
 _TOKEN_LOCK = threading.Lock()
@@ -49,14 +51,21 @@ def _login_token(base: str) -> str:
         cached = _token_cache.get(base)
         if cached:
             return cached
+        # 跨进程共享缓存：命中则直接复用（避免多次进程各自登录撞限流）。
+        shared = ragent_token_cache.get_token(base)
+        if shared:
+            _token_cache[base] = shared
+            return shared
         resp = httpx.post(
             f"{base}/api/v1/auth/login",
             json={"username": os.getenv("RAGENT_USER", ""), "password": os.getenv("RAGENT_PASSWORD", "")},
             timeout=10,
         )
         resp.raise_for_status()
-        _token_cache[base] = resp.json()["access_token"]
-        return _token_cache[base]
+        token = resp.json()["access_token"]
+        _token_cache[base] = token
+        ragent_token_cache.set_token(base, token)
+        return token
 
 
 def _dict_kb_id(base: str, token: str) -> str:
@@ -97,10 +106,11 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
             json={"query": query, "kb_ids": [kb_id], "top_k": top_k},
             timeout=30,
         )
-        if resp.status_code == 401:  # token 过期 → 清缓存重登一次
+        if resp.status_code == 401:  # token 过期 → 失效共享缓存 + 重登一次
             original_detail = resp.text[:200]
             with _TOKEN_LOCK:
                 _token_cache.pop(base, None)
+            ragent_token_cache.invalidate(base)
             token = _login_token(base)
             resp = httpx.request(
                 "POST", f"{base}/api/v1/retrieve",

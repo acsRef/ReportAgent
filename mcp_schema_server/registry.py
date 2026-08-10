@@ -17,6 +17,8 @@ from typing import Any, Optional
 
 import httpx
 
+from mcp_schema_server import token_cache
+
 logger = logging.getLogger(__name__)
 
 # FAQ 知识库单一数据源（与 backend/app/tools/faq_tools.py 读取同一份 JSON）。
@@ -54,14 +56,21 @@ def _login_token(base: str) -> str:
     cached = _token_cache.get(base)
     if cached:
         return cached
+    # 跨进程共享缓存：命中复用，避免多次进程各自登录撞限流。
+    shared = token_cache.get_token(base)
+    if shared:
+        _token_cache[base] = shared
+        return shared
     resp = httpx.post(
         f"{base}/api/v1/auth/login",
         json={"username": os.getenv("RAGENT_USER", ""), "password": os.getenv("RAGENT_PASSWORD", "")},
         timeout=10,
     )
     resp.raise_for_status()
-    _token_cache[base] = resp.json()["access_token"]
-    return _token_cache[base]
+    token = resp.json()["access_token"]
+    _token_cache[base] = token
+    token_cache.set_token(base, token)
+    return token
 
 
 def _dict_kb_id(base: str, token: str) -> str:
