@@ -94,7 +94,7 @@ cd backend && pytest -q                     # 全量离线回归
 - `ingest_faq` 经 stdio MCP 灌 20/20 索引成功（embedding 走 SiliconFlow）。
 - `search_faq` 检索「退货率 → 区域退货率」「毛利率 → 毛利率Top产品」「销售额排名 → 各区域销售额排名」「库存周转率 → 库存周转」「出勤率 → 出勤率」全部命中正确。
 - 单例 `get_mcp_faq_client()` 复用会话避免登录 429。
-- **环境约束**：ragent-py 运行时共享 PG 角色状态会让 ReportAgent 持久化测试（test_session_ownership / test_mem0_extractor 等）失败——这是字典桥 plan 已登记的两项目共享 `ragent` 库的环境耦合，**与本次改动无关**，离线全量 336 passed 需在 ragent-py 停止时跑。
+- **环境约束（更正）**：早前误报「ragent-py 运行时共享 PG 角色状态让持久化测试失败、需停 ragent-py」。复核后确认这是**误判**——真实原因是 E2E 测试脚本留下的孤儿 mcp_server 子进程造成暂态干扰，已随进程退出消失；全量 338 passed 在 **ragent-py 起着时也稳定成立**。为根治孤儿化，`MCPFaqClient` 新增 `close()`（退出会话杀子进程 + 停后台线程）并接入 main.py 关闭流程（commit `3d27d10`）。
 
 ## Explicitly NOT doing
 
