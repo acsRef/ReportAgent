@@ -1,6 +1,6 @@
 # 2026-08-10 Embedding 韧性：超时 + 重试 + 缓存 + trace 埋点
 
-> 状态: 已完成（commit 见下）
+> 状态: 已完成（commit `249ed50`）
 
 ## Context
 
