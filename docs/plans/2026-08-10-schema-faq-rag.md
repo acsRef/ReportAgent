@@ -1,6 +1,6 @@
 # 2026-08-10 Schema RAG Phase 1：FAQ 知识库 + search_faq + SQL Agent 融合
 
-> 状态: 已完成（commit 见下）
+> 状态: 已完成（commit `1f2e9c3`）
 
 ## Context
 
