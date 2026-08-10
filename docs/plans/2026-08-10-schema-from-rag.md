@@ -1,6 +1,6 @@
 # 2026-08-10 Schema 从 RAG 来：删硬编码 _TABLES，schema 工具改查 ragent-py 字典 KB
 
-> 状态: 已完成（commit 见下；含真实 E2E）
+> 状态: 已完成（commit `e1de8f5`；含真实 E2E）
 
 ## Context
 
