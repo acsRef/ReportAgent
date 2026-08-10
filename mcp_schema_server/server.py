@@ -223,8 +223,8 @@ async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> list[
 async def main():
     from mcp.server.stdio import stdio_server
 
-    count = registry.build_index()
-    print(f"Schema registry initialized: {count} tables indexed", file=sys.stderr)
+    registry.build_index()
+    print("Schema registry initialized: schema sourced live from ragent-py dictionary KB", file=sys.stderr)
 
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
