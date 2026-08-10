@@ -405,10 +405,21 @@ def _generate_sql(state: SQLAgentState) -> dict:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
         faq_rows = parsed.get("matches") or [] if isinstance(parsed, dict) else []
         if faq_rows:
+            def _format_faq_row(r: dict) -> str:
+                parts = [f"问题：{r.get('question', '')}"]
+                sql = r.get("sql") or ""
+                text = r.get("text") or ""
+                note = r.get("note") or ""
+                if sql:
+                    parts.append(f"示例 SQL：\n{sql}")
+                elif text:  # MCP chunk 形态：问题+SQL+要点都在 text 里
+                    parts.append(f"示例内容：\n{text}")
+                if note:
+                    parts.append(f"要点：{note}")
+                return "\n".join(parts)
+
             faq_lines = "\n\n".join(
-                f"【参考案例 {i}】问题：{r['question']}\n"
-                f"示例 SQL：\n{r['sql']}\n"
-                f"要点：{r['note']}"
+                f"【参考案例 {i}】{_format_faq_row(r)}"
                 for i, r in enumerate(faq_rows, 1)
             )
             faq_block = (

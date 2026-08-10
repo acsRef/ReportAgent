@@ -7,6 +7,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from app.tools.mcp_faq_client import get_mcp_faq_client
+
 logger = logging.getLogger(__name__)
 
 # FAQ 知识库单一数据源（与 mcp_schema_server/registry.py 读取同一份 JSON）。
@@ -69,6 +71,31 @@ def _search_faq_rows(query: str, top_k: int = 3) -> list[dict]:
     ]
 
 
+def _mcp_search_faq(query: str, top_k: int) -> list[dict]:
+    """经 MCP client 调 ragent-py search_faq，返回规范化的 matches 列表。失败抛错。
+
+    空命中/非 JSON 返回（如「FAQ 无匹配：…」纯文本）视为无命中（返回 []），
+    由调用方决定是否降级本地——不在此抛错。
+    """
+    raw = get_mcp_faq_client().search_faq(query, top_k)
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return []
+    items = parsed.get("matches") if isinstance(parsed, dict) else None
+    rows = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        # ragent-py 检索返回 chunk 文本（含问题+SQL+要点），归一到 {text} 供注入
+        rows.append({
+            "question": (it.get("title") or it.get("question") or "")[:80],
+            "text": (it.get("text") or "")[:2000],
+            "score": float(it.get("score") or 0.0),
+        })
+    return rows
+
+
 @tool
 def search_faq(query: str, top_k: int = 3) -> str:
     """在 Schema FAQ 知识库中检索最常见分析问题的 SQL 模板与业务口径要点。
@@ -78,5 +105,12 @@ def search_faq(query: str, top_k: int = 3) -> str:
     用于：写 SQL 前查「这类问题以前怎么算」——业务口径（毛利率/退货率/出勤率/库存周转等）
     和常见分组/排序模板都在这里。
     不要用来找数据表——用 search_tables；不要用来查业务数据行——此工具只读 FAQ 知识库。"""
+    # 优先走 MCP（ragent-py RAG）；不可用降级本地 seed，返回契约不变。
+    try:
+        rows = _mcp_search_faq(query, top_k)
+        if rows:
+            return json.dumps({"matches": rows}, ensure_ascii=False)
+    except Exception as exc:
+        logger.warning("MCP FAQ search unavailable, falling back to local seed: %s", exc)
     rows = _search_faq_rows(query, top_k)
     return json.dumps({"matches": rows}, ensure_ascii=False)

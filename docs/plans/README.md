@@ -30,6 +30,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-10-schema-faq-mcp-client.md](2026-08-10-schema-faq-mcp-client.md) | Schema FAQ RAG：ReportAgent stdio MCP client 连 ragent-py | 新 mcp_faq_client.py（持久后台循环 + stdio 会话，单例复用）；faq_tools.search_faq 优先 MCP、失败降级本地；_generate_sql 兼容 MCP chunk text 注入；真实 E2E：灌 20 FAQ + 5 查询全命中 |
 | [2026-08-10-schema-faq-rag.md](2026-08-10-schema-faq-rag.md) | Schema RAG Phase 1：FAQ 知识库 + search_faq + SQL Agent 融合 | 知识库用 JSON 单一数据源（改 PG 表方案因 MCP/本地无 PG 依赖）；faq_tools.search_faq + `_generate_sql` prompt 注入（带「仅作参考」防御）；MCP 注册 search_faq 工具；20 条核实 SQL；9+317 tests 全绿 |
 | [2026-08-10-llm-resilience.md](2026-08-10-llm-resilience.md) | LLM 韧性：令牌桶 10 req/s + 指数退避重试 + 90s 总超时 | 新建 llm_resilience.py（`_TokenBucket`/`_classify_retryable`/`invoke_with_retry`）；`call_llm` 走 `invoke_with_retry` + `max_retries=0` 关 langchain 内建重试；10+307 tests 全绿 |
 | [2026-08-10-pg-pool-and-flush-timeout.md](2026-08-10-pg-pool-and-flush-timeout.md) | PG 连接池 10→20 + 60s 监控；trace flush 10s 总超时 | postgres.py `PG_POOL_MAX_SIZE=20` + `start/stop_pool_monitor`（`get_size/get_idle_size` 耗尽告警）；sdk.py `flush` 包 `wait_for` 10s 超时不重抛；main.py lifespan 接线；7+300 tests 全绿 |
