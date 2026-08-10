@@ -1,6 +1,6 @@
 # 2026-08-10 PG 连接池扩容 + Trace flush 超时保护
 
-> 状态: 已完成（commit 见下）
+> 状态: 已完成（commit `7fa8380`）
 
 ## Context
 
