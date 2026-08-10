@@ -1,6 +1,6 @@
 # 2026-08-10 ragent-py token 跨进程共享缓存：根治登录 429
 
-> 状态: 已完成（commit 见下；含真实跨进程 E2E）
+> 状态: 已完成（ReportAgent commit `7a3fc1d`；含真实跨进程 E2E）
 
 ## Context
 
