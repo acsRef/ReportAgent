@@ -1,5 +1,5 @@
 from app.tools.registry import registry, ToolMetadata
-from app.tools import data_tools, sql_tools, report_tools, interface_dict_tools
+from app.tools import data_tools, sql_tools, report_tools, interface_dict_tools, faq_tools
 
 
 # 工具描述是模型选择工具的主要依据：每条描述都按「用途 + 输入 + 输出 +
@@ -81,6 +81,25 @@ def register_all_tools():
                 "不要用来找数据表——用 search_tables；此工具只读字典文档，不查业务数据行。"
             ),
             capability="dictionary_search",
+            agent_type="data",
+            risk_level="low",
+            input_schema={"query": "string", "top_k": "int"},
+            output_schema={"matches": "array"},
+        ),
+    )
+
+    registry.register(
+        "search_faq", faq_tools.search_faq,
+        ToolMetadata(
+            name="search_faq",
+            description=(
+                "在 Schema FAQ 知识库中检索最常见分析问题的 SQL 模板与业务口径要点。"
+                "输入：query 中文自然语言（如 '区域退货率'、'毛利率'），top_k 返回条数（默认 3）。"
+                "输出：JSON，matches=[{question, sql, note, tables, score}]；无匹配时 matches=[]。"
+                "用于：写 SQL 前查「这类问题以前怎么算」——毛利率/退货率/出勤率/库存周转等业务口径和常见分组/排序模板。"
+                "不要用来找数据表——用 search_tables；不要用来查业务数据行——此工具只读 FAQ 知识库。"
+            ),
+            capability="faq_search",
             agent_type="data",
             risk_level="low",
             input_schema={"query": "string", "top_k": "int"},

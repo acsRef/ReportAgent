@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -16,11 +17,11 @@ pytestmark = pytest.mark.smoke
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
-# --- faq_tools.search_faq（SQL Agent 使用路径） ---
+# --- faq_tools（SQL Agent 使用路径：注册工具 + 纯检索） ---
 
 
-def test_search_faq_matches_return_rate():
-    rows = faq_tools.search_faq("退货率", top_k=3)
+def test_search_faq_rows_matches_return_rate():
+    rows = faq_tools._search_faq_rows("退货率", top_k=3)
     assert rows
     top = rows[0]
     assert top["score"] > 0
@@ -29,31 +30,63 @@ def test_search_faq_matches_return_rate():
     assert top["note"]
 
 
-def test_search_faq_no_match_returns_empty():
-    assert faq_tools.search_faq("完全无关的乱码词汇xyz", top_k=3) == []
+def test_search_faq_rows_no_match_returns_empty():
+    assert faq_tools._search_faq_rows("完全无关的乱码词汇xyz", top_k=3) == []
 
 
-def test_search_faq_sales_ranking_ranked_first():
-    rows = faq_tools.search_faq("各区域销售额排名", top_k=3)
+def test_search_faq_rows_sales_ranking_ranked_first():
+    rows = faq_tools._search_faq_rows("各区域销售额排名", top_k=3)
     assert rows
     assert rows[0]["question"] == "各区域销售额排名"
     assert len(rows) <= 3
 
 
-def test_search_faq_top_k_bounds():
-    rows = faq_tools.search_faq("销售 区域 退货 库存 考勤 毛利率", top_k=20)
+def test_search_faq_rows_top_k_bounds():
+    rows = faq_tools._search_faq_rows("销售 区域 退货 库存 考勤 毛利率", top_k=20)
     assert len(rows) <= 20
     assert len(rows) > 0
 
 
-def test_search_faq_missing_file_degrades(monkeypatch):
+def test_search_faq_rows_missing_file_degrades(monkeypatch):
     faq_tools._FAQ_ENTRIES = None
     monkeypatch.setattr(
         faq_tools,
         "_FAQ_PATH",
         Path(__file__).parent / "does_not_exist_schema_faq.json",
     )
-    assert faq_tools.search_faq("退货率", top_k=3) == []
+    try:
+        assert faq_tools._search_faq_rows("退货率", top_k=3) == []
+    finally:
+        # 清缓存：否则 _load_faq 会把「缺失 → 空列表」固化，污染后续测试
+        faq_tools._FAQ_ENTRIES = None
+
+
+def test_search_faq_tool_invoke_returns_json_matches():
+    """@tool 契约：.invoke 返回 JSON 字符串，matches 为命中案例。"""
+    raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+    assert isinstance(raw, str)
+    parsed = json.loads(raw)
+    assert isinstance(parsed.get("matches"), list)
+    assert parsed["matches"]
+    assert "SELECT" in parsed["matches"][0]["sql"]
+
+
+def test_search_faq_tool_invoke_no_match_empty():
+    raw = faq_tools.search_faq.invoke({"query": "完全无关的乱码词汇xyz", "top_k": 3})
+    parsed = json.loads(raw)
+    assert parsed["matches"] == []
+
+
+def test_search_faq_registered_in_tool_registry(monkeypatch):
+    """一等注册工具：register_all_tools 后 registry 能取到 search_faq。"""
+    from app.tools import register_all_tools
+    from app.tools.registry import registry
+
+    register_all_tools()
+    tools = registry.get(["search_faq"])
+    assert tools and tools[0] is faq_tools.search_faq
+    meta = registry.get_metadata("search_faq")
+    assert meta is not None and meta.capability == "faq_search"
 
 
 # --- MCP registry parity ---

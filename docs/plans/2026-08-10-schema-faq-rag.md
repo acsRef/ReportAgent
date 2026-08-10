@@ -86,7 +86,17 @@ cd backend && pytest -q
 ## Explicitly NOT doing
 
 - **不做** PG 表 FAQ + 向量搜索——MCP/backend 本地均无 PG 依赖，Phase 1 关键词评分足够；向量化留 Phase 2（embed 进 pgvector）。
-- **不做** 把 FAQ 也做成 `data_tools` 的 langchain 工具（`@tool`）——SQL Agent 用 `faq_tools.search_faq` 纯函数直取，不经工具协议，避免与 agent 工具白名单纠缠。
 - **不做** 50+ 条灌水——本轮交付约 20 条**经核实的正确 SQL**（覆盖 4 事实表 + 易错口径），宁缺毋滥；扩充是长期饲养。
 - **不做** Metric RAG / Report RAG（Phase 2/3）——本期只做 Phase 1 FAQ。
 - **不改** requirement_analysis graph（只挂 schema 工具）——FAQ 只在 confirmed 执行的 `_generate_sql` 注入，意图分析阶段不加。
+
+## 修订（2026-08-10 落地后，按用户反馈）
+
+落地后用户澄清诉求：「用 MCP，接入 RAG 里来查询」——即 FAQ 检索要走**注册工具通道**，而非藏在 `_generate_sql` 里的本地旁路纯函数。据此修订：
+
+- `faq_tools.search_faq` 改为 `@tool`（langchain），`invoke` 返回 `{"matches": [...]}` JSON——镜像 `search_interface_dictionary` 的字典 RAG 先例。
+- `backend/app/tools/__init__.py` `register_all_tools()` 注册 `search_faq`（capability `faq_search`, agent_type `data`），成为 agent 一等 schema 工具（与 `search_tables`/`get_table_ddl`/`list_tables`/`search_interface_dictionary` 并列）。
+- `_generate_sql` 经 `search_faq.invoke({"query": …, "top_k": 3})` 检索并解析注入，不再直接调纯函数。
+- 纯 scoring 抽成 `_search_faq_rows` 供单测与复用。
+
+「用 MCP」在此代码库的落地含义：后端无真正 MCP 客户端连接，agent 的 schema 工具集就是 `app/tools/registry` 注册的这批工具（AGENTS.md 将其视为 MCP schema 工具）；`register_all_tools()` + agent 节点 `.invoke()` 即「走工具/RAG 通道检索」。MCP server 侧 `search_faq` 工具（`mcp_schema_server/`）保留为外部进程可调的一致面。

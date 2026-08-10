@@ -5,6 +5,8 @@ node's handling of think-block variants (closed, unclosed, absent).
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 pytestmark = pytest.mark.graphs
@@ -240,17 +242,19 @@ def test_generate_sql_prompt_contains_join_rules(monkeypatch) -> None:
 def test_generate_sql_prompt_injects_faq(monkeypatch) -> None:
     """Schema RAG：命中 FAQ 时把示例 SQL + 业务口径注入 prompt，并带「仅作参考」防御。"""
     from app.agent.sql_graph import _generate_sql
+    import json as _json
     captured = _capture_prompt(monkeypatch)
-    monkeypatch.setattr(
-        "app.agent.sql_graph.search_faq",
-        lambda query, top_k=3: [{
+
+    def _faq_tool(payload):
+        return _json.dumps({"matches": [{
             "question": "区域退货率",
             "sql": "SELECT rc.region_name, ROUND(SUM(rt.return_amount)/NULLIF(SUM(f.total_amount),0)*100,2) AS 退货率 FROM fact_returns rt JOIN fact_sales f ON rt.sale_id=f.sale_id JOIN dim_region rc ON f.region_id=rc.region_id GROUP BY rc.region_name",
             "note": "退货率 = 退货金额/销售额，经 sale_id 关联",
             "tables": ["fact_returns", "fact_sales"],
             "score": 6.0,
-        }],
-    )
+        }]}, ensure_ascii=False)
+
+    monkeypatch.setattr("app.agent.sql_graph.search_faq", SimpleNamespace(invoke=_faq_tool))
     state = {
         **_minimal_state(),
         "user_query": "各区域退货率排名",
@@ -267,8 +271,12 @@ def test_generate_sql_prompt_injects_faq(monkeypatch) -> None:
 def test_generate_sql_no_faq_when_no_match(monkeypatch) -> None:
     """Schema RAG：无命中时 prompt 不含 FAQ 块，主流程正常。"""
     from app.agent.sql_graph import _generate_sql
+    import json as _json
     captured = _capture_prompt(monkeypatch)
-    monkeypatch.setattr("app.agent.sql_graph.search_faq", lambda query, top_k=3: [])
+    monkeypatch.setattr(
+        "app.agent.sql_graph.search_faq",
+        SimpleNamespace(invoke=lambda payload: _json.dumps({"matches": []}, ensure_ascii=False)),
+    )
     state = {
         **_minimal_state(),
         "user_query": "完全无关的乱码查询",
@@ -285,10 +293,10 @@ def test_generate_sql_faq_error_degrades(monkeypatch) -> None:
     from app.agent.sql_graph import _generate_sql
     captured = _capture_prompt(monkeypatch)
 
-    def _boom(query, top_k=3):
+    def _boom(payload):
         raise RuntimeError("faq unavailable")
 
-    monkeypatch.setattr("app.agent.sql_graph.search_faq", _boom)
+    monkeypatch.setattr("app.agent.sql_graph.search_faq", SimpleNamespace(invoke=_boom))
     state = {
         **_minimal_state(),
         "user_query": "各区域销售额排名",

@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from langchain_core.tools import tool
+
 logger = logging.getLogger(__name__)
 
 # FAQ 知识库单一数据源（与 mcp_schema_server/registry.py 读取同一份 JSON）。
@@ -30,8 +32,8 @@ def _load_faq() -> list[dict]:
     return _FAQ_ENTRIES
 
 
-def search_faq(query: str, top_k: int = 3) -> list[dict]:
-    """按中文业务词语检索 FAQ 知识库，返回 top-K 条 {question, sql, note, tables, score}。
+def _search_faq_rows(query: str, top_k: int = 3) -> list[dict]:
+    """纯检索：按中文业务词语返回 top-K 条 {question, sql, note, tables, score}。
 
     scoring：每条目的 keywords 中凡是查询里出现的子串均 +3（中国话按子串匹配，
     不做分词）；question 里含查询核心词轻 +1。空/无命中返回 []（调用方应安全降级）。
@@ -65,3 +67,16 @@ def search_faq(query: str, top_k: int = 3) -> list[dict]:
         }
         for score, e in scored[:top_k]
     ]
+
+
+@tool
+def search_faq(query: str, top_k: int = 3) -> str:
+    """在 Schema FAQ 知识库中检索最常见分析问题的 SQL 模板与业务口径要点。
+
+    输入：query（中文自然语言，如 '区域退货率'、'毛利率'），top_k 返回条数（默认 3）。
+    输出：JSON，matches 为命中案例 [{question, sql, note, tables, score}]；无匹配时 matches=[]。
+    用于：写 SQL 前查「这类问题以前怎么算」——业务口径（毛利率/退货率/出勤率/库存周转等）
+    和常见分组/排序模板都在这里。
+    不要用来找数据表——用 search_tables；不要用来查业务数据行——此工具只读 FAQ 知识库。"""
+    rows = _search_faq_rows(query, top_k)
+    return json.dumps({"matches": rows}, ensure_ascii=False)

@@ -397,10 +397,13 @@ def _generate_sql(state: SQLAgentState) -> dict:
     today = date.today().isoformat()
 
     # Schema RAG Phase 1：把与当前问题最相关的历史案例（FAQ）注入 prompt，
-    # 给 LLM 提供业务口径与 SQL 模板参考。命中失败不影响主流程（降级为空块）。
+    # 给 LLM 提供业务口径与 SQL 模板参考。走「注册工具」通道（同 search_interface_dictionary
+    # 的字典检索先例）：调 search_faq 工具、解析 JSON、注入。任何失败降级为空块，不影响主流程。
     faq_block = ""
     try:
-        faq_rows = search_faq(state.get("user_query", ""), top_k=3)
+        raw = search_faq.invoke({"query": state.get("user_query", ""), "top_k": 3})
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        faq_rows = parsed.get("matches") or [] if isinstance(parsed, dict) else []
         if faq_rows:
             faq_lines = "\n\n".join(
                 f"【参考案例 {i}】问题：{r['question']}\n"
