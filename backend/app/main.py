@@ -40,7 +40,7 @@ from app.api.templates import router as templates_router
 from app.api.observability import router as observability_router
 from app.utils.pii import mask_pii
 from app.db import get_connection, close_connection
-from app.infra.db.postgres import init_pool, close_pool
+from app.infra.db.postgres import init_pool, close_pool, start_pool_monitor, stop_pool_monitor
 from app.infra.checkpoint.factory import init_checkpointer, close_checkpointer
 from app.infra.checkpoint.session import session_manager
 from app.infra.trace.sdk import get_tracer
@@ -200,6 +200,7 @@ async def lifespan(app: FastAPI):
     validate_auth_security_config()
     get_connection()
     await init_pool()
+    start_pool_monitor()
     await ensure_default_user()
     await _check_embedding_dimension()
     # Checkpointer 单例（dev=MemorySaver / 非 dev=AsyncPostgresSaver）：必须先于
@@ -209,6 +210,7 @@ async def lifespan(app: FastAPI):
     _agent = build_parent_graph()
     yield
     await close_checkpointer()
+    stop_pool_monitor()
     await close_pool()
     close_connection()
 

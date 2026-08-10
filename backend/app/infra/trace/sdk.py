@@ -3,6 +3,7 @@
 import asyncio
 import functools
 import logging
+import os
 import time
 import uuid
 from contextlib import contextmanager
@@ -15,6 +16,9 @@ from app.infra.trace.models import LLMCall, Span, Trace
 from app.infra.trace.repository import TraceRepository
 
 logger = logging.getLogger(__name__)
+
+# flush 总超时：DB 卡住时不能无限挂起 SSE 响应，超时降级为告警并放行主流程。
+_FLUSH_TIMEOUT = float(os.getenv("TRACE_FLUSH_TIMEOUT", "10.0"))
 
 _local: dict[str, "Tracer"] = {}
 
@@ -120,25 +124,42 @@ class Tracer:
         return self._stack[-1].span_id if self._stack else None
 
     async def flush(self):
-        repo = TraceRepository()
+        """落库 trace/spans，但绝不让 DB 卡住挂死调用方。
+
+        整体包一层 `asyncio.wait_for` 总超时：超时或任何异常都只告警、不重抛，
+        让 SSE 主流程继续；`finally` 兜底释放 _local 桶（C-4）。
+        """
         try:
             try:
-                await repo.save_trace(self._trace)
+                await asyncio.wait_for(self._flush_db(), timeout=_FLUSH_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "trace flush timed out after %ss for trace_id=%s",
+                    _FLUSH_TIMEOUT, self.trace_id,
+                )
             except Exception as exc:
-                logger.warning("save_trace failed for trace_id=%s: %s", self.trace_id, exc)
-            for llm_call in self._llm_calls:
-                try:
-                    await repo.save_llm_call(llm_call)
-                except Exception as exc:
-                    logger.warning("save_llm_call failed for trace_id=%s: %s", self.trace_id, exc)
-            for span in self._spans:
-                try:
-                    await repo.save_span(span)
-                except Exception as exc:
-                    logger.warning("save_span failed for trace_id=%s: %s", self.trace_id, exc)
+                logger.warning("trace flush failed for trace_id=%s: %s", self.trace_id, exc)
         finally:
             # C-4: 无论落库成败都要释放桶，否则异常路径下 tracer 永驻 _local → 内存泄露。
             _local.pop(self.trace_id, None)
+
+    async def _flush_db(self):
+        """逐操作落库；同一操作失败不拖垮其余。整体由 flush 的 wait_for 兜底超时。"""
+        repo = TraceRepository()
+        try:
+            await repo.save_trace(self._trace)
+        except Exception as exc:
+            logger.warning("save_trace failed for trace_id=%s: %s", self.trace_id, exc)
+        for llm_call in self._llm_calls:
+            try:
+                await repo.save_llm_call(llm_call)
+            except Exception as exc:
+                logger.warning("save_llm_call failed for trace_id=%s: %s", self.trace_id, exc)
+        for span in self._spans:
+            try:
+                await repo.save_span(span)
+            except Exception as exc:
+                logger.warning("save_span failed for trace_id=%s: %s", self.trace_id, exc)
 
 
 def get_tracer(trace_id: str, session_id: Optional[str] = None,
