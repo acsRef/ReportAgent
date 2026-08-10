@@ -1,6 +1,6 @@
 # 2026-08-10 Schema FAQ RAG：ReportAgent 端 stdio MCP client 连 ragent-py
 
-> 状态: 已完成（commit 见下；含真实 E2E 冒烟）
+> 状态: 已完成（commit `8b06978`；含真实 E2E 冒烟）
 
 ## Context
 
