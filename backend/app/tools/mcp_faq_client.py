@@ -138,6 +138,48 @@ class MCPFaqClient:
                 self._reset()
                 raise
 
+    # ── 清理 ──
+
+    def close(self) -> None:
+        """全量清理：退出 MCP 会话（杀子进程）+ 停后台循环线程。幂等。
+
+        进程退出/测试结束必须调用——否则 ragent-py mcp_server 子进程在 Windows
+        上不会随父进程自动终止，会孤儿化并继续连共享 PG/ragent-py。
+        """
+        loop = self._loop
+        if loop is None:
+            return
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self._close_async(), loop)
+            fut.result(timeout=self._config.timeout)
+        except Exception as exc:
+            logger.warning("MCP FAQ client close error: %s", exc)
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+            if self._thread is not None:
+                self._thread.join(timeout=5)
+        except Exception:
+            pass
+        self._session = None
+        self._read_cm = None
+        self._call_lock = None
+        self._loop = None
+        self._thread = None
+
+    async def _close_async(self) -> None:
+        try:
+            if self._session is not None:
+                await self._session.__aexit__(None, None, None)
+        except Exception:
+            pass
+        try:
+            if self._read_cm is not None:
+                await self._read_cm.__aexit__(None, None, None)
+        except Exception:
+            pass
+        self._session = None
+        self._read_cm = None
+
 
 _client: Optional[MCPFaqClient] = None
 
@@ -147,3 +189,11 @@ def get_mcp_faq_client() -> MCPFaqClient:
     if _client is None:
         _client = MCPFaqClient()
     return _client
+
+
+def close_mcp_faq_client() -> None:
+    """关闭进程级单例（若已初始化）。供 app 关闭流程调用。"""
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None

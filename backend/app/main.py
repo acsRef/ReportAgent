@@ -41,6 +41,7 @@ from app.api.observability import router as observability_router
 from app.utils.pii import mask_pii
 from app.db import get_connection, close_connection
 from app.infra.db.postgres import init_pool, close_pool, start_pool_monitor, stop_pool_monitor
+from app.tools.mcp_faq_client import close_mcp_faq_client
 from app.infra.checkpoint.factory import init_checkpointer, close_checkpointer
 from app.infra.checkpoint.session import session_manager
 from app.infra.trace.sdk import get_tracer
@@ -211,6 +212,7 @@ async def lifespan(app: FastAPI):
     yield
     await close_checkpointer()
     stop_pool_monitor()
+    close_mcp_faq_client()
     await close_pool()
     close_connection()
 

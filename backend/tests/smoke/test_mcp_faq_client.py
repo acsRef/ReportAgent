@@ -114,3 +114,35 @@ def test_client_unconfigured_raises():
     client = MCPFaqClient(config)
     with pytest.raises(MCPFaqClientError):
         client.search_faq("退货率", 3)
+
+
+def test_client_close_cleans_thread_and_loop(monkeypatch):
+    """close() 幂等、停掉后台循环线程、清空会话状态（防子进程孤儿化）。"""
+    from app.tools.mcp_faq_client import MCPFaqClient as _C
+
+    config = _MCPFaqConfig()
+    config.python = "python"
+    config.cwd = "."
+    client = _C(config)
+
+    async def _fake_call(self, query, top_k):
+        return '{"matches": []}'
+
+    monkeypatch.setattr(_C, "_call", _fake_call)
+    client.search_faq("退货率", 3)  # 触发后台线程 + 循环
+    assert client._loop is not None and client._thread is not None
+
+    client.close()
+    assert client._loop is None
+    assert client._thread is None
+    assert client._session is None
+    # 幂等：再 close 不抛
+    client.close()
+
+
+def test_close_mcp_faq_client_idempotent(monkeypatch):
+    from app.tools import mcp_faq_client as mfc
+
+    monkeypatch.setattr(mfc, "_client", None)
+    mfc.close_mcp_faq_client()  # 未初始化时调 close 不抛
+    assert mfc._client is None
