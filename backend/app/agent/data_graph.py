@@ -14,6 +14,7 @@ from app.infra.trace.sdk import traced_node
 
 class DataAgentState(TypedDict):
     user_query: str
+    has_data_intent: bool
     discovered_tables: list[dict]
     mcp_tool_calls: list[dict]
     raw_schema: str
@@ -26,17 +27,24 @@ class DataAgentState(TypedDict):
 
 @traced_node("data_detect_intent")
 def _detect_intent(state: DataAgentState) -> dict:
+    """判定是否数据查询（廉价关键词门控）。
+
+    非数据查询返回 has_data_intent=False，让 _search_schema 短路、不调 rag 检索。
+    修复：此前 `has_data_intent` 算了但两个分支都返回 []，意图门形同虚设。
+    """
     query = state["user_query"]
-    keywords_data = ["查询", "统计", "数据", "表", "字段", "销售", "订单", "库存", "退货"]
+    keywords_data = ["查询", "统计", "数据", "表", "字段", "销售", "订单", "库存",
+                     "退货", "分析", "排名", "趋势", "多少", "哪个", "占比", "利润"]
     q = query.lower()
     has_data_intent = any(k in q for k in keywords_data)
-    return {"discovered_tables": [] if not has_data_intent else []}
+    return {"has_data_intent": has_data_intent, "discovered_tables": []}
 
 
 @traced_node("data_search_schema")
 def _search_schema(state: DataAgentState) -> dict:
     query = state["user_query"]
-    if not state.get("discovered_tables"):
+    # 非数据查询（has_data_intent=False）直接短路，不调 rag 检索、不白烧 token。
+    if state.get("has_data_intent", True) and not state.get("discovered_tables"):
         raw = search_tables.invoke({"query": query, "top_k": 3})
         result = json.loads(raw) if isinstance(raw, str) else raw
         return {

@@ -513,6 +513,41 @@ async def _draft_id_from_state(state: ConfirmedExecutionState) -> int:
 # --- Graph build ----------------------------------------------------------
 
 
+def _is_external_interface(card) -> bool:
+    """需求卡是否标记为外部实时接口（data_source:stream assumption）。"""
+    if card is None:
+        return False
+    return any(getattr(a, "key", "") == "data_source:stream" for a in (card.assumptions or []))
+
+
+def _route_after_gate(state: ConfirmedExecutionState) -> str:
+    """外部接口需求 → 不生成 SQL，直接出接口说明；否则正常 SQL 流程。"""
+    return "interface_response" if _is_external_interface(state.get("requirement_card")) else "data_agent"
+
+
+@traced_node("interface_response")
+def _interface_response(state: ConfirmedExecutionState) -> dict:
+    """外部实时接口需求：确认后不生成 SQL，返回接口接入说明文本。"""
+    card = state.get("requirement_card")
+    source = ""
+    if card:
+        for a in (card.assumptions or []):
+            if a.key == "data_source:stream":
+                source = a.text
+                break
+    payload = {
+        "answer": {
+            "text": source or "此查询涉及外部实时接口/数据源，需接入实时数据源后取数，非数据库报表。",
+            "table": None,
+            "chart": None,
+            "insight": None,
+        },
+        "trace": [],
+        "execution_status": "SUCCESS",
+    }
+    return {"report_payload": payload, "execution_status": "SUCCESS"}
+
+
 def build_confirmed_execution_graph():
     workflow = StateGraph(ConfirmedExecutionState)
 
@@ -527,9 +562,12 @@ def build_confirmed_execution_graph():
     # v2 修订：入口先过安全闸，拦 prompt 注入后再加载需求。
     workflow.set_entry_point("security_guard")
     workflow.add_edge("security_guard", "load_confirmed_requirement")
-    workflow.add_edge("load_confirmed_requirement", "sql_gate")
-    workflow.add_edge("sql_gate", "data_agent")
+    workflow.add_node("interface_response", _interface_response)
+    workflow.add_conditional_edges("sql_gate", _route_after_gate,
+                                   {"interface_response": "interface_response", "data_agent": "data_agent"})
     workflow.add_edge("data_agent", "sql_agent")
+    workflow.add_edge("interface_response", "persist_report")
+    workflow.add_edge("load_confirmed_requirement", "sql_gate")
     workflow.add_edge("sql_agent", "report_agent")
 
     def _route_after_report(state: ConfirmedExecutionState) -> str:

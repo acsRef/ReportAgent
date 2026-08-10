@@ -404,6 +404,15 @@ async def _chat_requirement_analysis(
                 }
                 return
 
+            # 闲聊意图：直接返回文本回复，不建需求卡、不进确认流程。
+            if result.get("intent") == "chitchat":
+                casual = result.get("casual_reply") or "你好！有什么可以帮你的？"
+                yield {
+                    "event": "report",
+                    "data": json.dumps({"answer": {"text": casual}}, ensure_ascii=False),
+                }
+                return
+
             card = result.get("requirement_card")
             phase = (
                 "awaiting_missing"

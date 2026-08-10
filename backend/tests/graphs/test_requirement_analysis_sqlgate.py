@@ -182,6 +182,12 @@ def test_dictionary_lookup_degrades_without_ragent(monkeypatch, sql_gate) -> Non
         "error": None,
         "execution_status": "RUNNING",
     }
+    # ragent 未配置 → 无字典命中 → 意图分类走 LLM 兜底；mock 成 report 保证离线确定。
+    import app.agent.intent as intent_mod
+    monkeypatch.setattr(
+        intent_mod, "call_llm",
+        lambda prompt, **kw: '{"kind": "report", "confidence": 0.9, "reason": "test"}',
+    )
     result = asyncio.run(graph.ainvoke(state, config))
 
     # 断言 spy 收到 `dictionary_context` 关键字（值在 RAGENT_URL 缺失时为 None 或 ""）

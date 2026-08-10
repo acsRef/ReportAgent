@@ -30,6 +30,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-10-intent-recognition-workflow.md](2026-08-10-intent-recognition-workflow.md) | 工作流式意图识别：修 no-op + 外部接口识别 + 路由 | intent.py 三段式（闲聊关键词→强接口关键词→字典命中→LLM）；修 data_graph no-op；需求分析图加意图门（chitchat→casual 文本、interface→接口卡、report→正常）；确认流程外部接口短路；366 passed |
 | [2026-08-10-ragent-token-cache.md](2026-08-10-ragent-token-cache.md) | ragent-py 登录 token 跨进程共享缓存（根治 429） | 三处同格式文件缓存（ragent mcp_server / interface_dict / mcp_schema_server）；401 自动失效重登；真实跨进程 E2E：进程 B 复用 A token 0 次新登录 |
 | [2026-08-10-schema-from-rag.md](2026-08-10-schema-from-rag.md) | Schema 从 rag 来：删硬编码 _TABLES，三工具改查 ragent-py 字典 KB | rag_schema.py + data_tools 委托 + mcp registry 双份解析；过滤 dim_*/fact_*（系统表不污染）；词典 KB 已有 10 张表数据无需重灌；真实 E2E 全命中；351 passed |
 | [2026-08-10-schema-faq-mcp-client.md](2026-08-10-schema-faq-mcp-client.md) | Schema FAQ RAG：ReportAgent stdio MCP client 连 ragent-py | 新 mcp_faq_client.py（持久后台循环 + stdio 会话，单例复用）；faq_tools.search_faq 优先 MCP、失败降级本地；_generate_sql 兼容 MCP chunk text 注入；真实 E2E：灌 20 FAQ + 5 查询全命中 |
