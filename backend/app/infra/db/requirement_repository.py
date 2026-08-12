@@ -109,6 +109,28 @@ async def lock_draft(
     return dict(row)
 
 
+async def release_lock(
+    conn: Any,
+    *,
+    draft_id: int,
+    user_id: int,
+) -> None:
+    """执行结束把 draft 从 `locked` 释放回 `complete`（幂等）。
+
+    修复「confirm 成功后 draft 永久 locked，重新生成 / adjust / PATCH 全被拒」。
+    并发保护由 ExecutionRegistry 409 + `lock_draft` 的 WHERE status='complete'
+    原语承担；本操作只解锁，非 locked 时 0 行不报错。
+    """
+    await conn.execute(
+        """UPDATE agent.requirement_draft
+              SET status = 'complete',
+                  confirmed_at = NULL,
+                  updated_at = NOW()
+            WHERE id = $1 AND user_id = $2 AND status = 'locked'""",
+        draft_id, user_id,
+    )
+
+
 async def get_draft(
     conn: Any,
     *,

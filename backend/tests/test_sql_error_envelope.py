@@ -270,6 +270,7 @@ def test_persist_report_routes_failed_to_persist_error_run():
                       new=AsyncMock()) as empty_run, \
          patch.object(ceg.report_version_service, "persist_confirmed_run",
                       new=AsyncMock()) as conf_run, \
+         patch.object(ceg, "_release_draft_lock", new=AsyncMock()), \
          patch.object(ceg, "get_tracer"):
         asyncio.run(ceg._persist_report(state))
 
@@ -300,6 +301,7 @@ def test_persist_report_routes_empty_to_persist_empty_run():
                       new=AsyncMock()) as err_run, \
          patch.object(ceg.report_version_service, "persist_confirmed_run",
                       new=AsyncMock()) as conf_run, \
+         patch.object(ceg, "_release_draft_lock", new=AsyncMock()), \
          patch.object(ceg, "get_tracer"):
         asyncio.run(ceg._persist_report(state))
 
@@ -328,6 +330,7 @@ def test_persist_report_routes_success_to_persist_confirmed_run():
                       new=AsyncMock()) as empty_run, \
          patch.object(ceg.report_version_service, "persist_error_run",
                       new=AsyncMock()) as err_run, \
+         patch.object(ceg, "_release_draft_lock", new=AsyncMock()), \
          patch.object(ceg, "get_tracer"):
         asyncio.run(ceg._persist_report(state))
 

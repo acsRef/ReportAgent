@@ -436,6 +436,12 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
         tracer = get_tracer(trace_id)
         tracer.end("DONE")
 
+    # 执行结束（三态都落库后）释放 draft 锁：否则 draft 永久 locked，
+    # 重新生成 / adjust / PATCH 全被拒。并发保护仍由 `lock_draft` 原语 +
+    # ExecutionRegistry 409 承担；中途失败（未走到本节点）场景由
+    # lock_for_execution 的恢复逻辑兜底。
+    await _release_draft_lock(state)
+
     merged = {**state["report_payload"], "version": row["version"]}
     return {
         "report_payload": merged,
@@ -496,6 +502,18 @@ def _hydrate_card(draft_row: dict) -> RequirementCard:
     if isinstance(payload, str):
         payload = json.loads(payload)
     return RequirementCard.model_validate(payload)
+
+
+async def _release_draft_lock(state: ConfirmedExecutionState) -> None:
+    """把本次执行的 draft 从 `locked` 释放回 `complete`（幂等）。"""
+    draft_id = await _draft_id_from_state(state)
+    if not draft_id:
+        return
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await requirement_repository.release_lock(
+            conn, draft_id=draft_id, user_id=state.get("user_id", 0),
+        )
 
 
 async def _draft_id_from_state(state: ConfirmedExecutionState) -> int:

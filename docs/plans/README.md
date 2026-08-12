@@ -30,6 +30,7 @@
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-12-draft-lock-release.md](2026-08-12-draft-lock-release.md) | confirm 成功后 draft 永久 locked 导致重新生成/adjust/PATCH 全被拒 | `_persist_report` 落库后 `release_lock`（locked→complete，幂等）；并发保护仍由 409 + lock 原语；真实链路：re-confirm v2 + adjust v3 均 SUCCESS、进行中仍 409；380 passed |
 | [2026-08-12-execution-background-run.md](2026-08-12-execution-background-run.md) | 报告路径断连后台跑完：graph 从 SSE 解耦成独立后台任务 | 新 ExecutionRegistry（asyncio 独立任务 + 完成信号 + 事件重放）；三入口统一后台 runner，成功补 update_phase(report_ready)；409 SESSION_BUSY 拒绝重入；requirement-analysis 补 CancelledError；前端停止改「停止显示」+ 5s 轮询通知；真实浏览器验证：关浏览器→后台跑完→重开可见完整报告；376+256 passed；发现 adjust 遇 locked draft 现状问题（另开 plan） |
 | [2026-08-10-ragent-token-cache.md](2026-08-10-ragent-token-cache.md) | ragent-py 登录 token 跨进程共享缓存（根治 429） | 三处同格式文件缓存（ragent mcp_server / interface_dict / mcp_schema_server）；401 自动失效重登；真实跨进程 E2E：进程 B 复用 A token 0 次新登录 |
 | [2026-08-10-schema-from-rag.md](2026-08-10-schema-from-rag.md) | Schema 从 rag 来：删硬编码 _TABLES，三工具改查 ragent-py 字典 KB | rag_schema.py + data_tools 委托 + mcp registry 双份解析；过滤 dim_*/fact_*（系统表不污染）；词典 KB 已有 10 张表数据无需重灌；真实 E2E 全命中；351 passed |
