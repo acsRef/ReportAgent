@@ -44,6 +44,7 @@ from app.infra.db.postgres import init_pool, close_pool, start_pool_monitor, sto
 from app.tools.mcp_faq_client import close_mcp_faq_client
 from app.infra.checkpoint.factory import init_checkpointer, close_checkpointer
 from app.infra.checkpoint.session import session_manager
+from app.infra.execution import registry
 from app.infra.trace.sdk import get_tracer
 from app.infra.auth.repository import ensure_default_user, verify_user
 from app.infra.auth.startup_guard import validate_auth_security_config
@@ -141,6 +142,186 @@ def _build_sse_error(
             "sql": snippet,
         }, ensure_ascii=False),
     }
+
+
+# ---------------------------------------------------------------------------
+# 后台执行：graph 从 SSE 响应解耦成独立任务（「后台跑完」语义）
+# ---------------------------------------------------------------------------
+# 客户端断连只会取消 _subscribe_events（SSE 响应任务）；后台任务由
+# asyncio.create_task 独立运行、不受影响，继续跑到 persist_report 落库。
+# 事件契约与改造前的 SSE event_generator 逐事件一致（report | error → done）。
+
+_DEFAULT_ERROR_EVENTS = [
+    {
+        "event": "error",
+        "data": json.dumps({
+            "code": "INTERNAL",
+            "message": "后台任务执行失败，请稍后重试",
+            "recoverable": False,
+            "failed_action": "confirm",
+        }, ensure_ascii=False),
+    },
+    {"event": "done", "data": json.dumps({"final_phase": "error"}, ensure_ascii=False)},
+]
+
+
+def _confirmed_initial(
+    session_id: str,
+    user_id: int,
+    *,
+    user_query: str = "",
+    base_report_version: int | None = None,
+    adjustment_text: str | None = None,
+) -> ConfirmedExecutionState:
+    """构造 ConfirmedExecutionState，并抢占创建带身份的 tracer。
+
+    必须在 SSE 返回前调用——initial / trace_id 归属于后台任务，不依赖连接存活。
+    """
+    trace_id = str(uuid.uuid4())
+    get_tracer(trace_id, session_id=session_id, user_id=user_id, user_query=user_query)
+    return {
+        "user_query": user_query,
+        "user_id": user_id,
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "requirement_card": None,
+        "base_report_version": base_report_version,
+        "adjustment_text": adjustment_text,
+        "schema_context": None,
+        "query_result": None,
+        "report_payload": None,
+        "execution_status": "RUNNING",
+        "error": None,
+    }
+
+
+async def _run_confirmed_graph(
+    task: registry.ConfirmedTask,
+    graph,
+    initial: ConfirmedExecutionState,
+    session_id: str,
+    failed_action: str,
+) -> None:
+    """后台执行确认图：跑完 → 事件序列写入 task → 唤醒订阅者。
+
+    session phase 由本任务在结束时写入：成功补 report_ready（现状成功路径
+    不更新 current_phase，前端轮询依赖此值），失败写 error + failed_action。
+    """
+    final_phase = "report_ready"
+    events: list[dict] = []
+    try:
+        config = {"configurable": {"thread_id": session_id}}
+        result = await graph.ainvoke(initial, config)
+        status = result.get("execution_status", "FAILED")
+        if status == "FAILED":
+            final_phase = "error"
+            await session_manager.update_phase(session_id, "error", failed_action="sql")
+            events.append(_build_sse_error(result.get("error"), result.get("sql"), "sql"))
+        else:
+            report_payload = result.get("report_payload") or {}
+            events.append({
+                "event": "report",
+                "data": json.dumps(report_payload, ensure_ascii=False, default=str),
+            })
+            await session_manager.update_phase(session_id, "report_ready")
+    except SecurityRejectedError as exc:
+        final_phase = "error"
+        await session_manager.update_phase(session_id, "error", failed_action=failed_action)
+        events.append({
+            "event": "error",
+            "data": json.dumps({
+                "code": "SECURITY_REJECTED",
+                "message": str(exc)[:300],
+                "recoverable": False,
+                "failed_action": failed_action,
+            }, ensure_ascii=False),
+        })
+    except RequirementIncompleteError as exc:
+        final_phase = "error"
+        await session_manager.update_phase(session_id, "error", failed_action=failed_action)
+        events.append({
+            "event": "error",
+            "data": json.dumps({
+                "code": "REQUIREMENT_INCOMPLETE",
+                "message": str(exc)[:300],
+                "recoverable": True,
+                "failed_action": failed_action,
+            }, ensure_ascii=False),
+        })
+    except SessionNotFoundError as exc:
+        final_phase = "error"
+        events.append({
+            "event": "error",
+            "data": json.dumps({
+                "code": "SESSION_NOT_FOUND",
+                "message": str(exc)[:300],
+                "recoverable": False,
+                "failed_action": failed_action,
+            }, ensure_ascii=False),
+        })
+    except Exception as exc:
+        final_phase = "error"
+        await session_manager.update_phase(session_id, "error", failed_action=failed_action)
+        events.append({
+            "event": "error",
+            "data": json.dumps({
+                "code": "INTERNAL",
+                "message": str(exc)[:300],
+                "recoverable": False,
+                "failed_action": failed_action,
+            }, ensure_ascii=False),
+        })
+    finally:
+        events.append({
+            "event": "done",
+            "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
+        })
+        registry.complete(task, events)
+        tracer = get_tracer(initial.get("trace_id", ""))
+        await tracer.flush()
+
+
+async def _subscribe_events(
+    task: registry.ConfirmedTask,
+    phase_label: str,
+) -> AsyncGenerator[dict, None]:
+    """SSE 订阅后台任务：已完成 → 重放 result；未完成 → phase + 等完成信号。
+
+    客户端断连 → CancelledError 在此自然传播，无需清理：session phase 由
+    后台任务在完成时写入，任务不因连接断开而中断。
+    """
+    if task.finished:
+        for evt in task.result or _DEFAULT_ERROR_EVENTS:
+            yield evt
+        return
+    yield {
+        "event": "phase",
+        "data": json.dumps({"phase": phase_label}, ensure_ascii=False),
+    }
+    await task.events.get()
+    for evt in task.result or _DEFAULT_ERROR_EVENTS:
+        yield evt
+
+
+def _start_confirmed_stream(
+    session_id: str,
+    user_id: int,
+    kind: str,
+    graph,
+    initial: ConfirmedExecutionState,
+    *,
+    failed_action: str,
+    phase_label: str,
+) -> EventSourceResponse:
+    """启动后台任务并返回订阅其完成的 SSE 流。重入 → 409 SESSION_BUSY。"""
+    try:
+        task = registry.start_confirmed_task(
+            session_id, user_id, kind,
+            lambda t: _run_confirmed_graph(t, graph, initial, session_id, failed_action),
+        )
+    except registry.BusyError as exc:
+        raise HTTPException(status_code=409, detail=f"SESSION_BUSY: {exc}")
+    return EventSourceResponse(_subscribe_events(task, phase_label))
 
 
 async def _check_embedding_dimension():
@@ -431,6 +612,10 @@ async def _chat_requirement_analysis(
                         ensure_ascii=False,
                     ),
                 }
+        except asyncio.CancelledError:
+            # 断连：ClientDisconnected 取消响应任务。需求分析不产生落库副作用，
+            # 无需清理，直接透传完成取消（不产生半截 done 事件）。
+            raise
         except Exception as exc:
             yield {
                 "event": "error",
@@ -459,130 +644,22 @@ async def _chat_confirmed_execution(
     *,
     session_id: str,
 ):
-    """SSE stream for confirmed-execution (mode=adjust)."""
-    trace_id = str(uuid.uuid4())
-    # A-3：trace 起点抢占创建带身份的 tracer（user_query 即调整文本）。
-    get_tracer(trace_id, session_id=session_id, user_id=user["id"],
-               user_query=request.user_query)
+    """SSE stream for confirmed-execution (mode=adjust).
+
+    后台化：graph 执行由 ExecutionRegistry 的独立任务完成，客户端断连只断
+    本流的前端渲染，任务继续跑到 persist_report 落库（「后台跑完」语义）。
+    """
     graph = build_confirmed_execution_graph()
-    config = {"configurable": {"thread_id": session_id}}
-
-    async def event_generator() -> AsyncGenerator[dict, None]:
-        # B-5: done 事件的 final_phase 必须反映真实结局。此前硬编码 report_ready，
-        # 出错时前端 Reducer 看到 phase→report_ready 会把 ErrorCard 卸载、phase 翻回。
-        final_phase = "report_ready"
-        try:
-            yield {
-                "event": "phase",
-                "data": json.dumps({"phase": "adjusting"}, ensure_ascii=False),
-            }
-            initial: ConfirmedExecutionState = {
-                "user_query": request.user_query,
-                "user_id": user["id"],
-                "session_id": session_id,
-                "trace_id": trace_id,
-                "requirement_card": None,
-                "base_report_version": request.base_report_version,
-                "adjustment_text": request.user_query,
-                "schema_context": None,
-                "query_result": None,
-                "report_payload": None,
-                "execution_status": "RUNNING",
-                "error": None,
-            }
-            result = await graph.ainvoke(initial, config)
-            status = result.get("execution_status", "FAILED")
-            if status == "FAILED":
-                final_phase = "error"
-                await session_manager.update_phase(
-                    session_id, "error", failed_action="sql",
-                )
-                yield _build_sse_error(
-                    result.get("error"),
-                    result.get("sql"),
-                    "sql",
-                )
-            else:
-                report_payload = result.get("report_payload") or {}
-                yield {
-                    "event": "report",
-                    "data": json.dumps(report_payload, ensure_ascii=False, default=str),
-                }
-        except SecurityRejectedError as exc:
-            # v2 修订：confirmed/adjust 流补的安全闸命中（prompt 注入等）。
-            final_phase = "error"
-            await session_manager.update_phase(
-                session_id, "error", failed_action=request.mode,
-            )
-            yield {
-                "event": "error",
-                "data": json.dumps({
-                    "code": "SECURITY_REJECTED",
-                    "message": str(exc)[:300],
-                    "recoverable": False,
-                    "failed_action": request.mode,
-                }, ensure_ascii=False),
-            }
-        except RequirementIncompleteError as exc:
-            final_phase = "error"
-            await session_manager.update_phase(
-                session_id, "error", failed_action=request.mode,
-            )
-            yield {
-                "event": "error",
-                "data": json.dumps({
-                    "code": "REQUIREMENT_INCOMPLETE",
-                    "message": str(exc)[:300],
-                    "recoverable": True,
-                    "failed_action": request.mode,
-                }, ensure_ascii=False),
-            }
-        except SessionNotFoundError as exc:
-            final_phase = "error"
-            yield {
-                "event": "error",
-                "data": json.dumps({
-                    "code": "SESSION_NOT_FOUND",
-                    "message": str(exc)[:300],
-                    "recoverable": False,
-                    "failed_action": request.mode,
-                }, ensure_ascii=False),
-            }
-        except asyncio.CancelledError:
-            # P-3: CancelledError 是 BaseException，不被 except Exception 捕获。
-            # 客户端断连时若不处理，session 会永远卡在 adjusting。best-effort
-            # 标记 error 后必须重新抛出以完成取消。
-            final_phase = "error"
-            try:
-                await session_manager.update_phase(
-                    session_id, "error", failed_action=request.mode,
-                )
-            except Exception:
-                pass
-            raise
-        except Exception as exc:
-            final_phase = "error"
-            await session_manager.update_phase(
-                session_id, "error", failed_action=request.mode,
-            )
-            yield {
-                "event": "error",
-                "data": json.dumps({
-                    "code": "INTERNAL",
-                    "message": str(exc)[:300],
-                    "recoverable": False,
-                    "failed_action": request.mode,
-                }, ensure_ascii=False),
-            }
-        finally:
-            tracer = get_tracer(trace_id)
-            await tracer.flush()
-            yield {
-                "event": "done",
-                "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
-            }
-
-    return EventSourceResponse(event_generator())
+    initial = _confirmed_initial(
+        session_id, user["id"],
+        user_query=request.user_query,
+        base_report_version=request.base_report_version,
+        adjustment_text=request.user_query,
+    )
+    return _start_confirmed_stream(
+        session_id, user["id"], "adjust", graph, initial,
+        failed_action="adjust", phase_label="adjusting",
+    )
 
 
 # A-6：chosen_tool 后端白名单——与 IntentOption.tool 的 5 个 Literal 值一致。
@@ -943,116 +1020,21 @@ async def confirm_session(
     req: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Run confirmed-execution on the latest draft. Returns SSE v2 stream."""
+    """Run confirmed-execution on the latest draft. Returns SSE v2 stream.
+
+    后台化：graph 执行转为后台任务（见 _start_confirmed_stream），连接断开
+    不中断执行；同 session 已有未完成任务时返回 409 SESSION_BUSY。
+    """
     sess = await session_manager.get_session(session_id)
     if sess is None or sess.get("user_id") != user["id"]:
         raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
 
-    trace_id = str(uuid.uuid4())
-    # A-3：trace 起点抢占创建带身份的 tracer。confirm 流 user_query 为空串
-    # （A-5 的卡字段闸在 PATCH 端点，SQL 层由 A-1 兜底）。
-    get_tracer(trace_id, session_id=session_id, user_id=user["id"], user_query="")
     graph = build_confirmed_execution_graph()
-    config = {"configurable": {"thread_id": session_id}}
-
-    async def event_generator() -> AsyncGenerator[dict, None]:
-        # B-5 + P-3: 同 _chat_confirmed_execution——跟踪真实 final_phase，
-        # 并在客户端断连（CancelledError）时把 session 标记为 error 而非卡死。
-        final_phase = "report_ready"
-        try:
-            yield {
-                "event": "phase",
-                "data": json.dumps({"phase": "generating"}, ensure_ascii=False),
-            }
-            initial: ConfirmedExecutionState = {
-                "user_query": "",
-                "user_id": user["id"],
-                "session_id": session_id,
-                "trace_id": trace_id,
-                "requirement_card": None,
-                "base_report_version": None,
-                "adjustment_text": None,
-                "schema_context": None,
-                "query_result": None,
-                "report_payload": None,
-                "execution_status": "RUNNING",
-                "error": None,
-            }
-            result = await graph.ainvoke(initial, config)
-            status = result.get("execution_status", "FAILED")
-            if status == "FAILED":
-                final_phase = "error"
-                await session_manager.update_phase(
-                    session_id, "error", failed_action="sql",
-                )
-                yield _build_sse_error(
-                    result.get("error"),
-                    result.get("sql"),
-                    "sql",
-                )
-            else:
-                report_payload = result.get("report_payload") or {}
-                yield {
-                    "event": "report",
-                    "data": json.dumps(report_payload, ensure_ascii=False, default=str),
-                }
-        except RequirementIncompleteError as exc:
-            final_phase = "error"
-            await session_manager.update_phase(
-                session_id, "error", failed_action="confirm",
-            )
-            yield {
-                "event": "error",
-                "data": json.dumps({
-                    "code": "REQUIREMENT_INCOMPLETE",
-                    "message": str(exc)[:300],
-                    "recoverable": True,
-                    "failed_action": "confirm",
-                }, ensure_ascii=False),
-            }
-        except SessionNotFoundError as exc:
-            final_phase = "error"
-            yield {
-                "event": "error",
-                "data": json.dumps({
-                    "code": "SESSION_NOT_FOUND",
-                    "message": str(exc)[:300],
-                    "recoverable": False,
-                    "failed_action": "confirm",
-                }, ensure_ascii=False),
-            }
-        except asyncio.CancelledError:
-            final_phase = "error"
-            try:
-                await session_manager.update_phase(
-                    session_id, "error", failed_action="confirm",
-                )
-            except Exception:
-                pass
-            raise
-        except Exception as exc:
-            final_phase = "error"
-            await session_manager.update_phase(
-                session_id, "error", failed_action="confirm",
-            )
-            yield {
-                "event": "error",
-                "data": json.dumps({
-                    "code": "INTERNAL",
-                    "message": str(exc)[:300],
-                    "recoverable": False,
-                    "failed_action": "confirm",
-                }, ensure_ascii=False),
-            }
-        finally:
-            tracer = get_tracer(trace_id)
-            await tracer.flush()
-            yield {
-                "event": "done",
-                "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
-            }
-
-    return EventSourceResponse(event_generator())
+    initial = _confirmed_initial(session_id, user["id"], user_query="")
+    return _start_confirmed_stream(
+        session_id, user["id"], "confirm", graph, initial,
+        failed_action="confirm", phase_label="generating",
+    )
 
 
 @app.post("/api/v1/sessions/{session_id}/retry")

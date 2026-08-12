@@ -52,6 +52,11 @@ export async function postConfirmStream(
     handleUnauthorized()
     return
   }
+  if (res.status === 409) {
+    // 同 session 已有后台任务正在执行（「后台跑完」语义）：拒绝重入。
+    ctx.toast.warning('该会话正在后台生成中，请稍候')
+    return
+  }
   if (!res.ok || !res.body) {
     ctx.toast.error(`${action} 失败: ${res.status}`)
     ctx.dispatch({
@@ -64,32 +69,39 @@ export async function postConfirmStream(
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
   let sawReport = false
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let sepIndex
-    while ((sepIndex = buffer.search(/\r\n\r\n|\n\n/)) >= 0) {
-      const match = buffer.match(/\r\n\r\n|\n\n/)!
-      const frame = buffer.slice(0, sepIndex)
-      buffer = buffer.slice(sepIndex + match[0].length)
-      const evt = parseSSEFrame(frame)
-      if (!evt) continue
-      if (evt.eventName === 'phase') {
-        ctx.dispatch({ type: 'phase/received', phase: evt.data.phase as AnalysisPhase })
-      } else if (evt.eventName === 'report') {
-        sawReport = true
-        await ctx.onReport(
-          typeof evt.data?.version === 'number' ? evt.data.version : undefined,
-        )
-        ctx.dispatch({ type: 'phase/received', phase: 'report_ready' })
-      } else if (evt.eventName === 'error') {
-        ctx.toast.error(evt.data?.message ?? '执行失败')
-        ctx.dispatch({ type: 'analysis/failed', error: evt.data })
-      } else if (evt.eventName === 'done' && evt.data?.final_phase) {
-        ctx.dispatch({ type: 'phase/received', phase: evt.data.final_phase as AnalysisPhase })
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let sepIndex
+      while ((sepIndex = buffer.search(/\r\n\r\n|\n\n/)) >= 0) {
+        const match = buffer.match(/\r\n\r\n|\n\n/)!
+        const frame = buffer.slice(0, sepIndex)
+        buffer = buffer.slice(sepIndex + match[0].length)
+        const evt = parseSSEFrame(frame)
+        if (!evt) continue
+        if (evt.eventName === 'phase') {
+          ctx.dispatch({ type: 'phase/received', phase: evt.data.phase as AnalysisPhase })
+        } else if (evt.eventName === 'report') {
+          sawReport = true
+          await ctx.onReport(
+            typeof evt.data?.version === 'number' ? evt.data.version : undefined,
+          )
+          ctx.dispatch({ type: 'phase/received', phase: 'report_ready' })
+        } else if (evt.eventName === 'error') {
+          ctx.toast.error(evt.data?.message ?? '执行失败')
+          ctx.dispatch({ type: 'analysis/failed', error: evt.data })
+        } else if (evt.eventName === 'done' && evt.data?.final_phase) {
+          ctx.dispatch({ type: 'phase/received', phase: evt.data.final_phase as AnalysisPhase })
+        }
       }
     }
+  } catch (err) {
+    // 流中途停止（用户点停止 / 断连）：后端任务转为后台继续跑完，
+    // 这里静默返回，不冒泡成误导性的「PATCH 失败」。
+    if ((err as Error)?.name === 'AbortError') return
+    throw err
   }
   if (!sawReport) {
     ctx.toast.warning('确认完成，但未收到报告事件')

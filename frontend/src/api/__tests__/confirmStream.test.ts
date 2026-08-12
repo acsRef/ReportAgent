@@ -117,4 +117,50 @@ describe('postConfirmStream', () => {
     await postConfirmStream('sid-1', ctx)
     expect(ctx.toasts.some(([level]) => level === 'warning')).toBe(true)
   })
+
+  it('409 → busy warning toast, no analysis/failed, fetch still called', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse('', 409)))
+    const ctx = makeCtx()
+    await postConfirmStream('sid-1', ctx)
+
+    expect(ctx.toasts.some(([level, msg]) => level === 'warning' && msg.includes('后台生成中'))).toBe(true)
+    expect(ctx.actions.some((a) => a.type === 'analysis/failed')).toBe(false)
+    expect(ctx.reports).toBe(0)
+  })
+
+  it('mid-stream abort (停止/断连) → resolves silently, no toast, no throw', async () => {
+    const abortError = new DOMException('The user aborted a request.', 'AbortError')
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: phase\ndata: {"phase":"generating"}\n\n'))
+        controller.error(abortError)
+      },
+    })
+    const res = new Response(stream as any, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => res))
+
+    const ctx = makeCtx()
+    await expect(postConfirmStream('sid-1', ctx)).resolves.toBeUndefined()
+    expect(ctx.toasts).toEqual([])
+    expect(ctx.actions.some((a) => a.type === 'analysis/failed')).toBe(false)
+  })
+
+  it('mid-stream non-abort error still propagates', async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.error(new Error('stream exploded'))
+      },
+    })
+    const res = new Response(stream as any, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => res))
+
+    const ctx = makeCtx()
+    await expect(postConfirmStream('sid-1', ctx)).rejects.toThrow('stream exploded')
+  })
 })

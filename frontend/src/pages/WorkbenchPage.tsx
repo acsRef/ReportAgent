@@ -22,7 +22,7 @@ import {
 import { useAnalysisStore } from '../stores/analysisStore'
 import { canRetryFailedAction, isBusyPhase } from '../stores/analysisReducer'
 import { useAuthStore } from '../stores/authStore'
-import { fetchSessions, patchRequirement, SESSIONS_PAGE_SIZE } from '../api/sessionsClient'
+import { fetchSessions, fetchSession, patchRequirement, SESSIONS_PAGE_SIZE } from '../api/sessionsClient'
 import { openChat } from '../api/analysisClient'
 import { postConfirmStream, type ToastApi, type Dispatcher } from '../api/confirmStream'
 import RequirementCardView from '../components/workbench/RequirementCardView'
@@ -34,6 +34,43 @@ import '../styles/global.css'
 import '../styles/workbench.css'
 
 const DONE_TIMEOUT_MS = 60_000
+const EXEC_POLL_INTERVAL_MS = 5000
+
+/**
+ * 后台任务轮询：停止显示后每 5s 查一次 session snapshot，phase 离开
+ * generating/adjusting（report_ready 或 error）时回调 onDone。
+ * 「后台跑完」语义：停止只断前端渲染，任务继续跑完落库，轮询负责通知。
+ */
+export function useExecutionPoll(
+  sessionId: string | null,
+  active: boolean,
+  onDone: () => void,
+  intervalMs: number = EXEC_POLL_INTERVAL_MS,
+): void {
+  useEffect(() => {
+    if (!active || !sessionId) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    const tick = async () => {
+      try {
+        const snap = await fetchSession(sessionId)
+        if (cancelled || !snap) return
+        if (snap.session.phase === 'report_ready' || snap.session.phase === 'error') {
+          onDone()
+          return
+        }
+      } catch {
+        /* 轮询失败静默，下一轮重试 */
+      }
+      if (!cancelled) timer = setTimeout(tick, intervalMs)
+    }
+    timer = setTimeout(tick, intervalMs)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [sessionId, active, onDone, intervalMs])
+}
 
 export default function WorkbenchPage() {
   const navigate = useNavigate()
@@ -55,7 +92,20 @@ export default function WorkbenchPage() {
   const [sending, setSending] = useState(false)
   const [patching, setPatching] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [execPolling, setExecPolling] = useState(false)
   const busy = isBusyPhase(phase)
+
+  // 停止显示后轮询后台任务完成：phase 回 report_ready/error → 刷新版本 + 通知。
+  useExecutionPoll(
+    activeSessionId,
+    execPolling,
+    useCallback(() => {
+      if (!activeSessionId) return
+      void refreshVersionsAndSelectLatest(activeSessionId, dispatch)
+      toast.success('报告已在后台生成，可查看')
+      setExecPolling(false)
+    }, [activeSessionId, dispatch, toast]),
+  )
 
   // SessionSummary ← API 响应的字段映射；两处共用（useEffect + loadMore）。
   function mapSessions(raw: ApiSessionSummary[]) {
@@ -115,11 +165,13 @@ export default function WorkbenchPage() {
   }, [phase])
 
   function handleStop() {
+    // 「后台跑完」语义：停止只断开本连接的渲染，后端任务继续跑到落库。
     confirmAbortRef.current?.abort()
     confirmAbortRef.current = null
     setConfirming(false)
-    toast.info('已停止生成，当前需求已保留')
     dispatch({ type: 'phase/received', phase: 'awaiting_confirm' })
+    setExecPolling(true)
+    toast.info('已停止显示，报告仍在后台生成，完成后将通知你')
   }
 
   useEffect(() => {
