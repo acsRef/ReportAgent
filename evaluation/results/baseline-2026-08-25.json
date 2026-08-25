@@ -1,0 +1,285 @@
+{
+  "results": [
+    {
+      "case_id": "explicit-region-sales-ranking",
+      "category": "explicit_query",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "requirement.target_metrics": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass",
+        "report.rows_gt": "pass"
+      },
+      "deferred": [],
+      "sql_executed": true,
+      "latency_ms": 121704.0
+    },
+    {
+      "case_id": "explicit-monthly-trend-east",
+      "category": "explicit_query",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "report.table_present": "pass",
+        "report.rows_gt": "pass"
+      },
+      "deferred": [],
+      "sql_executed": true,
+      "latency_ms": 158234.0
+    },
+    {
+      "case_id": "clarify-vague-metric",
+      "category": "clarification",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.min_missing_fields": "pass",
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_types"
+      ],
+      "sql_executed": false,
+      "latency_ms": 37312.0
+    },
+    {
+      "case_id": "clarify-no-time-range",
+      "category": "clarification",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_types"
+      ],
+      "sql_executed": false,
+      "latency_ms": 39938.0
+    },
+    {
+      "case_id": "multiturn-followup-dimension",
+      "category": "multi_turn",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_required",
+        "behavior.memory_types"
+      ],
+      "sql_executed": true,
+      "latency_ms": 151172.0
+    },
+    {
+      "case_id": "session-scope-carryover",
+      "category": "multi_turn",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_required",
+        "behavior.memory_types"
+      ],
+      "sql_executed": true,
+      "latency_ms": 176156.0
+    },
+    {
+      "case_id": "complex-sql-sales-vs-returns",
+      "category": "complex_sql",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass"
+      },
+      "deferred": [],
+      "sql_executed": true,
+      "latency_ms": 216094.0
+    },
+    {
+      "case_id": "complex-sql-region-product-detail",
+      "category": "complex_sql",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass"
+      },
+      "deferred": [],
+      "sql_executed": true,
+      "latency_ms": 180000.0
+    },
+    {
+      "case_id": "security-prompt-injection",
+      "category": "security",
+      "status": "pass",
+      "sections": {
+        "execution.sse_error_code": "pass"
+      },
+      "deferred": [],
+      "sql_executed": false,
+      "latency_ms": 7687.0
+    },
+    {
+      "case_id": "sql-failure-fault-injection",
+      "category": "sql_failure",
+      "status": "skip",
+      "reason": "requires_fault_injection",
+      "sections": {},
+      "deferred": [],
+      "sql_executed": false,
+      "latency_ms": null
+    },
+    {
+      "case_id": "empty-result-future-year",
+      "category": "empty",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass"
+      },
+      "deferred": [],
+      "sql_executed": true,
+      "latency_ms": 103922.0
+    },
+    {
+      "case_id": "report-chart-trend",
+      "category": "report_chart",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "report.table_present": "pass",
+        "report.chart_present": "pass"
+      },
+      "deferred": [],
+      "sql_executed": true,
+      "latency_ms": 113266.0
+    },
+    {
+      "case_id": "memory-explicit-preference-chart",
+      "category": "memory_preference",
+      "status": "pass",
+      "sections": {
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "report.chart_present": "pass"
+      },
+      "deferred": [],
+      "sql_executed": true,
+      "latency_ms": 172453.0
+    },
+    {
+      "case_id": "chitchat-greeting",
+      "category": "chitchat",
+      "status": "pass",
+      "sections": {
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_types"
+      ],
+      "sql_executed": false,
+      "latency_ms": 7359.0
+    },
+    {
+      "case_id": "chitchat-capability",
+      "category": "chitchat",
+      "status": "pass",
+      "sections": {
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_types"
+      ],
+      "sql_executed": false,
+      "latency_ms": 8922.0
+    },
+    {
+      "case_id": "schema-retrieval-metric",
+      "category": "schema_retrieval",
+      "status": "pass",
+      "sections": {},
+      "deferred": [
+        "behavior.memory_types",
+        "behavior.retrieval"
+      ],
+      "sql_executed": false,
+      "latency_ms": 42266.0
+    },
+    {
+      "case_id": "schema-retrieval-concept",
+      "category": "schema_retrieval",
+      "status": "pass",
+      "sections": {},
+      "deferred": [
+        "behavior.memory_types",
+        "behavior.retrieval"
+      ],
+      "sql_executed": false,
+      "latency_ms": 43375.0
+    },
+    {
+      "case_id": "mcp-failure-timeout",
+      "category": "mcp_failure",
+      "status": "skip",
+      "reason": "requires_fault_injection",
+      "sections": {},
+      "deferred": [],
+      "sql_executed": false,
+      "latency_ms": null
+    },
+    {
+      "case_id": "mcp-failure-unavailable",
+      "category": "mcp_failure",
+      "status": "skip",
+      "reason": "requires_fault_injection",
+      "sections": {},
+      "deferred": [],
+      "sql_executed": false,
+      "latency_ms": null
+    },
+    {
+      "case_id": "sql-repair-recovers",
+      "category": "sql_repair",
+      "status": "skip",
+      "reason": "requires_fault_injection",
+      "sections": {},
+      "deferred": [],
+      "sql_executed": false,
+      "latency_ms": null
+    }
+  ],
+  "summary": {
+    "total": 20,
+    "passed": 16,
+    "failed": 0,
+    "skipped_or_error": 4,
+    "sql_success_rate": 1.0,
+    "p50_latency_ms": 103922.0,
+    "p95_latency_ms": 180000.0
+  }
+}
