@@ -130,11 +130,16 @@ class _FakeFuture:
     def __init__(self, *, result=None, error: Optional[Exception] = None) -> None:
         self._result = result
         self._error = error
+        self.cancel_called = False
 
     def result(self, timeout=None):
         if self._error is not None:
             raise self._error
         return self._result
+
+    def cancel(self):
+        self.cancel_called = True
+        return True
 
 
 def _client_with_mock_loop(monkeypatch) -> RagMCPClient:
@@ -219,6 +224,19 @@ class _FakeAsyncCM:
     async def __aexit__(self, *args):
         self.aexit_count += 1
         return False
+
+
+class _FakeAsyncSession(_FakeAsyncCM):
+    """模拟 MCP ClientSession：__aenter__/__aexit__ + 长跑 call_tool（可被 cancel）。"""
+
+    def __init__(self, name: str = "session") -> None:
+        super().__init__(name)
+        self.call_tool_count = 0
+
+    async def call_tool(self, name: str, args: dict):
+        self.call_tool_count += 1
+        # 模拟长跑 MCP 调用（可被 CancelledError 中断）
+        await asyncio.sleep(100)
 
 
 def _run_coro_sync(coro):
@@ -317,45 +335,83 @@ class TestSyncReset:
 
 
 class TestDoCallTimeoutLifecycle:
-    def test_timeout_actually_closes_session_and_read_cm(self, monkeypatch):
-        """TIMEOUT 路径必须真正 cleanup 旧 session；不能只清状态字段。"""
+    def test_timeout_cancels_inflight_and_preserves_new_session_for_retry(self, monkeypatch):
+        """TIMEOUT 路径（review 修订钉子）：
+
+        1. 原 future 仍 running → future.cancel() + 等待完成
+        2. 旧 coroutine 收到 CancelledError → 自己的 except 块自清 session
+           （**关键**：cleanup 走 local capture，不碰 self._session 全局）
+        3. retry 拿干净 state → 新 session 创建且不被旧 cleanup 误关
+
+        这是 review 暴露的真竞态：旧设计 main thread 直接 self._reset()，
+        但旧 coroutine 仍在跑、可能改 self._session，导致 retry 创建的新
+        session 被旧 cleanup 关掉。
+        """
         client = RagMCPClient(_MCPConfig())
         client._loop = MagicMock()
-        session = _FakeAsyncCM("session")
-        read_cm = _FakeAsyncCM("read_cm")
-        client._session = session
-        client._read_cm = read_cm
 
-        first_call = {"done": False}
+        old_session = _FakeAsyncSession("old_session")
+        old_read_cm = _FakeAsyncCM("old_read_cm")
+        client._session = old_session
+        client._read_cm = old_read_cm
 
-        def selective_rcts(coro, loop):
-            if not first_call["done"]:
-                # 第一次：模拟 MCP call 超时
-                first_call["done"] = True
-                coro.close()
-                return _FakeFuture(error=asyncio.TimeoutError())
-            # 后续（reset_async）：同步跑完
+        cancel_count = {"n": 0}
+        coroutine_completed = {"value": False}
+
+        def rcts(coro, loop):
             new_loop = asyncio.new_event_loop()
             try:
-                new_loop.run_until_complete(coro)
+                task = new_loop.create_task(coro)
+                new_loop.run_until_complete(asyncio.sleep(0.01))
+                task.cancel()
+                cancel_count["n"] += 1
+                try:
+                    new_loop.run_until_complete(task)
+                except (asyncio.CancelledError, Exception):
+                    pass
+                coroutine_completed["value"] = True
             finally:
                 new_loop.close()
-            fut = MagicMock()
-            fut.result = lambda timeout=None: None
-            return fut
+            return _FakeFuture(error=asyncio.TimeoutError())
 
-        _patch_rcts_to_run_sync(monkeypatch, selective_rcts)
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", rcts)
 
         with pytest.raises(MCPBoundaryError) as ei:
             client._do_call("search_dictionary", {"query": "x"})
-        assert ei.value.code is MCPErrorCode.MCP_TIMEOUT
 
-        # 核心断言：旧 session / read_cm 的 __aexit__ 真正被 await
-        assert session.aexit_count == 1, (
-            f"TIMEOUT 后 session cleanup 被跳过（aexit_count={session.aexit_count}）"
+        # 1. timeout 抛 MCP_TIMEOUT
+        assert ei.value.code is MCPErrorCode.MCP_TIMEOUT
+        # 2. future.cancel() 被调用
+        assert cancel_count["n"] == 1, "future.cancel() was not called on timeout"
+        # 3. 旧 coroutine 完整跑完（含 cleanup）
+        assert coroutine_completed["value"], "coroutine did not complete before main thread returned"
+        # 4. 旧 session 由 coroutine 关闭（不是 main thread 误关）
+        assert old_session.aexit_count == 1, (
+            f"old session not closed by coroutine (aexit_count={old_session.aexit_count})"
         )
-        assert read_cm.aexit_count == 1, (
-            f"TIMEOUT 后 read_cm cleanup 被跳过（aexit_count={read_cm.aexit_count}）"
+        assert old_read_cm.aexit_count == 1, (
+            f"old read_cm not closed by coroutine (aexit_count={old_read_cm.aexit_count})"
+        )
+        # 5. state 干净
+        assert client._session is None
+        assert client._read_cm is None
+
+        # 6. retry 会创建新 session；验证新 session 不被旧 coroutine 的残留 cleanup 误关
+        #    （per-invocation isolation：coroutine 持有 local capture，cleanup 不碰全局）
+        new_session = _FakeAsyncCM("new_session")
+        new_read_cm = _FakeAsyncCM("new_read_cm")
+        client._session = new_session
+        client._read_cm = new_read_cm
+
+        import time
+        time.sleep(0.05)  # 给任何潜在的延迟 cleanup 机会跑
+
+        assert new_session.aexit_count == 0, (
+            f"new session was incorrectly closed by old coroutine's residual cleanup "
+            f"(aexit_count={new_session.aexit_count})"
+        )
+        assert new_read_cm.aexit_count == 0, (
+            f"new read_cm was incorrectly closed (aexit_count={new_read_cm.aexit_count})"
         )
 
 

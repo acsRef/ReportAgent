@@ -96,7 +96,8 @@ class RagMCPClient:
         self._thread: Optional[threading.Thread] = None
         self._session: Any = None
         self._read_cm: Any = None
-        self._call_lock: Optional[asyncio.Lock] = None
+        # asyncio.Lock 自 3.10 起不再绑定 event loop，可在 __init__ 安全创建
+        self._call_lock: Optional[asyncio.Lock] = asyncio.Lock()
 
     # ── 后台事件循环 ──
 
@@ -221,7 +222,11 @@ class RagMCPClient:
     # ── 调用链内部函数 ──
 
     def _call_with_retry(self, name: str, args: dict) -> str:
-        """仅 MCP_TIMEOUT 触发 retry，max_attempts=2。"""
+        """仅 MCP_TIMEOUT 触发 retry，max_attempts=2。
+
+        不再调用 self._reset()：timeout 路径的 cleanup 已由 _do_call 内
+        _cancel_and_drain 触发 coroutine 自清完成（per-invocation isolation）。
+        """
         last_timeout: Optional[MCPBoundaryError] = None
         for attempt in (1, 2):
             try:
@@ -232,7 +237,8 @@ class RagMCPClient:
                 last_timeout = exc
                 if attempt == 2:
                     raise
-                self._reset()
+                # 不再 self._reset() — _do_call 内的 _cancel_and_drain
+                # 已让 coroutine 跑完 cleanup，state 干净可重试
         # unreachable
         if last_timeout is not None:
             raise last_timeout
@@ -240,27 +246,53 @@ class RagMCPClient:
             MCPErrorCode.MCP_TIMEOUT, "retry loop exited unexpectedly"
         )
 
+    def _cancel_and_drain(self, future: "asyncio.Future") -> None:
+        """Cancel future + 等待 coroutine 完成 cleanup（review 修订）。
+
+        关键不变量：coroutine **自己**负责关闭它的 session（_call_async 的
+        except 块捕获 CancelledError → local-capture 关闭）。Main thread
+        这里**不**碰 session 状态，只负责：
+          1. 取消（future.cancel）让 coroutine 进入 CancelledError 路径
+          2. 等待 future 完成（future.result）让 cleanup 跑完
+
+        不这样做的后果（旧设计 bug）：
+          - main thread 直接 self._reset() 调度 cleanup
+          - 旧 coroutine 还在跑，可能继续改 self._session
+          - retry 创建新 session 后，旧 coroutine 延迟 cleanup 把新 session 误关
+        """
+        future.cancel()
+        try:
+            future.result(timeout=self._config.timeout)
+        except (Exception, asyncio.CancelledError):
+            # 正常路径：coroutine 完成（cancelled state 或抛出原异常）
+            pass
+
     def _do_call(self, name: str, args: dict) -> str:
         """执行一次 MCP 调用并提取 text。Transport 异常归一为 MCPBoundaryError。
 
-        注意：except Exception 仅覆盖 transport/subprocess 范围（future.result()）；
-        _extract_text() 在 try/except 之外调用，其 MCP_INVALID_RESPONSE 直接透传。
+        Timeout 路径关键流程（review 修订）：
+          1. future.result(timeout) 抛 TimeoutError
+          2. _cancel_and_drain: future.cancel() + 等完成
+          3. 此时 coroutine 已收到 CancelledError 并自清 session
+          4. self._session / self._read_cm 已被 coroutine 清空
+          5. 抛 MCP_TIMEOUT → retry 路径拿到干净 state
+
+        注意：try/except 范围只包 future.result()；_extract_text 在外。
         """
         self._config.validate()
         loop = self._ensure_loop()
-        future = asyncio.run_coroutine_threadsafe(
-            self._call_async(name, args), loop
-        )
+        future = asyncio.run_coroutine_threadsafe(self._call_async(name, args), loop)
         try:
             result = future.result(timeout=self._config.timeout)
         except asyncio.TimeoutError as exc:
-            self._reset()
+            self._cancel_and_drain(future)
             raise MCPBoundaryError(
                 MCPErrorCode.MCP_TIMEOUT,
                 f"MCP call timeout after {self._config.timeout}s",
             ) from exc
         except MCPBoundaryError:
-            self._reset()
+            # Coroutine 自己 raise MCPBoundaryError（其 except 已清 session）
+            self._cancel_and_drain(future)  # 保险：确保 future done
             raise
         except (
             ConnectionError,
@@ -268,13 +300,13 @@ class RagMCPClient:
             ProcessLookupError,
             OSError,
         ) as exc:
-            self._reset()
+            self._cancel_and_drain(future)
             raise MCPBoundaryError(
                 MCPErrorCode.MCP_UNAVAILABLE,
                 f"MCP connection failure: {type(exc).__name__}: {exc}",
             ) from exc
         except Exception as exc:  # 兜底：subprocess spawn fail / SDK 未知异常
-            self._reset()
+            self._cancel_and_drain(future)
             raise MCPBoundaryError(
                 MCPErrorCode.MCP_UNAVAILABLE,
                 f"MCP call failed: {type(exc).__name__}: {exc}",
@@ -282,21 +314,40 @@ class RagMCPClient:
         return _extract_text(result)
 
     async def _call_async(self, name: str, args: dict) -> Any:
-        """后台循环内执行：建立/复用会话 + call_tool。
+        """后台循环内执行：建立/复用会话 + call_tool + 自清理。
 
-        异常时调用 _reset_async 清理 session（review 修订：BaseException 收窄
-        为 Exception + asyncio.CancelledError，避免吞 KeyboardInterrupt /
-        SystemExit；取消仍清理以防 session 泄漏）。
+        Per-invocation session 所有权（review 修订）：
+        本 coroutine **拥有**自己建立的 session，cleanup 用 local capture 不用
+        全局 self._session——避免与并发 retry 的新 session 身份混淆（参见
+        _do_call timeout 路径注释）。Lock 仍然保证同时只有一个 _call_async
+        在修改 self._session，但 cleanup 走 local ref 更显式。
+
+        异常范围：Exception + asyncio.CancelledError——取消仍触发 cleanup
+        防 session 泄漏；KeyboardInterrupt / SystemExit 由主线程处理不吞。
         """
-        lock = self._call_lock
-        if lock is None:
-            lock = self._call_lock = asyncio.Lock()
-        async with lock:
+        async with self._call_lock:
+            session_local: Optional[Any] = None
+            read_cm_local: Optional[Any] = None
             try:
                 session = await self._ensure_session()
+                session_local = session
+                read_cm_local = self._read_cm
                 return await session.call_tool(name, args)
             except (Exception, asyncio.CancelledError):
-                await self._reset_async()
+                # 用 local capture 关闭 THIS invocation 的 session；
+                # 同时清全局状态以便 retry 拿干净视图。
+                if session_local is not None:
+                    try:
+                        await session_local.__aexit__(None, None, None)
+                    except Exception as exc:
+                        logger.warning("session __aexit__ failed: %s", exc)
+                if read_cm_local is not None:
+                    try:
+                        await read_cm_local.__aexit__(None, None, None)
+                    except Exception as exc:
+                        logger.warning("read_cm __aexit__ failed: %s", exc)
+                self._session = None
+                self._read_cm = None
                 raise
 
     # ── 响应分类器（Q2 决议）──
