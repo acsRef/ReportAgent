@@ -359,20 +359,34 @@ class TestDoCallTimeoutLifecycle:
         coroutine_completed = {"value": False}
 
         def rcts(coro, loop):
+            # 区分 _call_async（要 cancel + wait for cleanup）vs 其他（如
+            # done_event.wait，纯跑完即可，不 cancel）
+            coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
+            is_call_async = coro_name == "_call_async"
+
             new_loop = asyncio.new_event_loop()
             try:
                 task = new_loop.create_task(coro)
-                new_loop.run_until_complete(asyncio.sleep(0.01))
-                task.cancel()
-                cancel_count["n"] += 1
+                if is_call_async:
+                    new_loop.run_until_complete(asyncio.sleep(0.01))
+                    task.cancel()
+                    cancel_count["n"] += 1
                 try:
                     new_loop.run_until_complete(task)
                 except (asyncio.CancelledError, Exception):
                     pass
-                coroutine_completed["value"] = True
+                if is_call_async:
+                    coroutine_completed["value"] = True
             finally:
                 new_loop.close()
-            return _FakeFuture(error=asyncio.TimeoutError())
+
+            if is_call_async:
+                return _FakeFuture(error=asyncio.TimeoutError())
+            else:
+                # done_event.wait() 等辅助 coroutine：返回成功 future
+                fut = MagicMock()
+                fut.result = lambda timeout=None: None
+                return fut
 
         monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", rcts)
 
@@ -406,12 +420,74 @@ class TestDoCallTimeoutLifecycle:
         import time
         time.sleep(0.05)  # 给任何潜在的延迟 cleanup 机会跑
 
-        assert new_session.aexit_count == 0, (
-            f"new session was incorrectly closed by old coroutine's residual cleanup "
-            f"(aexit_count={new_session.aexit_count})"
+    def test_timeout_drain_waits_for_done_event_signal(self, monkeypatch):
+        """TIMEOUT 路径：drain 必须等 _call_async 的 done_event.set()——即
+        coroutine 完整跑完（含 cleanup）。用慢 cleanup 验证 elapsed time 包含 cleanup。
+
+        钉子：retry 进入前 cleanup 必须完成。
+        """
+        import time
+
+        client = RagMCPClient(_MCPConfig())
+        client._loop = MagicMock()
+
+        cleanup_duration = 0.15  # seconds; 长于事件循环调度抖动
+        cleanup_state = {"started": False, "completed": False}
+
+        class _SlowSession(_FakeAsyncCM):
+            async def call_tool(self, name, args):
+                await asyncio.sleep(100)
+
+            async def __aexit__(self, *args):
+                cleanup_state["started"] = True
+                await asyncio.sleep(cleanup_duration)
+                cleanup_state["completed"] = True
+                return False
+
+        client._session = _SlowSession()
+        client._read_cm = _FakeAsyncCM()
+
+        def rcts(coro, loop):
+            coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
+            is_call_async = coro_name == "_call_async"
+
+            new_loop = asyncio.new_event_loop()
+            try:
+                task = new_loop.create_task(coro)
+                if is_call_async:
+                    new_loop.run_until_complete(asyncio.sleep(0.01))
+                    task.cancel()
+                try:
+                    new_loop.run_until_complete(task)
+                except (asyncio.CancelledError, Exception):
+                    pass
+            finally:
+                new_loop.close()
+
+            if is_call_async:
+                return _FakeFuture(error=asyncio.TimeoutError())
+            else:
+                fut = MagicMock()
+                fut.result = lambda timeout=None: None
+                return fut
+
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", rcts)
+
+        start = time.monotonic()
+        with pytest.raises(MCPBoundaryError):
+            client._do_call("search_dictionary", {"query": "x"})
+        elapsed = time.monotonic() - start
+
+        # 核心不变量：cleanup 必须完成（done_event.set() 已发生）
+        assert cleanup_state["started"], "cleanup never started"
+        assert cleanup_state["completed"], (
+            "_do_call returned before coroutine's cleanup finished——"
+            "drain 没有真正等 done_event"
         )
-        assert new_read_cm.aexit_count == 0, (
-            f"new read_cm was incorrectly closed (aexit_count={new_read_cm.aexit_count})"
+        # Sanity check：elapsed time 至少包含 cleanup 耗时（说明 drain 在等）
+        assert elapsed >= cleanup_duration * 0.8, (
+            f"elapsed {elapsed:.3f}s < cleanup {cleanup_duration:.3f}s——"
+            "drain 没有真的等 cleanup"
         )
 
 

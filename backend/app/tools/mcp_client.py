@@ -246,53 +246,69 @@ class RagMCPClient:
             MCPErrorCode.MCP_TIMEOUT, "retry loop exited unexpectedly"
         )
 
-    def _cancel_and_drain(self, future: "asyncio.Future") -> None:
-        """Cancel future + 等待 coroutine 完成 cleanup（review 修订）。
+    def _drain_coroutine(
+        self, future: "asyncio.Future", done_event: asyncio.Event, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        """Drain coroutine to completion via done_event signal（review 修订第 4 轮）。
 
-        关键不变量：coroutine **自己**负责关闭它的 session（_call_async 的
-        except 块捕获 CancelledError → local-capture 关闭）。Main thread
-        这里**不**碰 session 状态，只负责：
-          1. 取消（future.cancel）让 coroutine 进入 CancelledError 路径
-          2. 等待 future 完成（future.result）让 cleanup 跑完
+        关键不变量：coroutine 完整跑完（含 cleanup）才允许 retry。
 
-        不这样做的后果（旧设计 bug）：
-          - main thread 直接 self._reset() 调度 cleanup
-          - 旧 coroutine 还在跑，可能继续改 self._session
-          - retry 创建新 session 后，旧 coroutine 延迟 cleanup 把新 session 误关
+        实现：等待 done_event.set()（在 _call_async finally 块，try/except
+        的 awaits 之后）。**不**依赖 concurrent.futures.Future.result() 的
+        隐式等待行为——显式信号更稳，不受 asyncio 内部 future 取消语义变更影响。
+
+        future.result() 也调一次作为双保险（如果 cleanup 已完成则立刻返回）。
         """
-        future.cancel()
         try:
             future.result(timeout=self._config.timeout)
         except (Exception, asyncio.CancelledError):
-            # 正常路径：coroutine 完成（cancelled state 或抛出原异常）
+            # 正常路径：coroutine 完成（cancelled state 或原异常）
             pass
+        # 等待 done_event（authoritative signal）
+        try:
+            done_future = asyncio.run_coroutine_threadsafe(done_event.wait(), loop)
+            done_future.result(timeout=self._config.timeout)
+        except (Exception, asyncio.CancelledError):
+            # 兜底：coroutine 永远会跑到 finally set done_event；除非 cleanup
+            # 卡死超 config.timeout。log warning 不抛。
+            logger.warning(
+                "coroutine drain timeout: cleanup may not have finished; "
+                "retry will proceed but state might be unclean"
+            )
 
     def _do_call(self, name: str, args: dict) -> str:
         """执行一次 MCP 调用并提取 text。Transport 异常归一为 MCPBoundaryError。
 
         Timeout 路径关键流程（review 修订）：
           1. future.result(timeout) 抛 TimeoutError
-          2. _cancel_and_drain: future.cancel() + 等完成
-          3. 此时 coroutine 已收到 CancelledError 并自清 session
-          4. self._session / self._read_cm 已被 coroutine 清空
+          2. future.cancel() —— 让 coroutine 进入 CancelledError 路径
+          3. _drain_coroutine —— 等 done_event（authoritative 完成信号）
+          4. 此时 coroutine 已完整跑完 cleanup，state 干净
           5. 抛 MCP_TIMEOUT → retry 路径拿到干净 state
 
         注意：try/except 范围只包 future.result()；_extract_text 在外。
         """
         self._config.validate()
         loop = self._ensure_loop()
-        future = asyncio.run_coroutine_threadsafe(self._call_async(name, args), loop)
+        done_event = asyncio.Event()
+        future = asyncio.run_coroutine_threadsafe(
+            self._call_async(name, args, done_event), loop
+        )
         try:
             result = future.result(timeout=self._config.timeout)
         except asyncio.TimeoutError as exc:
-            self._cancel_and_drain(future)
+            # future.cancel() 返回值：如果 False 表示 future 已进入完成态
+            # （通常因为 coroutine 在 cancel() 之前就完成了）；不影响逻辑。
+            future.cancel()
+            self._drain_coroutine(future, done_event, loop)
             raise MCPBoundaryError(
                 MCPErrorCode.MCP_TIMEOUT,
                 f"MCP call timeout after {self._config.timeout}s",
             ) from exc
         except MCPBoundaryError:
             # Coroutine 自己 raise MCPBoundaryError（其 except 已清 session）
-            self._cancel_and_drain(future)  # 保险：确保 future done
+            future.cancel()  # 保险：确保 future done
+            self._drain_coroutine(future, done_event, loop)
             raise
         except (
             ConnectionError,
@@ -300,21 +316,25 @@ class RagMCPClient:
             ProcessLookupError,
             OSError,
         ) as exc:
-            self._cancel_and_drain(future)
+            future.cancel()
+            self._drain_coroutine(future, done_event, loop)
             raise MCPBoundaryError(
                 MCPErrorCode.MCP_UNAVAILABLE,
                 f"MCP connection failure: {type(exc).__name__}: {exc}",
             ) from exc
         except Exception as exc:  # 兜底：subprocess spawn fail / SDK 未知异常
-            self._cancel_and_drain(future)
+            future.cancel()
+            self._drain_coroutine(future, done_event, loop)
             raise MCPBoundaryError(
                 MCPErrorCode.MCP_UNAVAILABLE,
                 f"MCP call failed: {type(exc).__name__}: {exc}",
             ) from exc
         return _extract_text(result)
 
-    async def _call_async(self, name: str, args: dict) -> Any:
-        """后台循环内执行：建立/复用会话 + call_tool + 自清理。
+    async def _call_async(
+        self, name: str, args: dict, done_event: asyncio.Event
+    ) -> Any:
+        """后台循环内执行：建立/复用会话 + call_tool + 自清理 + 完成信号。
 
         Per-invocation session 所有权（review 修订）：
         本 coroutine **拥有**自己建立的 session，cleanup 用 local capture 不用
@@ -322,33 +342,41 @@ class RagMCPClient:
         _do_call timeout 路径注释）。Lock 仍然保证同时只有一个 _call_async
         在修改 self._session，但 cleanup 走 local ref 更显式。
 
-        异常范围：Exception + asyncio.CancelledError——取消仍触发 cleanup
-        防 session 泄漏；KeyboardInterrupt / SystemExit 由主线程处理不吞。
+        完成信号（review 修订第 4 轮）：
+        done_event 在 finally 中 set()——**永远**在 except 块的 awaits 之后
+        执行（Python 语言保证：try/except/finally 中 finally 必跑）。主线程
+        等待 done_event 是"coroutine 完整跑完（含 cleanup）"的权威信号，
+        不依赖 concurrent.futures.Future 的 result() 取消语义。
         """
-        async with self._call_lock:
-            session_local: Optional[Any] = None
-            read_cm_local: Optional[Any] = None
-            try:
-                session = await self._ensure_session()
-                session_local = session
-                read_cm_local = self._read_cm
-                return await session.call_tool(name, args)
-            except (Exception, asyncio.CancelledError):
-                # 用 local capture 关闭 THIS invocation 的 session；
-                # 同时清全局状态以便 retry 拿干净视图。
-                if session_local is not None:
-                    try:
-                        await session_local.__aexit__(None, None, None)
-                    except Exception as exc:
-                        logger.warning("session __aexit__ failed: %s", exc)
-                if read_cm_local is not None:
-                    try:
-                        await read_cm_local.__aexit__(None, None, None)
-                    except Exception as exc:
-                        logger.warning("read_cm __aexit__ failed: %s", exc)
-                self._session = None
-                self._read_cm = None
-                raise
+        try:
+            async with self._call_lock:
+                session_local: Optional[Any] = None
+                read_cm_local: Optional[Any] = None
+                try:
+                    session = await self._ensure_session()
+                    session_local = session
+                    read_cm_local = self._read_cm
+                    return await session.call_tool(name, args)
+                except (Exception, asyncio.CancelledError):
+                    # 用 local capture 关闭 THIS invocation 的 session；
+                    # 同时清全局状态以便 retry 拿干净视图。
+                    if session_local is not None:
+                        try:
+                            await session_local.__aexit__(None, None, None)
+                        except Exception as exc:
+                            logger.warning("session __aexit__ failed: %s", exc)
+                    if read_cm_local is not None:
+                        try:
+                            await read_cm_local.__aexit__(None, None, None)
+                        except Exception as exc:
+                            logger.warning("read_cm __aexit__ failed: %s", exc)
+                    self._session = None
+                    self._read_cm = None
+                    raise
+        finally:
+            # 完成信号：set 永远在 except 块的 awaits 之后执行。
+            # 主线程 _do_call 的 _drain_coroutine 等待此事件。
+            done_event.set()
 
     # ── 响应分类器（Q2 决议）──
 
