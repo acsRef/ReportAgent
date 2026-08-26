@@ -412,16 +412,13 @@ def _generate_sql(state: SQLAgentState) -> dict:
         if faq_rows:
             def _format_faq_row(r: dict) -> str:
                 parts = [f"问题：{r.get('question', '')}"]
-                sql = r.get("sql") or ""
+                # Tool Contract P2：{question, text, score}——MCP 路径与本地 fallback
+                # 路径暴露同一 schema；text 由 ragent-py chunk 或本地 _format_faq_text
+                # 序列化（sql+note+tables）而来，下游只读 text，不再分别读 sql/note/tables。
                 text = r.get("text") or ""
-                note = r.get("note") or ""
-                if sql:
-                    parts.append(f"示例 SQL：\n{sql}")
-                elif text:  # MCP chunk 形态：问题+SQL+要点都在 text 里
-                    parts.append(f"示例内容：\n{text}")
-                if note:
-                    parts.append(f"要点：{note}")
-                return "\n".join(parts)
+                if text:
+                    parts.append(text)
+                return "\n\n".join(parts)
 
             faq_lines = "\n\n".join(
                 f"【参考案例 {i}】{_format_faq_row(r)}"

@@ -346,3 +346,64 @@ class TestSearchInterfaceDictDispatcher:
         out = json.loads(search_interface_dictionary.invoke({"query": "xxx"}))
         assert out["matches"] == []
         assert "无匹配" in out["note"]
+
+
+class TestMcpResponseSchemaValidation:
+    """MCP response schema validation（review 第 2 轮 P1 修订）。
+
+    search_interface_dictionary 必须拒绝坏 MCP response 而不是把空 text
+    当成「没找到字段」。
+    """
+
+    def test_missing_text_returns_error_json(self, monkeypatch):
+        from app.tools.interface_dict_tools import search_interface_dictionary
+        import app.tools.interface_dict_tools as mod
+
+        fake = MagicMock()
+        fake.call_tool.return_value = {"matches": [{"score": 0.9, "title": "x"}]}
+        monkeypatch.setattr(mod, "get_rag_mcp_client", lambda: fake)
+        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
+
+        out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
+        assert "error" in out
+        assert "MCP_INVALID_RESPONSE" in out["error"]
+
+    def test_missing_score_returns_error_json(self, monkeypatch):
+        from app.tools.interface_dict_tools import search_interface_dictionary
+        import app.tools.interface_dict_tools as mod
+
+        fake = MagicMock()
+        fake.call_tool.return_value = {"matches": [{"text": "hello", "title": "x"}]}
+        monkeypatch.setattr(mod, "get_rag_mcp_client", lambda: fake)
+        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
+
+        out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
+        assert "error" in out
+        assert "MCP_INVALID_RESPONSE" in out["error"]
+
+    def test_non_mcp_exception_propagates_without_fallback(self, monkeypatch):
+        """非 MCPBoundaryError（真程序 bug）→ 向上抛，不走 HTTP fallback（review 第 2 轮 P1/P2）。"""
+        from app.tools.interface_dict_tools import search_interface_dictionary
+        import app.tools.interface_dict_tools as mod
+
+        fake = MagicMock()
+        # RuntimeError 不是 MCPBoundaryError，按 faq_tools 一致语义：向上抛
+        fake.call_tool.side_effect = RuntimeError("parse bug not related to MCP boundary")
+        monkeypatch.setattr(mod, "get_rag_mcp_client", lambda: fake)
+        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
+
+        with pytest.raises(RuntimeError, match="parse bug"):
+            search_interface_dictionary.invoke({"query": "x"})
+
+    def test_matches_not_list_returns_error_json(self, monkeypatch):
+        from app.tools.interface_dict_tools import search_interface_dictionary
+        import app.tools.interface_dict_tools as mod
+
+        fake = MagicMock()
+        fake.call_tool.return_value = {"matches": "not a list"}
+        monkeypatch.setattr(mod, "get_rag_mcp_client", lambda: fake)
+        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
+
+        out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
+        assert "error" in out
+        assert "MCP_INVALID_RESPONSE" in out["error"]

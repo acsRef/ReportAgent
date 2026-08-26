@@ -27,7 +27,7 @@ import re
 import httpx
 
 from app.tools.interface_dict_tools import _base, _dict_kb_id, _login_token
-from app.tools.mcp_client import _fallback_allowed, get_rag_mcp_client
+from app.tools.mcp_client import _fallback_allowed, _validate_matches_contract, get_rag_mcp_client
 from app.tools.mcp_errors import MCPBoundaryError
 
 logger = logging.getLogger(__name__)
@@ -89,14 +89,17 @@ def _retrieve_dict_via_mcp(query: str, top_k: int) -> list[dict]:
     同 schema（chunk_id / document_id / text / title / section_path / score）。
     mcp_client runtime annotation（_note / degraded）由本函数丢弃——只 items 透传。
 
+    业务契约校验（review 第 2 轮 P1 修订）：_validate_matches_contract 检查
+    result 形态 + 每个 item 含 text(str) + score(numeric)；失败 → MCPBoundaryError
+    (INVALID_RESPONSE)，由 _retrieve_dict dispatcher 决定上抛还是 fallback。
+
     Raises:
         MCPBoundaryError: 失败时显式分类（MCP_TIMEOUT / MCP_UNAVAILABLE / MCP_INVALID_RESPONSE）
     """
     result = get_rag_mcp_client().call_tool(
         "search_dictionary", {"query": query, "top_k": top_k}
     )
-    items = result.get("matches") or []
-    return [it for it in items if isinstance(it, dict)]
+    return _validate_matches_contract(result)
 
 
 def _retrieve_dict_http(query: str, top_k: int) -> list[dict]:

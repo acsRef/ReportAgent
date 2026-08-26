@@ -254,11 +254,19 @@ def test_generate_sql_prompt_injects_faq(monkeypatch) -> None:
     captured = _capture_prompt(monkeypatch)
 
     def _faq_tool(payload):
+        # P2 review 修订：Tool Contract {question, text, score}——MCP 路径与本地
+        # fallback 路径暴露同一 schema（plan 决策 1）；text 由 _format_faq_text 序列化
+        # （sql+note+tables）。下游消费者（sql_graph）只读 text。
         return _json.dumps({"matches": [{
             "question": "区域退货率",
-            "sql": "SELECT rc.region_name, ROUND(SUM(rt.return_amount)/NULLIF(SUM(f.total_amount),0)*100,2) AS 退货率 FROM fact_returns rt JOIN fact_sales f ON rt.sale_id=f.sale_id JOIN dim_region rc ON f.region_id=rc.region_id GROUP BY rc.region_name",
-            "note": "退货率 = 退货金额/销售额，经 sale_id 关联",
-            "tables": ["fact_returns", "fact_sales"],
+            "text": (
+                "示例 SQL：\n"
+                "SELECT rc.region_name, ROUND(SUM(rt.return_amount)/NULLIF(SUM(f.total_amount),0)*100,2) AS 退货率 "
+                "FROM fact_returns rt JOIN fact_sales f ON rt.sale_id=f.sale_id "
+                "JOIN dim_region rc ON f.region_id=rc.region_id GROUP BY rc.region_name\n\n"
+                "涉及表：fact_returns, fact_sales\n\n"
+                "要点：退货率 = 退货金额/销售额，经 sale_id 关联"
+            ),
             "score": 6.0,
         }]}, ensure_ascii=False)
 

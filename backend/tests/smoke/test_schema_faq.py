@@ -31,8 +31,10 @@ def test_search_faq_rows_matches_return_rate():
     top = rows[0]
     assert top["score"] > 0
     assert "退货率" in top["question"]
-    assert "SELECT" in top["sql"]
-    assert top["note"]
+    # P2 review 修订：local seed 规范化到 {question, text, score}——SQL 文本在
+    # text 字段里（_format_faq_text 序列化），不再作为独立字段暴露。
+    assert "SELECT" in top["text"]
+    assert "退货率" in top["text"]  # note 也在 text 里
 
 
 def test_search_faq_rows_no_match_returns_empty():
@@ -66,17 +68,44 @@ def test_search_faq_rows_missing_file_degrades(monkeypatch):
         faq_tools._FAQ_ENTRIES = None
 
 
-def test_search_faq_tool_invoke_returns_json_matches():
-    """@tool 契约：.invoke 返回 JSON 字符串，matches 为命中案例。"""
+def test_search_faq_tool_invoke_returns_json_matches(monkeypatch):
+    """@tool 契约：.invoke 返回 JSON 字符串，matches 为命中案例。
+
+    P2：必须 mock MCP（否则 dispatcher 真起 ragent-py 子进程 15s 超时）。
+    mock 真实命中 → Tool Contract {question, text, score} 验证。
+    """
+    from unittest.mock import MagicMock
+    fake = MagicMock()
+    fake.call_tool.return_value = {"matches": [
+        {
+            "chunk_id": "c1",
+            "document_id": "d1",
+            "title": "区域退货率",
+            "text": "# 退货率\n示例 SQL:\nSELECT rc.region_name...\n要点: 退货率 = 退货金额/销售额",
+            "score": 0.8,
+        },
+    ]}
+    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+
     raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
     assert isinstance(raw, str)
     parsed = json.loads(raw)
     assert isinstance(parsed.get("matches"), list)
     assert parsed["matches"]
-    assert "SELECT" in parsed["matches"][0]["sql"]
+    # Tool Contract P2：{question, text, score}——SELECT 在 text 里
+    assert "SELECT" in parsed["matches"][0]["text"]
+    assert "退货率" in parsed["matches"][0]["question"]
+    # 必须没有 sql/note/tables 顶层字段（已规范化）
+    for forbidden in ("sql", "note", "tables"):
+        assert forbidden not in parsed["matches"][0]
 
 
-def test_search_faq_tool_invoke_no_match_empty():
+def test_search_faq_tool_invoke_no_match_empty(monkeypatch):
+    from unittest.mock import MagicMock
+    fake = MagicMock()
+    fake.call_tool.return_value = {"matches": []}
+    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+
     raw = faq_tools.search_faq.invoke({"query": "完全无关的乱码词汇xyz", "top_k": 3})
     parsed = json.loads(raw)
     assert parsed["matches"] == []
@@ -166,10 +195,11 @@ class TestSearchFaqDispatcher:
 
         raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
         parsed = json.loads(raw)
-        # 本地命中：question 含「退货率」，sql 非空
+        # 本地命中：question 含「退货率」，text 字段含 SQL
         assert parsed["matches"]
         assert "退货率" in parsed["matches"][0]["question"]
-        assert "sql" in parsed["matches"][0]
+        # Tool Contract P2：{question, text, score}——SELECT 在 text 里
+        assert "SELECT" in parsed["matches"][0]["text"]
 
     def test_flag_locked_returns_error_json(self, monkeypatch):
         """flag 锁定 → MCP UNAVAILABLE → 返回 JSON error，不落本地。"""
@@ -231,3 +261,69 @@ class TestSearchFaqDispatcher:
         fake.call_tool.assert_called_once_with("search_faq", {"query": "q", "top_k": 2})
         parsed = json.loads(raw)
         assert "matches" in parsed
+
+
+class TestMcpResponseSchemaValidation:
+    """MCP 返回的 items schema 必须满足 {text: str, score: numeric}（review 第 2 轮 P1 修订）。
+
+    不满足 → MCPBoundaryError(INVALID_RESPONSE) → search_faq 走显式 error 路径
+    而不是把坏 MCP response 当成空结果静默吞掉（这正是 P2 决策 4 要消灭的
+    「protocol error 伪装成 empty result」风险）。
+    """
+
+    def test_missing_text_field_raises_invalid_response(self, monkeypatch):
+        """MCP 返回 items 缺 text → 显式 error JSON（不静默空结果）。"""
+        fake = MagicMock()
+        fake.call_tool.return_value = {"matches": [{"score": 0.9, "title": "x"}]}
+        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+        monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)  # 即使放行也不 fallback
+
+        raw = faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
+        parsed = json.loads(raw)
+        assert "error" in parsed
+        assert "MCP_INVALID_RESPONSE" in parsed["error"]
+
+    def test_missing_score_field_raises_invalid_response(self, monkeypatch):
+        """MCP 返回 items 缺 score → 显式 error JSON。"""
+        fake = MagicMock()
+        fake.call_tool.return_value = {"matches": [{"text": "hello", "title": "x"}]}
+        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+        monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
+
+        raw = faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
+        parsed = json.loads(raw)
+        assert "error" in parsed
+        assert "MCP_INVALID_RESPONSE" in parsed["error"]
+
+    def test_matches_not_list_raises_invalid_response(self, monkeypatch):
+        """MCP 返回 matches 是 string 不是 list → 显式 error。"""
+        fake = MagicMock()
+        fake.call_tool.return_value = {"matches": "not a list"}
+        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+        monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
+
+        raw = faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
+        parsed = json.loads(raw)
+        assert "error" in parsed
+        assert "MCP_INVALID_RESPONSE" in parsed["error"]
+
+    def test_extra_internal_fields_passed_through_to_text(self, monkeypatch):
+        """MCP 内部字段（chunk_id/document_id/section_path/_note）不影响校验。"""
+        fake = MagicMock()
+        fake.call_tool.return_value = {
+            "matches": [{
+                "text": "hello",
+                "score": 0.9,
+                "chunk_id": "c-internal",
+                "document_id": "d-internal",
+                "section_path": "internal/path",
+            }],
+            "degraded": False,  # mcp_client runtime annotation
+            "_note": "internal",
+        }
+        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+
+        raw = faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
+        parsed = json.loads(raw)
+        # 暴露给 tool 的 contract 仍只 {question, text, score}（内部字段不进）
+        assert set(parsed["matches"][0].keys()) == {"question", "text", "score"}

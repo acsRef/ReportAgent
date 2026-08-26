@@ -61,7 +61,10 @@ def test_mcp_primary_used_when_available(monkeypatch):
 
 
 def test_mcp_error_falls_back_to_local(monkeypatch):
-    """MCP UNAVAILABLE + fallback allowed → 本地 seed 兜底。"""
+    """MCP UNAVAILABLE + fallback allowed → 本地 seed 兜底。
+
+    P2 修订：本地 seed 规范化到 {question, text, score}；text 字段含 SQL。
+    """
     fake = MagicMock()
     fake.call_tool.side_effect = MCPBoundaryError(
         MCPErrorCode.MCP_UNAVAILABLE, "MCP FAQ 检索失败"
@@ -72,8 +75,8 @@ def test_mcp_error_falls_back_to_local(monkeypatch):
     raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
     parsed = json.loads(raw)
     assert parsed["matches"], "MCP 失败应降级本地并返回主题内容"
-    # 本地命中含 sql/note 字段
-    assert "sql" in parsed["matches"][0]
+    # P2 Tool Contract：{question, text, score}
+    assert "SELECT" in parsed["matches"][0]["text"]
 
 
 def test_mcp_not_configured_falls_back_to_local(monkeypatch):

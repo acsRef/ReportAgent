@@ -24,7 +24,11 @@ import httpx  # 关键：模块级 `httpx.post`/`httpx.request` 调用，单测�
 from langchain_core.tools import tool
 
 from app.tools import ragent_token_cache
-from app.tools.mcp_client import _fallback_allowed, get_rag_mcp_client
+from app.tools.mcp_client import (
+    _fallback_allowed,
+    _validate_matches_contract,
+    get_rag_mcp_client,
+)
 from app.tools.mcp_errors import MCPBoundaryError
 
 logger = logging.getLogger(__name__)
@@ -122,7 +126,11 @@ def _items_to_matches(items: list[dict]) -> list[dict]:
 
 
 def _search_dict_via_mcp(query: str, top_k: int) -> list[dict]:
-    """正路：MCP `search_dictionary` → 规范化 items。
+    """正路：MCP `search_dictionary` → 业务契约校验后的 items。
+
+    业务契约校验（review 第 2 轮 P1 修订）：_validate_matches_contract 检查
+    result 形态 + 每个 item 含 text(str) + score(numeric)；失败 → MCPBoundaryError
+    (INVALID_RESPONSE)，由 search_interface_dictionary dispatcher 决定 error JSON / fallback。
 
     Raises:
         MCPBoundaryError: 失败时显式分类。
@@ -130,8 +138,7 @@ def _search_dict_via_mcp(query: str, top_k: int) -> list[dict]:
     result = get_rag_mcp_client().call_tool(
         "search_dictionary", {"query": query, "top_k": top_k}
     )
-    items = result.get("matches") or []
-    return [it for it in items if isinstance(it, dict)]
+    return _validate_matches_contract(result)
 
 
 def _search_dict_http(query: str, top_k: int) -> tuple[list[dict], bool]:
@@ -191,6 +198,8 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
       - MCPBoundaryError(UNAVAILABLE) + flag 锁定 → error JSON 含 MCP code
       - MCPBoundaryError(INVALID_RESPONSE) → error JSON 含 MCP code（不 fallback）
       - HTTP fallback 失败 → 既有错误形状（"字典服务不可达…"/"登录失败…"/"无权读取…"）
+      - 其它 Exception（非 MCPBoundaryError）→ 向上抛，与 faq_tools catch 收紧一致
+        （review 第 2 轮 P1/P2 修订：避免真程序 bug 被 HTTP fallback 静默吞掉）
     """
     try:
         items = _search_dict_via_mcp(query, top_k)
@@ -205,7 +214,7 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
                 {"error": f"{exc.code.value}: {exc.detail}"},
                 ensure_ascii=False,
             )
-        # UNAVAILABLE + flag 未锁 → HTTP fallback
+        # UNAVAILABLE + flag 未锁 → HTTP fallback（HTTP 失败在此分支内处理）
         logger.warning(
             "MCP unavailable, falling back to HTTP: %s [%s]",
             exc.detail, exc.code.value,
@@ -220,13 +229,8 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
         except Exception as exc_other:
             logger.warning("dictionary lookup HTTP fallback failed: %s", exc_other)
             return json.dumps({"error": str(exc_other)}, ensure_ascii=False)
-    except Exception as exc:
-        # 其它 Exception（非 MCPBoundaryError）→ 走 HTTP fallback 兜底
-        logger.warning("dictionary lookup unexpected error: %s", exc)
-        try:
-            items, _has_degraded = _search_dict_http(query, top_k)
-        except Exception as exc_http:
-            return json.dumps({"error": f"字典检索异常：{exc_http}"}, ensure_ascii=False)
+    # 非 MCPBoundaryError（_search_dict_via_mcp 抛 RuntimeError/KeyError 等真程序 bug）
+    # → 向上抛，由 LangChain tool runtime 暴露给调用方；与 faq_tools catch 收紧一致。
 
     if not items:
         return json.dumps({"matches": [], "note": f"字典库无匹配：{query}"}, ensure_ascii=False)

@@ -389,3 +389,48 @@ class TestRetrieveDictDispatcher:
         with pytest.raises(MCPBoundaryError) as ei:
             rag_schema._retrieve_dict("q", top_k=3)
         assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+
+class TestMcpResponseSchemaValidation:
+    """MCP response schema validation（review 第 2 轮 P1 修订）。
+
+    search_tables_from_rag / get_table_ddl_from_rag 必须拒绝坏 MCP response
+    而不是把空 text 当成「没找到表」。
+    """
+
+    def test_search_tables_mcp_missing_text_returns_empty(self, monkeypatch):
+        """MCP items 缺 text → search_tables_from_rag 返回 []（graceful 契约）。
+
+        _retrieve_dict_via_mcp 抛 MCPBoundaryError(INVALID_RESPONSE) →
+        dispatcher 上抛 → search_tables_from_rag except 兜底返回 []。
+        """
+        _mock_mcp(monkeypatch, matches=[{"score": 0.9, "title": "x"}])  # 缺 text
+        rows = rag_schema.search_tables_from_rag("x")
+        assert rows == []
+
+    def test_search_tables_mcp_missing_score_returns_empty(self, monkeypatch):
+        _mock_mcp(monkeypatch, matches=[{"text": "# 表 `public.fact_sales`\nsale", "title": "x"}])
+        rows = rag_schema.search_tables_from_rag("x")
+        assert rows == []
+
+    def test_get_table_ddl_mcp_missing_text_returns_none(self, monkeypatch):
+        _mock_mcp(monkeypatch, matches=[{"score": 0.9}])
+        assert rag_schema.get_table_ddl_from_rag("fact_sales") is None
+
+    def test_search_tables_mcp_matches_not_list_returns_empty(self, monkeypatch):
+        _mock_mcp(monkeypatch, matches="not a list")  # type: ignore[arg-type]
+        rows = rag_schema.search_tables_from_rag("x")
+        assert rows == []
+
+    def test_search_tables_mcp_extra_fields_passed_through(self, monkeypatch):
+        """MCP 内部字段（chunk_id/document_id/section_path）不影响解析。"""
+        _mock_mcp(monkeypatch, matches=[{
+            "text": _FACT_SALES_DOC,
+            "score": 0.9,
+            "chunk_id": "c1",
+            "document_id": "d1",
+            "section_path": "internal/path",
+        }])
+        rows = rag_schema.search_tables_from_rag("销售额", top_k=3)
+        assert len(rows) == 1
+        assert rows[0]["table_name"] == "fact_sales"

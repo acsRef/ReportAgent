@@ -488,6 +488,58 @@ def close_rag_mcp_client() -> None:
 # ── 协议层独立函数 ──
 
 
+def _validate_matches_contract(result: Any) -> list[dict]:
+    """校验 MCP result.matches 业务契约（review 第 2 轮 P1 修订）。
+
+    强约束（plan 决策 3 稳定字段集）：
+      - result 必须是 dict（mcp_client._classify_response 已保证；本函数作为
+        tool 层进入点的二次防御）
+      - matches 必须是 list（缺失视为空，与 _classify_response EMPTY_PREFIXES 等价）
+      - 每个 item 必须是 dict，且含 text(str) + score(numeric)
+
+    失败 → MCPBoundaryError(MCP_INVALID_RESPONSE)，与 mcp_client transport-level
+    INVALID_RESPONSE 同语义（决策 4：协议错不 fallback）。
+
+    Note: mcp_client 的 _classify_response 只校验协议形态（顶层必须 JSON object），
+    业务 schema 由 tool 层在调 _validate_matches_contract 时校验（plan 决策 3 +
+    review 第 2 轮）。但工具层契约是固定的，所有 retrieval 工具共用——把校验函数
+    放 mcp_client 让所有工具用同一个 helper，避免散落。
+    """
+    if not isinstance(result, dict):
+        raise MCPBoundaryError(
+            MCPErrorCode.MCP_INVALID_RESPONSE,
+            f"result must be dict, got {type(result).__name__}",
+        )
+    matches = result.get("matches")
+    if matches is None:
+        # matches 缺失视为空命中（合法 EMPTY_RESULT）
+        return []
+    if not isinstance(matches, list):
+        raise MCPBoundaryError(
+            MCPErrorCode.MCP_INVALID_RESPONSE,
+            f"matches must be list, got {type(matches).__name__}",
+        )
+    for i, it in enumerate(matches):
+        if not isinstance(it, dict):
+            raise MCPBoundaryError(
+                MCPErrorCode.MCP_INVALID_RESPONSE,
+                f"matches[{i}] must be dict, got {type(it).__name__}",
+            )
+        text = it.get("text")
+        if not isinstance(text, str):
+            raise MCPBoundaryError(
+                MCPErrorCode.MCP_INVALID_RESPONSE,
+                f"matches[{i}].text missing or not str (got {type(text).__name__ if text is not None else 'None'})",
+            )
+        score = it.get("score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            raise MCPBoundaryError(
+                MCPErrorCode.MCP_INVALID_RESPONSE,
+                f"matches[{i}].score missing or not numeric (got {type(score).__name__ if score is not None else 'None'})",
+            )
+    return matches
+
+
 def _extract_text(result: Any) -> str:
     """从 CallToolResult 提取纯 text payload。空内容/非 text → INVALID_RESPONSE。
 
