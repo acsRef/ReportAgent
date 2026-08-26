@@ -8,8 +8,10 @@ import duckdb
 
 logger = logging.getLogger(__name__)
 
-_DB_PATH = Path(__file__).parent.parent / "report.duckdb"
-_SEED_SQL_PATH = Path(__file__).parent.parent / "seed_data.sql"
+# legacy: 本模块已从 app/ 迁入 app/legacy/（P1 归置）。路径深度 +1，
+# DuckDB 文件仍落在 backend/ 根，与迁移前一致。
+_DB_PATH = Path(__file__).parent.parent.parent / "report.duckdb"
+_SEED_SQL_PATH = Path(__file__).parent.parent.parent / "seed_data.sql"
 
 _conn_rw: duckdb.DuckDBPyConnection | None = None
 _conn_ro: duckdb.DuckDBPyConnection | None = None

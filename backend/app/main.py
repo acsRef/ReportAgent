@@ -25,7 +25,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from app.agent.parent_graph import AgentState, build_parent_graph
 from app.agent.sql_graph import ChatCard
 from app.agent.requirement_analysis_graph import build_requirement_analysis_graph
 from app.agent.confirmed_execution_graph import (
@@ -39,7 +38,14 @@ from app.agent.security_guard import SecurityGuard
 from app.api.templates import router as templates_router
 from app.api.observability import router as observability_router
 from app.utils.pii import mask_pii
-from app.db import get_connection, close_connection
+
+# ===========================================================================
+# LEGACY BRIDGE BEGIN — mode=legacy 专属引用。禁止在此区块外 import app.legacy.*，
+# 禁止向此区块新增条目（Phase 15 整体删除）。见 docs/architecture/* 与
+# docs/plans/2026-08-26-p1-architecture-freeze.md 决策 2。
+from app.legacy.agents.parent_graph import build_parent_graph
+# LEGACY BRIDGE END
+# ===========================================================================
 from app.infra.db.postgres import init_pool, close_pool, start_pool_monitor, stop_pool_monitor
 from app.tools.mcp_faq_client import close_mcp_faq_client
 from app.infra.checkpoint.factory import init_checkpointer, close_checkpointer
@@ -352,6 +358,12 @@ _server_start_time = datetime.datetime.now()
 # 又保留共享 MemorySaver 的跨请求 checkpoint（clarify interrupt 连续性不破坏）。
 # 不同 session 用不同锁，互不阻塞。锁随进程生命周期保留（与 MemorySaver 同寿命）。
 # 彻底的生产方案是 PostgresSaver（独立 PR）。
+# ===========================================================================
+# LEGACY (mode=legacy 专属 helper) — _chat_legacy / _format_event /
+# _build_response / _legacy_lock / _VALID_CHOSEN_TOOLS 只服务旧 2-stage
+# interrupt 流。禁止新代码引用；Phase 15 整体删除。
+# 见 docs/architecture/* 与 docs/plans/2026-08-26-p1-architecture-freeze.md 决策 2。
+# ===========================================================================
 _legacy_session_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -380,7 +392,6 @@ async def lifespan(app: FastAPI):
     # 环境必须让进程「显式启动失败」，而不是带着远程认证绕过漏洞继续运行。
     # 必须早于 init_pool / ensure_default_user——让错误在最早阶段暴露。
     validate_auth_security_config()
-    get_connection()
     await init_pool()
     start_pool_monitor()
     await ensure_default_user()
@@ -395,7 +406,6 @@ async def lifespan(app: FastAPI):
     stop_pool_monitor()
     close_mcp_faq_client()
     await close_pool()
-    close_connection()
 
 
 app = FastAPI(
