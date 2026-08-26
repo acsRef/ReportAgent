@@ -1,6 +1,14 @@
-"""Schema FAQ MCP client + faq_tools 主从切换测试。
+"""Schema FAQ MCP client + faq_tools 主从切换测试（P2, smoke）。
 
-离线——patch 掉 MCP client / 后台协程，不打真实 ragent-py 子进程。
+P2 架构变化后：
+  - mcp_faq_client 变为薄 shim，所有状态由 mcp_client 持有（Q6）
+  - 旧 MCPFaqClient._call 同步桥接契约已被 RagMCPClient.call_tool 替代
+  - 4 个旧 bridge 契约测试已删除（其覆盖范围迁移至 contracts/test_mcp_client.py）
+  - 当前 faq_tools 的 catch-all + local-seed fallback 行为属 Task 2 重写范围
+    （Q6 决议：仅 catch MCPBoundaryError + flag-gated）；本文件 3 个主从切换测试
+    在 Task 2 之前继续覆盖当前行为，Task 2 实施时同步更新。
+
+离线——patch 掉 mcp_client / 后台协程，不打真实 ragent-py 子进程。
 """
 from __future__ import annotations
 
@@ -10,7 +18,13 @@ from unittest.mock import patch
 import pytest
 
 from app.tools import faq_tools
-from app.tools.mcp_faq_client import MCPFaqClient, MCPFaqClientError, _MCPFaqConfig
+from app.tools.mcp_client import get_rag_mcp_client
+from app.tools.mcp_faq_client import (
+    MCPFaqClient,
+    MCPFaqClientError,
+    close_mcp_faq_client,
+    get_mcp_faq_client,
+)
 
 pytestmark = pytest.mark.smoke
 
@@ -24,7 +38,7 @@ def _local_matches():
     return faq_tools._search_faq_rows("退货率", top_k=3)
 
 
-# --- faq_tools.search_faq 主从切换 ---
+# --- faq_tools.search_faq 主从切换（当前 catch-all 行为；Task 2 重写）---
 
 
 def test_mcp_primary_used_when_available(monkeypatch):
@@ -72,77 +86,32 @@ def test_mcp_empty_with_local_available_no_crash(monkeypatch):
     assert parsed["matches"]
 
 
-# --- MCPFaqClient 同步桥接契约 ---
+# --- P2 shim 契约（替代旧 bridge 契约测试）---
 
 
-def test_client_search_faq_bridges_async(monkeypatch):
-    config = _MCPFaqConfig()
-    config.python = "python"
-    config.cwd = "."
-    client = MCPFaqClient(config)
+def test_shim_get_mcp_faq_client_returns_rag_mcp_client():
+    """shim 必须返回 RagMCPClient 同一实例（Q6 单例 owner 唯一）。"""
+    from app.tools.mcp_client import RagMCPClient
 
-    async def _fake_call(self, query, top_k):
-        return '{"matches": [{"question": "q", "text": "t", "score": 1.0}]}'
-
-    monkeypatch.setattr(MCPFaqClient, "_call", _fake_call)
-    out = client.search_faq("退货率", 3)
-    parsed = json.loads(out)
-    assert parsed["matches"][0]["question"] == "q"
-
-
-def test_client_search_faq_timeout_raises(monkeypatch):
-    config = _MCPFaqConfig()
-    config.python = "python"
-    config.cwd = "."
-    config.timeout = 0.01
-    client = MCPFaqClient(config)
-
-    async def _hanging_call(self, query, top_k):
-        import asyncio
-        await asyncio.sleep(1)
-        return ""
-
-    monkeypatch.setattr(MCPFaqClient, "_call", _hanging_call)
-    with pytest.raises(MCPFaqClientError):
-        client.search_faq("退货率", 3)
+    # 显式重置单例以确保本测试独立
+    import app.tools.mcp_client as mod
+    mod._client = None
+    try:
+        a = get_mcp_faq_client()
+        b = get_rag_mcp_client()
+        assert a is b
+        assert isinstance(a, RagMCPClient)
+    finally:
+        close_mcp_faq_client()
 
 
-def test_client_unconfigured_raises():
-    config = _MCPFaqConfig()
-    config.python = ""
-    config.cwd = "."
-    client = MCPFaqClient(config)
-    with pytest.raises(MCPFaqClientError):
-        client.search_faq("退货率", 3)
+def test_shim_mcp_faq_client_error_aliases_to_mcp_boundary_error():
+    """MCPFaqClientError alias 必须是 MCPBoundaryError（Q6：不 alias 到 Exception）。"""
+    from app.tools.mcp_errors import MCPBoundaryError, MCPErrorCode
 
-
-def test_client_close_cleans_thread_and_loop(monkeypatch):
-    """close() 幂等、停掉后台循环线程、清空会话状态（防子进程孤儿化）。"""
-    from app.tools.mcp_faq_client import MCPFaqClient as _C
-
-    config = _MCPFaqConfig()
-    config.python = "python"
-    config.cwd = "."
-    client = _C(config)
-
-    async def _fake_call(self, query, top_k):
-        return '{"matches": []}'
-
-    monkeypatch.setattr(_C, "_call", _fake_call)
-    client.search_faq("退货率", 3)  # 触发后台线程 + 循环
-    assert client._loop is not None and client._thread is not None
-
-    client.close()
-    assert client._loop is None
-    assert client._thread is None
-    assert client._session is None
-    # 幂等：再 close 不抛
-    client.close()
-
-
-def test_close_mcp_faq_client_idempotent(monkeypatch):
-    from app.tools import mcp_faq_client as mfc
-
-    monkeypatch.setattr(mfc, "_client", None)
-    mfc.close_mcp_faq_client()  # 未初始化时调 close 不抛
-    assert mfc._client is None
+    assert MCPFaqClientError is MCPBoundaryError
+    # 旧代码 raise MCPFaqClientError("msg")
+    err = MCPFaqClientError(MCPErrorCode.MCP_UNAVAILABLE, "test detail")
+    assert isinstance(err, MCPBoundaryError)
+    assert err.code is MCPErrorCode.MCP_UNAVAILABLE
+    assert err.detail == "test detail"
