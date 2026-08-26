@@ -1,8 +1,24 @@
 # P2 RAG / MCP Boundary 实施 plan
 
-> 状态: 进行中
+> 状态: 进行中（Task 1+2 已落地合 master；Task 3/4/5 待开）
 > 上游: [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) §二（系统边界）/ §八（Tool/MCP Contract）/ §十八 P2 验收清单
 > 前置: P1 Architecture Freeze 已落地（26d900c..dbad62a，legacy 冻结面 + 宪法版 CLAUDE.md 在位）
+
+## 落地记录（每次 commit 后追加）
+
+**Task 1 — 泛化 stdio MCP client + 五分类失败语义**
+- 落地：master `aa73a51`（merge commit），feat: `8adfbf6`
+- 4 轮 review 全部消化（async lifecycle cleanup / timeout cancel + drain / per-invocation ownership / done_event drain）
+- 关键产物：`backend/app/tools/mcp_client.py` + `mcp_errors.py`（529 + 23 行）；`mcp_faq_client.py` 改 shim
+
+**Task 2 — schema/字典/FAQ 三通道切 MCP 正路 + faq catch 收紧 + graph 改走 registry**
+- 落地：master `bc5159c`（merge commit），feat: `eab2849` + 4 轮 review fix（`45ba058` / `2f3badb` / `9bfd502` / `aee59b7`）
+- 关键产物：`rag_schema.py` / `interface_dict_tools.py` / `faq_tools.py` MCP-first dispatcher；Tool Contract 统一 `{question, text, score}`；graph 改走 registry；mcp_client boundary 收口（_validate_matches_contract 校验 + normalize + strip 内部字段）
+- 测试：475 passed（vs P1 基线 384，新增 91 个 dispatcher / validation / autouse 测试）
+
+**挂起项**：
+1. `_strip_internal_fields` 当前是 denylist（黑名单）—— 后续 cleanup 可改 stable-field allowlist（review 第 3 轮 P2 指出，非当前 blocker）
+2. 真实跨进程 MCP 验证（ragent-py + backend 联合跑通 search_dictionary / search_faq）+ e2e 补跑 → 跑批窗口补做
 
 ## Preconditions（P1 已冻结，P2 不重判）
 
