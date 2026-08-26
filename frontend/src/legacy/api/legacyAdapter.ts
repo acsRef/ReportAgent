@@ -10,7 +10,7 @@
  * It is also used as the default fallback when the parser can't classify
  * an incoming event (defensive).
  */
-import type { AnalysisStreamEvent } from './analysisClient'
+import type { AnalysisStreamEvent } from '../../api/analysisClient'
 
 export function adaptLegacyEvent(
   eventName: string,

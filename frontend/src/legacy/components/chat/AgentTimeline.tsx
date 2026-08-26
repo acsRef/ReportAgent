@@ -1,6 +1,6 @@
-import { IconLoading, IconCloseCircle } from '../ui/Icons'
-import { Text } from '../atelier/Typography'
-import type { TimelineEntry } from '../../types/report'
+import { IconLoading, IconCloseCircle } from '../../../components/ui/Icons'
+import { Text } from '../../../components/atelier/Typography'
+import type { TimelineEntry } from '../../../types/report'
 
 interface Props {
   events: TimelineEntry[]

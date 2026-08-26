@@ -1,5 +1,5 @@
 import { IconArrowLeft, IconClock, IconFile, IconLoading } from '../../components/ui/Icons'
-import { useSessionStore } from '../../stores/session'
+import { useSessionStore } from '../stores/session'
 import ReportRenderer from '../../components/report/ReportRenderer'
 import { Text } from '../../components/atelier/Typography'
 import Button from '../../components/atelier/Button'

@@ -1,8 +1,8 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { Text, Title } from '../components/atelier/Typography'
-import ReportRenderer from '../components/report/ReportRenderer'
+import { Text, Title } from '../../components/atelier/Typography'
+import ReportRenderer from '../../components/report/ReportRenderer'
 import { useSessionStore } from '../stores/session'
-import type { ReportBlock } from '../types/report'
+import type { ReportBlock } from '../../types/report'
 
 function isReportBlock(value: unknown): value is ReportBlock {
   return (

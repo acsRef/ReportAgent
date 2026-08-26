@@ -2,21 +2,21 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { Text } from '../components/atelier/Typography'
-import Button from '../components/atelier/Button'
-import Modal from '../components/atelier/Modal'
-import TextField from '../components/atelier/TextField'
-import TextArea from '../components/atelier/TextArea'
-import { useToast } from '../components/atelier/useToast'
+import { Text } from '../../components/atelier/Typography'
+import Button from '../../components/atelier/Button'
+import Modal from '../../components/atelier/Modal'
+import TextField from '../../components/atelier/TextField'
+import TextArea from '../../components/atelier/TextArea'
+import { useToast } from '../../components/atelier/useToast'
 import { useSessionStore } from '../stores/session'
-import { exportReportHTML } from '../utils/export'
+import { exportReportHTML } from '../../utils/export'
 import AgentTimeline from '../components/chat/AgentTimeline'
 import {
   IconReport, IconTemplate, IconReload, IconSave, IconDownload, IconPlus,
-} from '../components/ui/Icons'
-import ChatView from './views/ChatView'
-import RunningView from './views/RunningView'
-import ReportView from './views/ReportView'
+} from '../../components/ui/Icons'
+import ChatView from '../views/ChatView'
+import RunningView from '../views/RunningView'
+import ReportView from '../views/ReportView'
 
 export default function ChatPage() {
   const toast = useToast()

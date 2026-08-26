@@ -6,9 +6,9 @@ import WorkbenchPage from './pages/WorkbenchPage'
 import TemplateLibraryPage from './pages/TemplateLibraryPage'
 import SecureReportPage from './pages/SecureReportPage'
 // Legacy pages kept available during Phase 8 cleanup; new routes shadow them.
-import ChatPage from './pages/ChatPage'
-import TemplateCenter from './pages/TemplateCenter'
-import HistoryPage from './pages/HistoryPage'
+import ChatPage from './legacy/pages/ChatPage'
+import TemplateCenter from './legacy/pages/TemplateCenter'
+import HistoryPage from './legacy/pages/HistoryPage'
 import ObservabilityPage from './pages/ObservabilityPage'
 
 export default function App() {

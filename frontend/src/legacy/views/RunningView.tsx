@@ -1,5 +1,5 @@
 import { IconLoading, IconCheckCircle, IconMinusCircle } from '../../components/ui/Icons'
-import { useSessionStore } from '../../stores/session'
+import { useSessionStore } from '../stores/session'
 import { Text } from '../../components/atelier/Typography'
 import Spinner from '../../components/atelier/Spinner'
 

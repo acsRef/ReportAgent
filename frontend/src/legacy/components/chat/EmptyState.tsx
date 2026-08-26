@@ -3,9 +3,9 @@ import {
   IconRise,
   IconTeam,
   IconCart,
-} from '../ui/Icons'
-import { Text, Title } from '../atelier/Typography'
-import Card from '../atelier/Card'
+} from '../../../components/ui/Icons'
+import { Text, Title } from '../../../components/atelier/Typography'
+import Card from '../../../components/atelier/Card'
 
 const EXAMPLES = [
   { icon: <IconFund style={{ width: 24, height: 24, color: 'var(--teal-deep)' }} />, label: '区域销售分析', query: '2024年各区域的销售总额' },

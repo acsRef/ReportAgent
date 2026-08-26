@@ -10,11 +10,11 @@ import type {
   ReportTemplate,
   TemplateParams,
   TimelineEntry,
-} from '../types/report'
-import { isChatCard } from '../types/report'
+} from '../../types/report'
+import { isChatCard } from '../../types/report'
 import { chatStream, parseReportData, parseTraceData } from '../api/chat'
-import { fetchSessions as fetchSessionsAPI, fetchConversations as fetchConversationsAPI } from '../api/api'
-import { adaptReport } from '../adapter/reportAdapter'
+import { fetchSessions as fetchSessionsAPI, fetchConversations as fetchConversationsAPI } from '../../api/api'
+import { adaptReport } from '../../adapter/reportAdapter'
 
 const SESSION_KEY = 'ragent_session_id'
 const SESSION_TS_KEY = 'ragent_session_ts'

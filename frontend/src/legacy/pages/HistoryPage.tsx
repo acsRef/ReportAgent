@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
-import { IconChevronRight, IconClock, IconFile, IconHistory, IconMessage } from '../components/ui/Icons'
+import { IconChevronRight, IconClock, IconFile, IconHistory, IconMessage } from '../../components/ui/Icons'
 import { useNavigate } from 'react-router-dom'
 import { useSessionStore } from '../stores/session'
-import Empty from '../components/atelier/Empty'
-import Tag from '../components/atelier/Tag'
-import { Text, Title } from '../components/atelier/Typography'
-import '../styles/observability.css'
+import Empty from '../../components/atelier/Empty'
+import Tag from '../../components/atelier/Tag'
+import { Text, Title } from '../../components/atelier/Typography'
+import '../../styles/observability.css'
 
 type Tone = 'green' | 'red' | 'amber' | 'default'
 

@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { IconCheckCircle } from '../ui/Icons'
-import { Text } from '../atelier/Typography'
+import { IconCheckCircle } from '../../../components/ui/Icons'
+import { Text } from '../../../components/atelier/Typography'
 import { useSessionStore } from '../../stores/session'
-import type { ChatCard, ChatCardType, ConfirmCard, IntentCard, IntentOption, OptionsGroup, PreviewCard } from '../../types/report'
+import type { ChatCard, ChatCardType, ConfirmCard, IntentCard, IntentOption, OptionsGroup, PreviewCard } from '../../../types/report'
 
 interface Props {
   type: ChatCardType
