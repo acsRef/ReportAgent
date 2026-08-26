@@ -182,7 +182,11 @@ class TestSearchFaqDispatcher:
         raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
         parsed = json.loads(raw)
         assert "error" in parsed
-        assert "MCP_MCP_UNAVAILABLE" in parsed["error"]
+        # code.value 已是 "MCP_UNAVAILABLE"；f-string 不应再加 "MCP_" 前缀
+        assert "MCP_UNAVAILABLE:" in parsed["error"], (
+            f"错误码前缀去重失败（避免 MCP_MCP_UNAVAILABLE）: {parsed!r}"
+        )
+        assert "MCP_MCP_" not in parsed["error"]
 
     def test_invalid_response_returns_error_json_without_fallback(self, monkeypatch):
         """MCP INVALID_RESPONSE → 显式 error，不 fallback（即使 fallback 放行）。"""
@@ -195,7 +199,8 @@ class TestSearchFaqDispatcher:
         raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
         parsed = json.loads(raw)
         assert "error" in parsed
-        assert "MCP_MCP_INVALID_RESPONSE" in parsed["error"]
+        assert "MCP_INVALID_RESPONSE:" in parsed["error"]
+        assert "MCP_MCP_" not in parsed["error"]
 
     def test_catch_tightens_to_mcp_boundary_error_only(self, monkeypatch):
         """收紧：只 catch MCPBoundaryError；其它 Exception 向上抛（fail loud）。"""

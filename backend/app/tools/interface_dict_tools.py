@@ -202,7 +202,7 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
                 exc.detail, exc.code.value,
             )
             return json.dumps(
-                {"error": f"MCP_{exc.code.value}: {exc.detail}"},
+                {"error": f"{exc.code.value}: {exc.detail}"},
                 ensure_ascii=False,
             )
         # UNAVAILABLE + flag 未锁 → HTTP fallback

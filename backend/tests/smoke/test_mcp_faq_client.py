@@ -119,7 +119,7 @@ def test_mcp_unavailable_flag_locked_returns_error_json(monkeypatch):
     raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
     parsed = json.loads(raw)
     assert "error" in parsed
-    assert "MCP_MCP_UNAVAILABLE" in parsed["error"]
+    assert "MCP_UNAVAILABLE" in parsed["error"]
 
 
 # --- P2 shim 契约（替代旧 bridge 契约测试）---

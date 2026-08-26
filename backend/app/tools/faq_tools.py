@@ -109,10 +109,10 @@ def search_faq(query: str, top_k: int = 3) -> str:
 
     P2：MCP-first + catch 收紧（Q6 决议）。
       - MCP 成功 → 走 MCP 路径
-      - MCP_INVALID_RESPONSE → 返回 {"error": "MCP_MCP_INVALID_RESPONSE: ..."}
+      - MCP_INVALID_RESPONSE → 返回 {"error": "MCP_INVALID_RESPONSE: ..."}
         （不 fallback；决策 4：协议错重试同结果，flag 状态无关）
       - MCP_UNAVAILABLE + flag 未锁 → 降级本地 seed（既有契约）
-      - MCP_UNAVAILABLE + flag 锁定 → 返回 {"error": "MCP_MCP_UNAVAILABLE: ..."}
+      - MCP_UNAVAILABLE + flag 锁定 → 返回 {"error": "MCP_UNAVAILABLE: ..."}
       - 其它 Exception（非 MCPBoundaryError，如 parse bug）→ 向上抛，让上游记录 + 降级
     """
     try:
@@ -125,7 +125,7 @@ def search_faq(query: str, top_k: int = 3) -> str:
                 exc.detail,
             )
             return json.dumps(
-                {"error": f"MCP_{exc.code.value}: {exc.detail}"},
+                {"error": f"{exc.code.value}: {exc.detail}"},
                 ensure_ascii=False,
             )
         # UNAVAILABLE：flag-gated fallback
@@ -135,7 +135,7 @@ def search_faq(query: str, top_k: int = 3) -> str:
                 exc.detail,
             )
             return json.dumps(
-                {"error": f"MCP_{exc.code.value}: {exc.detail}"},
+                {"error": f"{exc.code.value}: {exc.detail}"},
                 ensure_ascii=False,
             )
         logger.warning(

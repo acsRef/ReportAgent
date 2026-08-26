@@ -307,7 +307,7 @@ class TestSearchInterfaceDictDispatcher:
 
         out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
         assert "error" in out
-        assert "MCP_MCP_UNAVAILABLE" in out["error"], (
+        assert "MCP_UNAVAILABLE" in out["error"], (
             f"flag 锁定时应把 MCP code 写进既有 error 形状: {out!r}"
         )
 
@@ -330,7 +330,7 @@ class TestSearchInterfaceDictDispatcher:
 
         out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
         assert "error" in out
-        assert "MCP_MCP_INVALID_RESPONSE" in out["error"]
+        assert "MCP_INVALID_RESPONSE" in out["error"]
         assert not http_called, "INVALID_RESPONSE 不应触发 HTTP fallback"
 
     def test_mcp_empty_matches_returns_empty_with_note(self, monkeypatch):
