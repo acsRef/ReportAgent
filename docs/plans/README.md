@@ -25,7 +25,8 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
-| [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件。**下一 Phase: P2 RAG/MCP Boundary** |
+| [2026-08-26-p2-rag-mcp-boundary.md](2026-08-26-p2-rag-mcp-boundary.md) | P2 实施：RAG/MCP 边界——泛化 stdio MCP client（吸收 mcp_faq_client 模式）+ schema/字典/FAQ 三通道正路切 MCP、HTTP 直连降级 flag 管控 fallback + 五分类失败语义（禁静默空数组）+ 四类测试钉子（import/allowlist/schema/failure）+ 第六份架构文档 mcp-contract.md；PHASE2_MCP_ONLY flag，fallback 删除留 Phase 5 | 回链 [refactor-master-freeze](2026-08-25-refactor-master-freeze.md) §二/§八/§十八 P2；**plan 已写待用户审，未开工** |
+| [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
 ## 已完成
 
