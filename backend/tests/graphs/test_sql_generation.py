@@ -2,6 +2,10 @@
 
 Tests the `extract_sql` / `strip_think` helpers and the `_generate_sql`
 node's handling of think-block variants (closed, unclosed, absent).
+
+P2 Task 2：search_faq 走 registry。早期 _generate_sql 测试没 mock search_faq，
+旧实现 AttributeError 兜底快；新实现真起 ragent-py 子进程（15s 超时）→ 必须
+mock 默认 stub，per-test override 用 monkeypatch.setitem。
 """
 from __future__ import annotations
 
@@ -11,8 +15,23 @@ import pytest
 
 pytestmark = pytest.mark.graphs
 
+from app.tools.registry import registry
+from app.tools import register_all_tools
 from app.utils.text import extract_sql, strip_think
 from app.models.contracts import ColumnSchema, SchemaContext, TableSchema
+
+
+@pytest.fixture(autouse=True)
+def _mock_search_faq_by_default(monkeypatch):
+    """默认 stub search_faq 返空（_generate_sql 内 faq_rows=[] 分支）。
+
+    单独 mock FAQ 行为的测试用 monkeypatch.setitem override。
+    """
+    register_all_tools()  # 确保 search_faq 已注册（idempotent）
+    monkeypatch.setitem(
+        registry._instances, "search_faq",
+        SimpleNamespace(invoke=lambda payload: '{"matches": []}'),
+    )
 
 
 # ── strip_think ─────────────────────────────────────────────────────────
