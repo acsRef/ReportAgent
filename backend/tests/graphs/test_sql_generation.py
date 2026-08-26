@@ -2,6 +2,10 @@
 
 Tests the `extract_sql` / `strip_think` helpers and the `_generate_sql`
 node's handling of think-block variants (closed, unclosed, absent).
+
+P2 Task 2：search_faq 走 registry。早期 _generate_sql 测试没 mock search_faq，
+旧实现 AttributeError 兜底快；新实现真起 ragent-py 子进程（15s 超时）→ 必须
+mock 默认 stub，per-test override 用 monkeypatch.setitem。
 """
 from __future__ import annotations
 
@@ -11,8 +15,23 @@ import pytest
 
 pytestmark = pytest.mark.graphs
 
+from app.tools.registry import registry
+from app.tools import register_all_tools
 from app.utils.text import extract_sql, strip_think
 from app.models.contracts import ColumnSchema, SchemaContext, TableSchema
+
+
+@pytest.fixture(autouse=True)
+def _mock_search_faq_by_default(monkeypatch):
+    """默认 stub search_faq 返空（_generate_sql 内 faq_rows=[] 分支）。
+
+    单独 mock FAQ 行为的测试用 monkeypatch.setitem override。
+    """
+    register_all_tools()  # 确保 search_faq 已注册（idempotent）
+    monkeypatch.setitem(
+        registry._instances, "search_faq",
+        SimpleNamespace(invoke=lambda payload: '{"matches": []}'),
+    )
 
 
 # ── strip_think ─────────────────────────────────────────────────────────
@@ -240,21 +259,37 @@ def test_generate_sql_prompt_contains_join_rules(monkeypatch) -> None:
 
 
 def test_generate_sql_prompt_injects_faq(monkeypatch) -> None:
-    """Schema RAG：命中 FAQ 时把示例 SQL + 业务口径注入 prompt，并带「仅作参考」防御。"""
+    """Schema RAG：命中 FAQ 时把示例 SQL + 业务口径注入 prompt，并带「仅作参考」防御。
+
+    P2 Task 2：graph 改走 registry——monkeypatch 目标从 sql_graph.search_faq
+    （模块级 import）迁移到 registry._instances["search_faq"]（统一注入点）。
+    """
     from app.agent.sql_graph import _generate_sql
+    from app.tools import register_all_tools
+    from app.tools.registry import registry
     import json as _json
+
+    register_all_tools()  # 确保 search_faq 已注册（idempotent）
     captured = _capture_prompt(monkeypatch)
 
     def _faq_tool(payload):
+        # P2 review 修订：Tool Contract {question, text, score}——MCP 路径与本地
+        # fallback 路径暴露同一 schema（plan 决策 1）；text 由 _format_faq_text 序列化
+        # （sql+note+tables）。下游消费者（sql_graph）只读 text。
         return _json.dumps({"matches": [{
             "question": "区域退货率",
-            "sql": "SELECT rc.region_name, ROUND(SUM(rt.return_amount)/NULLIF(SUM(f.total_amount),0)*100,2) AS 退货率 FROM fact_returns rt JOIN fact_sales f ON rt.sale_id=f.sale_id JOIN dim_region rc ON f.region_id=rc.region_id GROUP BY rc.region_name",
-            "note": "退货率 = 退货金额/销售额，经 sale_id 关联",
-            "tables": ["fact_returns", "fact_sales"],
+            "text": (
+                "示例 SQL：\n"
+                "SELECT rc.region_name, ROUND(SUM(rt.return_amount)/NULLIF(SUM(f.total_amount),0)*100,2) AS 退货率 "
+                "FROM fact_returns rt JOIN fact_sales f ON rt.sale_id=f.sale_id "
+                "JOIN dim_region rc ON f.region_id=rc.region_id GROUP BY rc.region_name\n\n"
+                "涉及表：fact_returns, fact_sales\n\n"
+                "要点：退货率 = 退货金额/销售额，经 sale_id 关联"
+            ),
             "score": 6.0,
         }]}, ensure_ascii=False)
 
-    monkeypatch.setattr("app.agent.sql_graph.search_faq", SimpleNamespace(invoke=_faq_tool))
+    monkeypatch.setitem(registry._instances, "search_faq", SimpleNamespace(invoke=_faq_tool))
     state = {
         **_minimal_state(),
         "user_query": "各区域退货率排名",
@@ -271,10 +306,14 @@ def test_generate_sql_prompt_injects_faq(monkeypatch) -> None:
 def test_generate_sql_no_faq_when_no_match(monkeypatch) -> None:
     """Schema RAG：无命中时 prompt 不含 FAQ 块，主流程正常。"""
     from app.agent.sql_graph import _generate_sql
+    from app.tools import register_all_tools
+    from app.tools.registry import registry
     import json as _json
+
+    register_all_tools()
     captured = _capture_prompt(monkeypatch)
-    monkeypatch.setattr(
-        "app.agent.sql_graph.search_faq",
+    monkeypatch.setitem(
+        registry._instances, "search_faq",
         SimpleNamespace(invoke=lambda payload: _json.dumps({"matches": []}, ensure_ascii=False)),
     )
     state = {
@@ -291,12 +330,16 @@ def test_generate_sql_no_faq_when_no_match(monkeypatch) -> None:
 def test_generate_sql_faq_error_degrades(monkeypatch) -> None:
     """Schema RAG：search_faq 抛错时降级为无 FAQ，不影响 SQL 生成。"""
     from app.agent.sql_graph import _generate_sql
+    from app.tools import register_all_tools
+    from app.tools.registry import registry
+
+    register_all_tools()
     captured = _capture_prompt(monkeypatch)
 
     def _boom(payload):
         raise RuntimeError("faq unavailable")
 
-    monkeypatch.setattr("app.agent.sql_graph.search_faq", SimpleNamespace(invoke=_boom))
+    monkeypatch.setitem(registry._instances, "search_faq", SimpleNamespace(invoke=_boom))
     state = {
         **_minimal_state(),
         "user_query": "各区域销售额排名",

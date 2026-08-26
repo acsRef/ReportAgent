@@ -488,6 +488,74 @@ def close_rag_mcp_client() -> None:
 # ── 协议层独立函数 ──
 
 
+def _validate_matches_contract(result: Any) -> list[dict]:
+    """校验 + normalize MCP result.matches（review 第 3 轮 P1 修订）。
+
+    行为：
+      - result 不是 dict → MCP_INVALID_RESPONSE
+      - result 缺 matches 字段 → MCP_INVALID_RESPONSE（协议错；review 第 3 轮修订）
+      - matches 不是 list → MCP_INVALID_RESPONSE
+      - 每个 item 必须含 text(str) + score(numeric)，否则 → MCP_INVALID_RESPONSE
+      - 每个 item 的内部字段（chunk_id / document_id / embedding / rerank_score /
+        kb_id）在 boundary strip，tool 层只见稳定契约（plan 决策 3）
+
+    Empty matches（[]）是合法 EMPTY_RESULT——通过校验返回 []，与 mcp_client
+    classifier 的 EMPTY_PREFIXES 一致。
+    """
+    if not isinstance(result, dict):
+        raise MCPBoundaryError(
+            MCPErrorCode.MCP_INVALID_RESPONSE,
+            f"result must be dict, got {type(result).__name__}",
+        )
+    if "matches" not in result:
+        # 缺 matches 字段：协议错（review 第 3 轮修订）。
+        # 区别于 EMPTY_RESULT（matches=[] 合法）；不允许把 schema drift
+        # （如 {"results": [...]} 或 {}）当成「合法检索只是没命中」。
+        raise MCPBoundaryError(
+            MCPErrorCode.MCP_INVALID_RESPONSE,
+            "missing required field 'matches'",
+        )
+    matches = result["matches"]
+    if not isinstance(matches, list):
+        raise MCPBoundaryError(
+            MCPErrorCode.MCP_INVALID_RESPONSE,
+            f"matches must be list, got {type(matches).__name__}",
+        )
+    normalized: list[dict] = []
+    for i, it in enumerate(matches):
+        if not isinstance(it, dict):
+            raise MCPBoundaryError(
+                MCPErrorCode.MCP_INVALID_RESPONSE,
+                f"matches[{i}] must be dict, got {type(it).__name__}",
+            )
+        text = it.get("text")
+        if not isinstance(text, str):
+            raise MCPBoundaryError(
+                MCPErrorCode.MCP_INVALID_RESPONSE,
+                f"matches[{i}].text missing or not str (got {type(text).__name__ if text is not None else 'None'})",
+            )
+        score = it.get("score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            raise MCPBoundaryError(
+                MCPErrorCode.MCP_INVALID_RESPONSE,
+                f"matches[{i}].score missing or not numeric (got {type(score).__name__ if score is not None else 'None'})",
+            )
+        normalized.append(_strip_internal_fields(it))
+    return normalized
+
+
+# ragent-py 内部字段（review 第 3 轮 P1 修订）：boundary 处 strip，tool 层不见。
+# 稳定契约（plan 决策 3）：items[] = {text, score, title?, section_path?}
+_INTERNAL_RESULT_FIELDS = frozenset({
+    "chunk_id", "document_id", "embedding", "rerank_score", "kb_id",
+})
+
+
+def _strip_internal_fields(item: dict) -> dict:
+    """去掉 ragent-py 内部字段；保留稳定契约字段（text/score/title/section_path）。"""
+    return {k: v for k, v in item.items() if k not in _INTERNAL_RESULT_FIELDS}
+
+
 def _extract_text(result: Any) -> str:
     """从 CallToolResult 提取纯 text payload。空内容/非 text → INVALID_RESPONSE。
 

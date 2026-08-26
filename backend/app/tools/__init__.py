@@ -95,7 +95,8 @@ def register_all_tools():
             description=(
                 "在 Schema FAQ 知识库中检索最常见分析问题的 SQL 模板与业务口径要点。"
                 "输入：query 中文自然语言（如 '区域退货率'、'毛利率'），top_k 返回条数（默认 3）。"
-                "输出：JSON，matches=[{question, sql, note, tables, score}]；无匹配时 matches=[]。"
+                "输出：JSON，matches=[{question, text, score}]——MCP 路径与本地 fallback "
+                "路径暴露同一 Tool Contract；无匹配时 matches=[]。"
                 "用于：写 SQL 前查「这类问题以前怎么算」——毛利率/退货率/出勤率/库存周转等业务口径和常见分组/排序模板。"
                 "不要用来找数据表——用 search_tables；不要用来查业务数据行——此工具只读 FAQ 知识库。"
             ),

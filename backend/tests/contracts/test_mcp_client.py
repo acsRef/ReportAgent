@@ -25,6 +25,7 @@ from app.tools.mcp_client import (
     _extract_text,
     _fallback_allowed,
     _resolve_phase2_flag,
+    _validate_matches_contract,
     close_rag_mcp_client,
     get_rag_mcp_client,
 )
@@ -871,3 +872,161 @@ class TestModuleBoundary:
             encoding="utf-8"
         )
         assert "from app.tools.mcp_client import" in src
+
+
+# ════════════════════════════════════════════════════════════════
+# _validate_matches_contract（review 第 2 轮 P1 修订）
+# ════════════════════════════════════════════════════════════════
+
+
+class TestValidateMatchesContract:
+    """_validate_matches_contract 业务契约校验（review 第 2 轮 P1 修订）。
+
+    plan 决策 3 稳定字段集：每个 item 必须含 text(str) + score(numeric)；
+    不符合 → MCP_INVALID_RESPONSE，让上层显式处理而不是静默空结果。
+    """
+
+    def test_valid_matches_returns_normalized_list(self):
+        result = {
+            "matches": [
+                {"text": "hello", "score": 0.9, "title": "t1", "chunk_id": "c1"},
+                {"text": "world", "score": 0.7},
+            ],
+        }
+        out = _validate_matches_contract(result)
+        # 内部字段（chunk_id）被 strip，tool 层只见稳定契约
+        assert out == [
+            {"text": "hello", "score": 0.9, "title": "t1"},
+            {"text": "world", "score": 0.7},
+        ]
+
+    def test_missing_matches_raises_invalid_response(self):
+        """matches 字段缺失 → MCP_INVALID_RESPONSE（review 第 3 轮修订）。
+
+        区别于 EMPTY_RESULT（matches=[] 合法）；不允许把 schema drift
+        （如 {} 或 {"results": [...]}）当成「合法检索只是没命中」。
+        """
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"degraded": False})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+        assert "matches" in ei.value.detail
+
+    def test_missing_matches_empty_dict_raises_invalid_response(self):
+        """空 dict {} → MCP_INVALID_RESPONSE（典型 schema drift 形态）。"""
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_empty_matches_returns_empty(self):
+        assert _validate_matches_contract({"matches": []}) == []
+
+    def test_matches_not_list_raises_invalid(self):
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": "not a list"})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_item_not_dict_raises_invalid(self):
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": ["string instead of dict"]})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_item_missing_text_raises_invalid(self):
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": [{"score": 0.9}]})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+        assert "text" in ei.value.detail
+
+    def test_item_text_not_str_raises_invalid(self):
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": [{"text": 123, "score": 0.9}]})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_item_text_none_raises_invalid(self):
+        """text=None 是常见 bug（HTTP 路径误把 None 当 text）。"""
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": [{"text": None, "score": 0.9}]})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_item_missing_score_raises_invalid(self):
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": [{"text": "hello"}]})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+        assert "score" in ei.value.detail
+
+    def test_item_score_not_numeric_raises_invalid(self):
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": [{"text": "hello", "score": "0.9"}]})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_item_score_bool_rejected(self):
+        """bool 是 int 子类，但语义不是 score——必须拒。"""
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": [{"text": "hello", "score": True}]})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_item_text_empty_string_allowed(self):
+        """text 可以是空字符串（与 HTTP fallback 兼容），只要是 str。"""
+        out = _validate_matches_contract({"matches": [{"text": "", "score": 0.5}]})
+        assert out == [{"text": "", "score": 0.5}]
+
+    def test_result_not_dict_raises_invalid(self):
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract("not a dict")  # type: ignore[arg-type]
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_stable_fields_preserved(self):
+        """稳定契约字段（text/score/title/section_path）保留。"""
+        result = {
+            "matches": [{
+                "text": "hello",
+                "score": 0.9,
+                "title": "t",
+                "section_path": "p",
+            }],
+        }
+        out = _validate_matches_contract(result)
+        assert out[0]["text"] == "hello"
+        assert out[0]["score"] == 0.9
+        assert out[0]["title"] == "t"
+        assert out[0]["section_path"] == "p"
+
+    def test_internal_fields_stripped(self):
+        """ragent-py 内部字段（chunk_id/document_id/embedding/rerank_score/kb_id）
+        在 boundary 处 strip——tool 层只见稳定契约（review 第 3 轮 P1 修订）。
+
+        这是 P2 边界职责的核心：ReportAgent 不应该知道 RAG 内部 response 形态。
+        """
+        result = {
+            "matches": [{
+                "text": "hello",
+                "score": 0.9,
+                "title": "t",
+                # 内部字段——必须 strip
+                "chunk_id": "c1",
+                "document_id": "d1",
+                "embedding": [0.1, 0.2, 0.3],
+                "rerank_score": 0.95,
+                "kb_id": "kb-1",
+            }],
+        }
+        out = _validate_matches_contract(result)
+        item = out[0]
+        # 内部字段不应出现
+        for internal_field in ("chunk_id", "document_id", "embedding",
+                               "rerank_score", "kb_id"):
+            assert internal_field not in item, (
+                f"{internal_field} 是 RAG 内部字段，不应透传到 tool 层"
+            )
+        # 稳定契约字段保留
+        assert item["text"] == "hello"
+        assert item["score"] == 0.9
+        assert item["title"] == "t"
+
+    def test_error_index_in_detail(self):
+        """第 N 个 item 失败 → detail 含索引（定位错误用）。"""
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"matches": [
+                {"text": "ok", "score": 0.5},
+                {"text": "bad"},  # 缺 score
+            ]})
+        assert "matches[1]" in ei.value.detail

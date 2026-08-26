@@ -98,11 +98,16 @@ async def _fetch_dict_context(query: str) -> tuple[bool, str]:
 
     dict_hit = 有字典命中（数据库表/字段/接口文档）→ 判定为数据库查询（REPORT），
     需求分析处理字段澄清。dict_context 供 parse 复用。
+
+    P2：改走 registry 通道（统一注册面），与 sql_graph 的 search_faq 同模式。
     """
     try:
-        from app.tools.interface_dict_tools import search_interface_dictionary
+        from app.tools.registry import registry
+        dict_tools = registry.get(["search_interface_dictionary"])
+        if not dict_tools:
+            return False, ""
         raw = await asyncio.to_thread(
-            search_interface_dictionary.invoke, {"query": query, "top_k": 5},
+            dict_tools[0].invoke, {"query": query, "top_k": 5},
         )
         parsed = json.loads(raw) if isinstance(raw, str) else raw
         matches = parsed.get("matches") or []
