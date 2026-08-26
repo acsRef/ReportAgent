@@ -1,8 +1,18 @@
 # P1 Architecture Freeze 实施 plan
 
-> 状态: 进行中
+> 状态: 已完成（2026-08-26）
 > 上游: [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md)（§二·二 目标目录 / §十七 Legacy Policy / §十八 P1 验收清单）
 > 前置: P0 Baseline Lock 已落地（434d4a5，16 pass / 0 fail / 4 skip）
+
+> **落地记录（2026-08-26）**：
+> - Task 0 `26d900c` — e2e 断言 locked→complete；离线 382 passed
+> - Task 1 `8cd81e5` — 后端归置 app/legacy/ + LEGACY BRIDGE BEGIN/END；382 passed 不回退
+> - Task 2 `fc04849` — 前端归置 src/legacy/（14 文件，含执行中发现的 components/chat 三件套）；build+lint+256 passed
+> - Task 3 `8c146e7` — 双侧 freeze 断言（后端 2 例 + 前端 3 例），双侧 red 验证通过；后端 384 passed / 前端 259 passed
+> - Task 4 `44fe071` — 五份架构契约文档（双段结构：契约正文 + 现状映射）
+> - Task 5 `88af63d` — CLAUDE.md 宪法版（宪法区零 provider 泄漏已验证）
+> - 执行偏差记录：①前端移动集合比 plan 多出 `components/chat/{AgentTimeline,ChatCards,EmptyState}`——按决策 1「看引用关系」核实仅被移动集合引用，属 plan 漏项而非扩权；②前端 freeze 测试对 App.tsx 设显式桥接豁免 + 快照测试钉住其 3 条 legacy 路由 import；③后端 AST 扫描补 UTF-8 BOM 容错（data_graph/report_graph/sdk/db 四文件带 BOM）。
+> - 挂起项：真实浏览器冒烟矩阵 + e2e 实跑（服务未启动），下次跑批窗口补做回填。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

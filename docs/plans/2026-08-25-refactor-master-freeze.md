@@ -380,7 +380,7 @@ P15  Docs / README / Demo           （README / AGENTS.md / Architecture docs �
 **逐 Phase 验收清单（吸收自 V2 完整版，Phase 门判定用）**：
 
 - **P0**：[ ] Golden Set ≥ 20 [ ] 所有 case 可重复运行 [ ] 每例有 expected behavior [ ] baseline 已记录 [ ] baseline 可导出
-- **P1**：[ ] Agent 职责明确 [ ] Workflow 职责明确 [ ] State 字段明确 [ ] 无新代码 import legacy [ ] 架构图完成 [ ] CLAUDE.md 宪法版落地
+- **P1**（实施 plan: p1-architecture-freeze，2026-08-26 落地）：[x] Agent 职责明确（agent-flow.md §五） [x] Workflow 职责明确（agent-flow.md §三） [x] State 字段明确（state-contract.md） [x] 无新代码 import legacy（test_legacy_import_freeze.py + legacyImportFreeze.test.ts 双侧钉死） [x] 架构图完成（五份文档内嵌 mermaid；P15 另出 7 张正式图） [x] CLAUDE.md 宪法版落地（88af63d）
 - **P2**：[ ] ReportAgent 不直接 import RAG [ ] 所有 Schema Retrieval 走 MCP [ ] MCP input/output schema 固定 [ ] timeout 可控 [ ] failure 可识别 [ ] integration tests 完成 [ ] fallback 最终关闭
 - **P3**：[ ] Agent 不自行拼完整 Context [ ] Context Runtime 唯一入口 [ ] Context 有优先级 [ ] context injection 可测试 [ ] 无 context duplication
 - **P4**：[ ] Conversation/Session/Long-term Memory 各自正常 [ ] Long-term 可读可写 [ ] Explicit preference 可写入可更新 [ ] 冲突处理（supersede）[ ] 普通对话不污染长期记忆 [ ] Memory injection 有测试
