@@ -173,9 +173,10 @@ def test_full_user_journey() -> None:
         print(f"  phase={snap['session']['phase']}, "
               f"report_versions={len(snap['session']['report_versions'])}")
         assert snap["current_requirement"] is not None
-        # After confirm, the latest draft is `locked`.
-        assert snap["current_requirement"]["status"] == "locked", (
-            f"expected latest draft to be locked after confirm, got "
+        # After confirm succeeds, the draft lock is released (b066e9c:
+        # release_lock flips locked -> complete, idempotent).
+        assert snap["current_requirement"]["status"] == "complete", (
+            f"expected latest draft to be complete after confirm, got "
             f"{snap['current_requirement']['status']}"
         )
         if not snap["session"]["report_versions"]:
