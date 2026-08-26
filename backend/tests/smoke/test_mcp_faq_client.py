@@ -106,12 +106,18 @@ def test_shim_get_mcp_faq_client_returns_rag_mcp_client():
 
 
 def test_shim_mcp_faq_client_error_aliases_to_mcp_boundary_error():
-    """MCPFaqClientError alias 必须是 MCPBoundaryError（Q6：不 alias 到 Exception）。"""
+    """MCPFaqClientError 是 MCPBoundaryError 子类，保留旧单参构造。"""
     from app.tools.mcp_errors import MCPBoundaryError, MCPErrorCode
 
-    assert MCPFaqClientError is MCPBoundaryError
-    # 旧代码 raise MCPFaqClientError("msg")
-    err = MCPFaqClientError(MCPErrorCode.MCP_UNAVAILABLE, "test detail")
+    assert issubclass(MCPFaqClientError, MCPBoundaryError)
+
+    # 旧方式：单参数 detail（默认 code = MCP_UNAVAILABLE）
+    err = MCPFaqClientError("MCP FAQ 检索失败")
     assert isinstance(err, MCPBoundaryError)
     assert err.code is MCPErrorCode.MCP_UNAVAILABLE
-    assert err.detail == "test detail"
+    assert err.detail == "MCP FAQ 检索失败"
+
+    # 新方式：显式 code
+    err2 = MCPFaqClientError("other detail", MCPErrorCode.MCP_TIMEOUT)
+    assert err2.code is MCPErrorCode.MCP_TIMEOUT
+    assert err2.detail == "other detail"

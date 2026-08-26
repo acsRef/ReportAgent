@@ -200,6 +200,197 @@ class TestDoCallTransportNormalization:
 
 
 # ════════════════════════════════════════════════════════════════
+# Async lifecycle cleanup（review 修订钉子）
+# ════════════════════════════════════════════════════════════════
+
+
+class _FakeAsyncCM:
+    """可记录 __aenter__/__aexit__ 调用的 async context manager。"""
+
+    def __init__(self, name: str = "cm") -> None:
+        self.name = name
+        self.aenter_count = 0
+        self.aexit_count = 0
+
+    async def __aenter__(self):
+        self.aenter_count += 1
+        return self
+
+    async def __aexit__(self, *args):
+        self.aexit_count += 1
+        return False
+
+
+def _run_coro_sync(coro):
+    """在测试线程内同步运行 coroutine 到完成。返回 (result_or_exc, captured_logs)。"""
+    new_loop = asyncio.new_event_loop()
+    try:
+        return new_loop.run_until_complete(coro)
+    finally:
+        new_loop.close()
+
+
+class TestResetAsync:
+    def test_awaits_session_then_read_cm_in_order(self):
+        """_reset_async 必须真正 await session 和 read_cm 的 __aexit__，且顺序：session → read_cm。"""
+        client = RagMCPClient(_MCPConfig())
+        session = _FakeAsyncCM("session")
+        read_cm = _FakeAsyncCM("read_cm")
+        client._session = session
+        client._read_cm = read_cm
+
+        # 直接 await _reset_async
+        asyncio.run(client._reset_async())
+
+        assert session.aexit_count == 1, "session.__aexit__ was not awaited"
+        assert read_cm.aexit_count == 1, "read_cm.__aexit__ was not awaited"
+        assert client._session is None
+        assert client._read_cm is None
+
+    def test_state_cleared_before_cleanup(self):
+        """状态先清（防重入），再 await cleanup；cleanup 失败不影响状态。"""
+        client = RagMCPClient(_MCPConfig())
+        session = _FakeAsyncCM("session")
+        client._session = session
+        client._read_cm = _FakeAsyncCM("read_cm")
+
+        # __aexit__ 抛异常 → 状态仍应被清
+        async def boom(*args):
+            raise RuntimeError("aexit boom")
+
+        session.__aexit__ = boom
+        asyncio.run(client._reset_async())
+
+        assert client._session is None  # 状态已清
+        assert client._read_cm is None  # 状态已清
+
+    def test_handles_none_session_and_read_cm(self):
+        """session / read_cm 为 None 时不抛。"""
+        client = RagMCPClient(_MCPConfig())
+        # 两者都 None
+        asyncio.run(client._reset_async())  # 不应抛
+
+
+def _patch_rcts_to_run_sync(monkeypatch, run_fn):
+    """patch asyncio.run_coroutine_threadsafe 让 coro 在新 loop 上同步跑完。"""
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_fn)
+
+
+class TestSyncReset:
+    def test_sync_reset_actually_runs_async_cleanup(self, monkeypatch):
+        """sync _reset() 必须把 cleanup 调度到 loop 上并 await；不能只清状态。"""
+        client = RagMCPClient(_MCPConfig())
+        client._loop = MagicMock()
+        session = _FakeAsyncCM("session")
+        read_cm = _FakeAsyncCM("read_cm")
+        client._session = session
+        client._read_cm = read_cm
+
+        def rcts(coro, loop):
+            new_loop = asyncio.new_event_loop()
+            try:
+                new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+            fut = MagicMock()
+            fut.result = lambda timeout=None: None
+            return fut
+
+        _patch_rcts_to_run_sync(monkeypatch, rcts)
+        client._reset()
+
+        # 关键断言：__aexit__ 被真正调用（不是只清状态指针）
+        assert session.aexit_count == 1, "session cleanup was not awaited"
+        assert read_cm.aexit_count == 1, "read_cm cleanup was not awaited"
+        assert client._session is None
+        assert client._read_cm is None
+
+    def test_sync_reset_without_loop_clears_state(self):
+        """loop 已无时 _reset 仍能清状态（早期失败 / close 后再 reset）。"""
+        client = RagMCPClient(_MCPConfig())
+        client._loop = None
+        client._session = _FakeAsyncCM()
+        client._read_cm = _FakeAsyncCM()
+        client._reset()
+        assert client._session is None
+        assert client._read_cm is None
+
+
+class TestDoCallTimeoutLifecycle:
+    def test_timeout_actually_closes_session_and_read_cm(self, monkeypatch):
+        """TIMEOUT 路径必须真正 cleanup 旧 session；不能只清状态字段。"""
+        client = RagMCPClient(_MCPConfig())
+        client._loop = MagicMock()
+        session = _FakeAsyncCM("session")
+        read_cm = _FakeAsyncCM("read_cm")
+        client._session = session
+        client._read_cm = read_cm
+
+        first_call = {"done": False}
+
+        def selective_rcts(coro, loop):
+            if not first_call["done"]:
+                # 第一次：模拟 MCP call 超时
+                first_call["done"] = True
+                coro.close()
+                return _FakeFuture(error=asyncio.TimeoutError())
+            # 后续（reset_async）：同步跑完
+            new_loop = asyncio.new_event_loop()
+            try:
+                new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+            fut = MagicMock()
+            fut.result = lambda timeout=None: None
+            return fut
+
+        _patch_rcts_to_run_sync(monkeypatch, selective_rcts)
+
+        with pytest.raises(MCPBoundaryError) as ei:
+            client._do_call("search_dictionary", {"query": "x"})
+        assert ei.value.code is MCPErrorCode.MCP_TIMEOUT
+
+        # 核心断言：旧 session / read_cm 的 __aexit__ 真正被 await
+        assert session.aexit_count == 1, (
+            f"TIMEOUT 后 session cleanup 被跳过（aexit_count={session.aexit_count}）"
+        )
+        assert read_cm.aexit_count == 1, (
+            f"TIMEOUT 后 read_cm cleanup 被跳过（aexit_count={read_cm.aexit_count}）"
+        )
+
+
+class TestCloseLifecycle:
+    def test_close_actually_awaits_session_and_read_cm(self, monkeypatch):
+        """close() 必须真正 await session + read_cm 的 __aexit__。"""
+        client = RagMCPClient(_MCPConfig())
+        client._loop = MagicMock()
+        session = _FakeAsyncCM("session")
+        read_cm = _FakeAsyncCM("read_cm")
+        client._session = session
+        client._read_cm = read_cm
+
+        def rcts(coro, loop):
+            new_loop = asyncio.new_event_loop()
+            try:
+                new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+            fut = MagicMock()
+            fut.result = lambda timeout=None: None
+            return fut
+
+        _patch_rcts_to_run_sync(monkeypatch, rcts)
+        client.close()
+
+        assert session.aexit_count == 1
+        assert read_cm.aexit_count == 1
+        assert client._session is None
+        assert client._read_cm is None
+        assert client._loop is None
+        assert client._thread is None
+
+
+# ════════════════════════════════════════════════════════════════
 # CallToolResult → raw_text 提取（Q8 Pin 2）
 # ════════════════════════════════════════════════════════════════
 

@@ -157,15 +157,52 @@ class RagMCPClient:
                 env[key] = val
         return env
 
-    def _reset(self) -> None:
-        """会话异常后清理，让下次调用能重建。"""
-        try:
-            if self._read_cm is not None:
-                self._read_cm.__aexit__(None, None, None)
-        except Exception:
-            pass
+    async def _reset_async(self) -> None:
+        """真正的 async cleanup：await session + read_cm 的 __aexit__。
+
+        必须在 event loop 内被 await。同步入口见 _reset()。
+
+        session 依赖 read/write streams；先关 session 再关 read_cm。
+        cleanup 失败不影响状态清空（重入安全：先清状态再 cleanup，下次调用
+        不会拿到坏 session）。
+        """
+        session = self._session
+        read_cm = self._read_cm
+        # 先清状态（防重入），再 cleanup
         self._session = None
         self._read_cm = None
+
+        if session is not None:
+            try:
+                await session.__aexit__(None, None, None)
+            except Exception as exc:
+                logger.warning("session __aexit__ failed during reset: %s", exc)
+        if read_cm is not None:
+            try:
+                await read_cm.__aexit__(None, None, None)
+            except Exception as exc:
+                logger.warning("read_cm __aexit__ failed during reset: %s", exc)
+
+    def _reset(self) -> None:
+        """同步入口：从主线程调用时把 async cleanup 调度到 event loop 上执行。
+
+        用于 transport 异常路径（_do_call 同步上下文），timeout = config.timeout
+        防止 cleanup 卡死时永久阻塞主线程。
+        """
+        loop = self._loop
+        if loop is None:
+            # 早期失败或 close 后再 reset：loop 已无，状态本应已清
+            self._session = None
+            self._read_cm = None
+            return
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self._reset_async(), loop)
+            fut.result(timeout=self._config.timeout)
+        except Exception as exc:
+            logger.warning("_reset async cleanup failed: %s", exc)
+            # 兜底：状态必须清，否则下次调用会拿到坏 session
+            self._session = None
+            self._read_cm = None
 
     # ── 公开 API ──
 
@@ -245,7 +282,12 @@ class RagMCPClient:
         return _extract_text(result)
 
     async def _call_async(self, name: str, args: dict) -> Any:
-        """后台循环内执行：建立/复用会话 + call_tool。"""
+        """后台循环内执行：建立/复用会话 + call_tool。
+
+        异常时调用 _reset_async 清理 session（review 修订：BaseException 收窄
+        为 Exception + asyncio.CancelledError，避免吞 KeyboardInterrupt /
+        SystemExit；取消仍清理以防 session 泄漏）。
+        """
         lock = self._call_lock
         if lock is None:
             lock = self._call_lock = asyncio.Lock()
@@ -253,8 +295,8 @@ class RagMCPClient:
             try:
                 session = await self._ensure_session()
                 return await session.call_tool(name, args)
-            except BaseException:
-                self._reset()
+            except (Exception, asyncio.CancelledError):
+                await self._reset_async()
                 raise
 
     # ── 响应分类器（Q2 决议）──
@@ -338,18 +380,8 @@ class RagMCPClient:
         self._thread = None
 
     async def _close_async(self) -> None:
-        try:
-            if self._session is not None:
-                await self._session.__aexit__(None, None, None)
-        except Exception:
-            pass
-        try:
-            if self._read_cm is not None:
-                await self._read_cm.__aexit__(None, None, None)
-        except Exception:
-            pass
-        self._session = None
-        self._read_cm = None
+        """close 时的 async cleanup。委托 _reset_async 复用 cleanup 路径。"""
+        await self._reset_async()
 
 
 # ── 模块级单例 ──
