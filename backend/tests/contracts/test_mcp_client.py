@@ -886,7 +886,7 @@ class TestValidateMatchesContract:
     不符合 → MCP_INVALID_RESPONSE，让上层显式处理而不是静默空结果。
     """
 
-    def test_valid_matches_returns_list(self):
+    def test_valid_matches_returns_normalized_list(self):
         result = {
             "matches": [
                 {"text": "hello", "score": 0.9, "title": "t1", "chunk_id": "c1"},
@@ -894,12 +894,28 @@ class TestValidateMatchesContract:
             ],
         }
         out = _validate_matches_contract(result)
-        assert out == result["matches"]
+        # 内部字段（chunk_id）被 strip，tool 层只见稳定契约
+        assert out == [
+            {"text": "hello", "score": 0.9, "title": "t1"},
+            {"text": "world", "score": 0.7},
+        ]
 
-    def test_missing_matches_treated_as_empty(self):
-        """matches 字段缺失 → 返回 []（合法 EMPTY_RESULT，与 classifier EMPTY_PREFIXES 一致）。"""
-        out = _validate_matches_contract({"degraded": False})
-        assert out == []
+    def test_missing_matches_raises_invalid_response(self):
+        """matches 字段缺失 → MCP_INVALID_RESPONSE（review 第 3 轮修订）。
+
+        区别于 EMPTY_RESULT（matches=[] 合法）；不允许把 schema drift
+        （如 {} 或 {"results": [...]}）当成「合法检索只是没命中」。
+        """
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({"degraded": False})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+        assert "matches" in ei.value.detail
+
+    def test_missing_matches_empty_dict_raises_invalid_response(self):
+        """空 dict {} → MCP_INVALID_RESPONSE（典型 schema drift 形态）。"""
+        with pytest.raises(MCPBoundaryError) as ei:
+            _validate_matches_contract({})
+        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
 
     def test_empty_matches_returns_empty(self):
         assert _validate_matches_contract({"matches": []}) == []
@@ -958,22 +974,53 @@ class TestValidateMatchesContract:
             _validate_matches_contract("not a dict")  # type: ignore[arg-type]
         assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
 
-    def test_extra_fields_passed_through(self):
-        """额外字段（chunk_id/document_id/section_path）透传，不影响校验。"""
+    def test_stable_fields_preserved(self):
+        """稳定契约字段（text/score/title/section_path）保留。"""
         result = {
             "matches": [{
                 "text": "hello",
                 "score": 0.9,
-                "chunk_id": "c1",
-                "document_id": "d1",
-                "section_path": "p",
                 "title": "t",
-                "_note": "internal annotation",
+                "section_path": "p",
             }],
         }
         out = _validate_matches_contract(result)
-        assert out[0]["chunk_id"] == "c1"
-        assert out[0]["_note"] == "internal annotation"
+        assert out[0]["text"] == "hello"
+        assert out[0]["score"] == 0.9
+        assert out[0]["title"] == "t"
+        assert out[0]["section_path"] == "p"
+
+    def test_internal_fields_stripped(self):
+        """ragent-py 内部字段（chunk_id/document_id/embedding/rerank_score/kb_id）
+        在 boundary 处 strip——tool 层只见稳定契约（review 第 3 轮 P1 修订）。
+
+        这是 P2 边界职责的核心：ReportAgent 不应该知道 RAG 内部 response 形态。
+        """
+        result = {
+            "matches": [{
+                "text": "hello",
+                "score": 0.9,
+                "title": "t",
+                # 内部字段——必须 strip
+                "chunk_id": "c1",
+                "document_id": "d1",
+                "embedding": [0.1, 0.2, 0.3],
+                "rerank_score": 0.95,
+                "kb_id": "kb-1",
+            }],
+        }
+        out = _validate_matches_contract(result)
+        item = out[0]
+        # 内部字段不应出现
+        for internal_field in ("chunk_id", "document_id", "embedding",
+                               "rerank_score", "kb_id"):
+            assert internal_field not in item, (
+                f"{internal_field} 是 RAG 内部字段，不应透传到 tool 层"
+            )
+        # 稳定契约字段保留
+        assert item["text"] == "hello"
+        assert item["score"] == 0.9
+        assert item["title"] == "t"
 
     def test_error_index_in_detail(self):
         """第 N 个 item 失败 → detail 含索引（定位错误用）。"""
