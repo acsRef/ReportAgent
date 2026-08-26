@@ -8,7 +8,9 @@ functions to raise if invoked, then drive the graph end-to-end.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -115,9 +117,29 @@ def test_dictionary_lookup_degrades_without_ragent(monkeypatch, sql_gate) -> Non
       - `_requirement_parse` 调一次字典检索（tool invoke）；
       - 失败降级为 None，不阻塞 parse_requirement；
       - 整图 SQL 门控依旧（tripwire 不触发）。
+
+    P2 Task 2 增量：MCP-first + flag-gated fallback——mock MCP 失败让 dispatcher
+    走 HTTP fallback；HTTP 路径因 RAGENT_URL 未配置返回「未配置」error，parse 仍 None。
     """
     # 1. RAGENT_URL 未配置 → 字典工具返回 error 字段、matches=空；解析逻辑必须不抛。
     monkeypatch.delenv("RAGENT_URL", raising=False)
+
+    # 1b. MCP-first 路径在测试环境强制失败（不起真子进程）。
+    from unittest.mock import MagicMock
+    from app.tools import register_all_tools
+    from app.tools.registry import registry
+    from app.tools.mcp_errors import MCPBoundaryError, MCPErrorCode
+
+    register_all_tools()
+    fake_mcp = MagicMock()
+    fake_mcp.call_tool.side_effect = MCPBoundaryError(
+        MCPErrorCode.MCP_UNAVAILABLE, "test-forces-fallback"
+    )
+    # 直接 patch registry 里的 instance，避免起 ragent-py subprocess
+    monkeypatch.setitem(registry._instances, "search_interface_dictionary",
+                        SimpleNamespace(invoke=lambda _payload: json.dumps(
+                            {"error": "字典服务未配置（RAGENT_URL 为空）"}, ensure_ascii=False,
+                        )))
 
     # 2. Stub data_agent 走 schema-only 假通路
     from app.agent import data_graph as data_graph_mod
@@ -219,6 +241,20 @@ def test_dictionary_lookup_passes_hits_to_parse_requirement(monkeypatch, sql_gat
     # 2. Stub httpx 返回登录 + kb list + 命中 items。复用 contracts 测试里
     #    的 _Resp 套路，避开 @tool 包装对函数 globals 的潜在影响。
     import app.tools.interface_dict_tools as dict_mod
+
+    # P2 Task 2：graph 改走 registry——确保 search_interface_dictionary 已注册；
+    # 并强制 MCP 失败让 dispatcher 走 HTTP fallback（既有 httpx stub 接管）。
+    from unittest.mock import MagicMock
+    from app.tools import register_all_tools
+    from app.tools.registry import registry
+    from app.tools.mcp_errors import MCPBoundaryError, MCPErrorCode
+
+    register_all_tools()
+    fake_mcp = MagicMock()
+    fake_mcp.call_tool.side_effect = MCPBoundaryError(
+        MCPErrorCode.MCP_UNAVAILABLE, "test-forces-fallback"
+    )
+    monkeypatch.setattr(dict_mod, "get_rag_mcp_client", lambda: fake_mcp)
 
     def make_resp(payload, status=200):
         return _StubResp(status, payload)

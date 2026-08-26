@@ -194,11 +194,11 @@ class MCPBoundaryError(RuntimeError):
 - Modify: `backend/app/tools/data_tools.py`（docstring「ragent-py 字典库不可达时返回空数组」措辞改为反映新失败语义）
 - Test: 更新 `backend/tests/smoke/test_rag_schema.py`、`backend/tests/contracts/test_interface_dict_tools.py`、`backend/tests/smoke/test_schema_faq.py`
 
-- [ ] **Step 1: 先改测试**——每个工具函数的测试加两组：mock MCP 成功路径（正路生效）+ mock MCP 失败 × flag 两态（fallback 生效/显式错误）。旧「不可达→空数组」断言改为「不可达+flag未锁→fallback 结果；不可达+flag锁定→JSON error 标记」。
-- [ ] **Step 2: 切实现**——三个文件的 `*_from_rag` / retrieve 调用改为：优先 `get_rag_mcp_client().call_tool("search_dictionary"/"search_faq", ...)`，捕获 `MCPBoundaryError` 且 `_fallback_allowed()` 时走原 httpx 直连函数（原地保留改名 `_retrieve_dict_http` 等），否则把 code/detail 写进工具既有错误形状。`_parse_table_doc` 保持单一副本（留在 rag_schema，mcp 通道返回同样 chunk 文本格式）。
-- [ ] **Step 3: data_tools docstring 措辞对齐**（search_tables/get_table_ddl/list_tables 的失败行）。
-- [ ] **Step 4: 全量回归 + 手工探活说明**——pytest 全量；真实链路验证挂起至跑批窗口（服务未启动）：起 MCP server + backend 后 `search_tables('退货')` 应命中 fact_returns。
-- [ ] **Step 5: Commit** — `refactor(mcp): schema/字典/FAQ 正路切 MCP client，HTTP 直连降级 fallback + plan: p2-rag-mcp-boundary`
+- [x] **Step 1: 先改测试**——每个工具函数的测试加两组：mock MCP 成功路径（正路生效）+ mock MCP 失败 × flag 两态（fallback 生效/显式错误）。旧「不可达→空数组」断言改为「不可达+flag未锁→fallback 结果；不可达+flag锁定→JSON error 标记」。
+- [x] **Step 2: 切实现**——三个文件的 `*_from_rag` / retrieve 调用改为：优先 `get_rag_mcp_client().call_tool("search_dictionary"/"search_faq", ...)`，捕获 `MCPBoundaryError` 且 `_fallback_allowed()` 时走原 httpx 直连函数（原地保留改名 `_retrieve_dict_http` 等），否则把 code/detail 写进工具既有错误形状。`_parse_table_doc` 保持单一副本（留在 rag_schema，mcp 通道返回同样 chunk 文本格式）。
+- [x] **Step 3: data_tools docstring 措辞对齐**（search_tables/get_table_ddl/list_tables 的失败行）。
+- [x] **Step 4: 全量回归 + 手工探活说明**——pytest 全量（445 passed，含新增 dispatcher 断言；P1 基线 384 不回退）；真实链路验证挂起至跑批窗口。
+- [x] **Step 5: Commit** — `refactor(mcp): schema/字典/FAQ 正路切 MCP client，HTTP 直连降级 fallback + plan: p2-rag-mcp-boundary`
 
 ### Task 3: 四类测试钉子
 

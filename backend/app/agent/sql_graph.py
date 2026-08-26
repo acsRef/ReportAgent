@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.context import format_context_block
 from app.llm import call_llm, _format_tools_for_prompt
-from app.tools.faq_tools import search_faq
+from app.tools.registry import registry
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
 from app.utils.text import extract_sql, safe_json_parse, strip_markdown_fence
 from app.infra.trace.sdk import traced_node
@@ -397,13 +397,18 @@ def _generate_sql(state: SQLAgentState) -> dict:
     today = date.today().isoformat()
 
     # Schema RAG Phase 1：把与当前问题最相关的历史案例（FAQ）注入 prompt，
-    # 给 LLM 提供业务口径与 SQL 模板参考。走「注册工具」通道（同 search_interface_dictionary
-    # 的字典检索先例）：调 search_faq 工具、解析 JSON、注入。任何失败降级为空块，不影响主流程。
+    # 给 LLM 提供业务口径与 SQL 模板参考。走 registry 通道（统一注册面）：
+    # 通过 registry.get(["search_faq"]) 取工具实例，解析 JSON，注入。
+    # 任何失败降级为空块，不影响主流程。
     faq_block = ""
     try:
-        raw = search_faq.invoke({"query": state.get("user_query", ""), "top_k": 3})
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        faq_rows = parsed.get("matches") or [] if isinstance(parsed, dict) else []
+        faq_tools = registry.get(["search_faq"])
+        if faq_tools:
+            raw = faq_tools[0].invoke({"query": state.get("user_query", ""), "top_k": 3})
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            faq_rows = parsed.get("matches") or [] if isinstance(parsed, dict) else []
+        else:
+            faq_rows = []
         if faq_rows:
             def _format_faq_row(r: dict) -> str:
                 parts = [f"问题：{r.get('question', '')}"]

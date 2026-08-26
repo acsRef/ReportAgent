@@ -9,8 +9,13 @@ chunk 文本格式实测：
     ...
 本模块把检索到的 chunk 解析回结构化 {table_name, description, columns}。
 
-复用 interface_dict_tools 的 httpx + token 缓存 + KB 按名解析模式（同包）。
-ragent-py 不可达/未配置 → 各 *_from_rag 返回空/None，不抛（SQL 生成降级不崩）。
+P2 RAG/MCP Boundary 改造（docs/plans/2026-08-26-p2-rag-mcp-boundary.md）：
+  - search_tables / get_table_ddl 正路走 MCP `search_dictionary`，HTTP 直连降级为
+    flag-gated fallback（PHASE2_MCP_ONLY 未锁 + UNAVAILABLE 时走 _retrieve_dict_http）；
+    MCP INVALID_RESPONSE 不走 fallback（重试同结果）。
+  - list_tables 无 MCP 等价工具，仍走 HTTP 直连（_list_dict_docs）。
+  - 失败路径把 MCPBoundaryError 的 code/detail 写进 log，工具契约对 Agent 保持不变
+    （search_tables 仍返回 []，get_table_ddl 仍返回 None）。
 """
 from __future__ import annotations
 
@@ -22,6 +27,8 @@ import re
 import httpx
 
 from app.tools.interface_dict_tools import _base, _dict_kb_id, _login_token
+from app.tools.mcp_client import _fallback_allowed, get_rag_mcp_client
+from app.tools.mcp_errors import MCPBoundaryError
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +82,28 @@ def _parse_table_doc(text: str) -> dict | None:
     }
 
 
-def _retrieve_dict(query: str, top_k: int) -> list[dict]:
-    """字典 KB 混合检索，返回 items 列表。失败抛错（调用方降级）。"""
+def _retrieve_dict_via_mcp(query: str, top_k: int) -> list[dict]:
+    """正路：经 MCP client 调 ragent-py `search_dictionary`，返回 items 列表。
+
+    Items 形态由 mcp_client.call_tool 返回的 dict.matches 决定，与 HTTP /retrieve
+    同 schema（chunk_id / document_id / text / title / section_path / score）。
+    mcp_client runtime annotation（_note / degraded）由本函数丢弃——只 items 透传。
+
+    Raises:
+        MCPBoundaryError: 失败时显式分类（MCP_TIMEOUT / MCP_UNAVAILABLE / MCP_INVALID_RESPONSE）
+    """
+    result = get_rag_mcp_client().call_tool(
+        "search_dictionary", {"query": query, "top_k": top_k}
+    )
+    items = result.get("matches") or []
+    return [it for it in items if isinstance(it, dict)]
+
+
+def _retrieve_dict_http(query: str, top_k: int) -> list[dict]:
+    """HTTP 直连 fallback（ragent-py /api/v1/retrieve）；PHASE2_MCP_ONLY 未锁时触发。
+
+    保留原 httpx + token 缓存 + KB 按名解析逻辑；失败抛错（调用方降级）。
+    """
     base = _base()
     if not base:
         raise RuntimeError("字典服务未配置（RAGENT_URL 为空）")
@@ -92,8 +119,41 @@ def _retrieve_dict(query: str, top_k: int) -> list[dict]:
     return resp.json().get("items", [])
 
 
+def _retrieve_dict(query: str, top_k: int) -> list[dict]:
+    """字典 KB 检索 dispatcher：MCP-first + flag-gated HTTP fallback。
+
+    行为：
+      - MCP 成功 → 返回 MCP items
+      - MCPBoundaryError(UNAVAILABLE) + _fallback_allowed() → HTTP fallback
+      - MCPBoundaryError(UNAVAILABLE) + flag 锁定 → 上抛（调用方按各自契约处理）
+      - MCPBoundaryError(INVALID_RESPONSE) → 上抛（不 retry 不 fallback）
+
+    Raises:
+        MCPBoundaryError: UNAVAILABLE flag-locked 或 INVALID_RESPONSE（调用方按工具
+            契约返回 [] 或 None；其它 Exception 走通用 except）。
+    """
+    try:
+        return _retrieve_dict_via_mcp(query, top_k)
+    except MCPBoundaryError as exc:
+        if exc.code.value == "MCP_INVALID_RESPONSE":
+            # 协议错：重试同结果，直接上抛
+            raise
+        if not _fallback_allowed():
+            # flag 锁定：不走 HTTP fallback
+            raise
+        logger.warning(
+            "MCP unavailable, falling back to HTTP: %s [%s]",
+            exc.detail, exc.code.value,
+        )
+        return _retrieve_dict_http(query, top_k)
+
+
 def _list_dict_docs() -> list[dict]:
-    """列出字典 KB 文档（含 filename）。失败抛错。"""
+    """列出字典 KB 文档（含 filename）。失败抛错。
+
+    无 MCP 等价工具；MCP-first 改造（P2）后此函数维持 HTTP 直连，
+    由 list_tables_from_rag 直接调用（不经 dispatcher）。
+    """
     base = _base()
     if not base:
         raise RuntimeError("字典服务未配置（RAGENT_URL 为空）")
@@ -110,9 +170,23 @@ def _list_dict_docs() -> list[dict]:
 
 
 def search_tables_from_rag(query: str, top_k: int = 3) -> list[dict]:
-    """检索字典 KB → 解析命中表文档 → 结构化 schema 列表。不可达/无命中 → []。"""
+    """检索字典 KB → 解析命中表文档 → 结构化 schema 列表。
+
+    失败处理（MCP-first）：
+      - MCP 成功 / HTTP fallback 成功 → 按 score 排序取 top_k
+      - MCPBoundaryError flag-locked 或 INVALID_RESPONSE → 返回 []（graceful 契约）
+      - 其它 Exception → 返回 []（兜底）
+
+    不抛错到上游——SQL 生成主流程不应因 schema 检索失败阻塞。
+    """
     try:
         items = _retrieve_dict(query, top_k * _MAX_RETRIEVE)
+    except MCPBoundaryError as exc:
+        logger.warning(
+            "schema search from rag failed (MCP): %s [%s]",
+            exc.detail, exc.code.value,
+        )
+        return []
     except Exception as exc:
         logger.warning("schema search from rag failed: %s", exc)
         return []
@@ -128,9 +202,18 @@ def search_tables_from_rag(query: str, top_k: int = 3) -> list[dict]:
 
 
 def get_table_ddl_from_rag(table_name: str) -> str | None:
-    """精确取单张表 DDL。检索表名命中 → 解析重建；找不到/不可达 → None。"""
+    """精确取单张表 DDL。检索表名命中 → 解析重建；找不到/不可达 → None。
+
+    失败处理同 search_tables_from_rag：MCP 失败 → 返回 None。
+    """
     try:
         items = _retrieve_dict(table_name, top_k=_MAX_RETRIEVE)
+    except MCPBoundaryError as exc:
+        logger.warning(
+            "get_table_ddl from rag failed (MCP): %s [%s]",
+            exc.detail, exc.code.value,
+        )
+        return None
     except Exception as exc:
         logger.warning("get_table_ddl from rag failed: %s", exc)
         return None
@@ -142,7 +225,10 @@ def get_table_ddl_from_rag(table_name: str) -> str | None:
 
 
 def list_tables_from_rag() -> list[dict]:
-    """列出字典 KB 里全部表文档。column_count 以文档 chunk 数近似（元数据无列数）。"""
+    """列出字典 KB 里全部表文档。column_count 以文档 chunk 数近似（元数据无列数）。
+
+    维持 HTTP 直连路径（MCP 无 list 工具）；失败返回 []。
+    """
     try:
         docs = _list_dict_docs()
     except Exception as exc:

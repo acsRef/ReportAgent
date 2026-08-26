@@ -1,24 +1,22 @@
 """Schema FAQ MCP client + faq_tools 主从切换测试（P2, smoke）。
 
-P2 架构变化后：
-  - mcp_faq_client 变为薄 shim，所有状态由 mcp_client 持有（Q6）
-  - 旧 MCPFaqClient._call 同步桥接契约已被 RagMCPClient.call_tool 替代
-  - 4 个旧 bridge 契约测试已删除（其覆盖范围迁移至 contracts/test_mcp_client.py）
-  - 当前 faq_tools 的 catch-all + local-seed fallback 行为属 Task 2 重写范围
-    （Q6 决议：仅 catch MCPBoundaryError + flag-gated）；本文件 3 个主从切换测试
-    在 Task 2 之前继续覆盖当前行为，Task 2 实施时同步更新。
+P2 Task 2 重写后：
+  - faq_tools.search_faq 走统一 mcp_client.call_tool("search_faq", ...)
+  - catch 收紧：仅 MCPBoundaryError → fallback/error；其它异常向上抛
+  - shim (mcp_faq_client) 仅保留兼容别名，行为由 mcp_client 决定
 
-离线——patch 掉 mcp_client / 后台协程，不打真实 ragent-py 子进程。
+本文件覆盖主从切换行为契约（Task 2 后的 dispatcher 行为）。
 """
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.tools import faq_tools
 from app.tools.mcp_client import get_rag_mcp_client
+from app.tools.mcp_errors import MCPBoundaryError, MCPErrorCode
 from app.tools.mcp_faq_client import (
     MCPFaqClient,
     MCPFaqClientError,
@@ -30,34 +28,47 @@ pytestmark = pytest.mark.smoke
 
 
 def _mcp_matches():
-    return [{"question": "区域退货率", "text": "# 退货率\n示例 SQL:\nSELECT ...\n要点: 退货率 = 退货金额/销售额",
-             "score": 0.8}]
+    return [
+        {
+            "chunk_id": "c1",
+            "document_id": "d1",
+            "title": "区域退货率",
+            "text": "# 退货率\n示例 SQL:\nSELECT ...\n要点: 退货率 = 退货金额/销售额",
+            "score": 0.8,
+        }
+    ]
 
 
 def _local_matches():
     return faq_tools._search_faq_rows("退货率", top_k=3)
 
 
-# --- faq_tools.search_faq 主从切换（当前 catch-all 行为；Task 2 重写）---
+# --- faq_tools.search_faq 主从切换（Task 2 后：统一 client.call_tool）---
 
 
 def test_mcp_primary_used_when_available(monkeypatch):
-    fake = type("Fake", (), {"search_faq": lambda self, q, top_k=3: json.dumps(
-        {"matches": _mcp_matches()}, ensure_ascii=False)})()
-    monkeypatch.setattr(faq_tools, "get_mcp_faq_client", lambda: fake)
+    """MCP 成功 → 走 MCP 路径，不落本地（本地命中以「各区域退货率」开头，MCP 是「区域退货率」）。"""
+    fake = MagicMock()
+    fake.call_tool.return_value = {"matches": _mcp_matches()}
+    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+
     raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
     parsed = json.loads(raw)
     assert parsed["matches"] and parsed["matches"][0]["question"] == "区域退货率"
-    # 走 MCP，不落本地（本地命中是「各区域退货率」开头，MCP 是「区域退货率」）
-    assert parsed["matches"][0]["question"].startswith("区域退货率")
+    fake.call_tool.assert_called_once_with(
+        "search_faq", {"query": "退货率", "top_k": 3}
+    )
 
 
 def test_mcp_error_falls_back_to_local(monkeypatch):
-    def _boom(query, top_k):
-        raise MCPFaqClientError("MCP FAQ 检索失败")
+    """MCP UNAVAILABLE + fallback allowed → 本地 seed 兜底。"""
+    fake = MagicMock()
+    fake.call_tool.side_effect = MCPBoundaryError(
+        MCPErrorCode.MCP_UNAVAILABLE, "MCP FAQ 检索失败"
+    )
+    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+    monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-    fake = type("Fake", (), {"search_faq": _boom})()
-    monkeypatch.setattr(faq_tools, "get_mcp_faq_client", lambda: fake)
     raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
     parsed = json.loads(raw)
     assert parsed["matches"], "MCP 失败应降级本地并返回主题内容"
@@ -66,24 +77,49 @@ def test_mcp_error_falls_back_to_local(monkeypatch):
 
 
 def test_mcp_not_configured_falls_back_to_local(monkeypatch):
-    def _unconfigured(query, top_k):
-        raise MCPFaqClientError("MCP FAQ 服务未配置")
+    """MCP UNAVAILABLE（未配置）+ fallback allowed → 本地 seed。"""
+    fake = MagicMock()
+    fake.call_tool.side_effect = MCPBoundaryError(
+        MCPErrorCode.MCP_UNAVAILABLE, "MCP FAQ 服务未配置"
+    )
+    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+    monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-    fake = type("Fake", (), {"search_faq": _unconfigured})()
-    monkeypatch.setattr(faq_tools, "get_mcp_faq_client", lambda: fake)
     raw = faq_tools.search_faq.invoke({"query": "毛利率", "top_k": 3})
     parsed = json.loads(raw)
     assert parsed["matches"]
     assert "毛利率" in parsed["matches"][0]["question"]
 
 
-def test_mcp_empty_with_local_available_no_crash(monkeypatch):
-    fake = type("Fake", (), {"search_faq": lambda self, q, top_k=3: '{"matches": []}'})()
-    monkeypatch.setattr(faq_tools, "get_mcp_faq_client", lambda: fake)
+def test_mcp_empty_returns_empty_legitimate_result(monkeypatch):
+    """MCP 合法空命中（matches=[]）→ search_faq 返回空 matches（不算错，决策 4）。
+
+    P2 契约变更：旧行为是「MCP 空 + fallback → 落本地 seed」；新行为是 EMPTY_RESULT
+    与 unavailable 严格区分（伞形 §八 + plan 决策 4）——空命中是合法返回，不触发 fallback。
+    """
+    fake = MagicMock()
+    fake.call_tool.return_value = {"matches": []}
+    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+    monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
+
     raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
     parsed = json.loads(raw)
-    # MCP 空 → 落到本地 seed（SQL 生成不崩）
-    assert parsed["matches"]
+    assert parsed["matches"] == [], "MCP 空命中是合法结果，不应触发本地 seed fallback"
+
+
+def test_mcp_unavailable_flag_locked_returns_error_json(monkeypatch):
+    """flag 锁定 → MCP UNAVAILABLE → JSON error，不落本地。"""
+    fake = MagicMock()
+    fake.call_tool.side_effect = MCPBoundaryError(
+        MCPErrorCode.MCP_UNAVAILABLE, "down"
+    )
+    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+    monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: False)
+
+    raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+    parsed = json.loads(raw)
+    assert "error" in parsed
+    assert "MCP_MCP_UNAVAILABLE" in parsed["error"]
 
 
 # --- P2 shim 契约（替代旧 bridge 契约测试）---

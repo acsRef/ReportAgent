@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 from langchain_core.tools import tool
 
-from app.tools.mcp_faq_client import get_mcp_faq_client
+from app.tools.mcp_client import _fallback_allowed, get_rag_mcp_client
+from app.tools.mcp_errors import MCPBoundaryError
 
 logger = logging.getLogger(__name__)
 
@@ -72,19 +72,20 @@ def _search_faq_rows(query: str, top_k: int = 3) -> list[dict]:
 
 
 def _mcp_search_faq(query: str, top_k: int) -> list[dict]:
-    """经 MCP client 调 ragent-py search_faq，返回规范化的 matches 列表。失败抛错。
+    """正路：经统一 MCP client 调 ragent-py `search_faq`，返回规范化 rows。
 
-    空命中/非 JSON 返回（如「FAQ 无匹配：…」纯文本）视为无命中（返回 []），
-    由调用方决定是否降级本地——不在此抛错。
+    P2：使用 get_rag_mcp_client().call_tool（统一单例，替代旧
+    mcp_faq_client.search_faq method 桥接）；mcp_client 已做响应分类与字段透传。
+
+    空命中（matches=[]）是合法返回，不抛错。
+    非 MCPBoundaryError 异常（如 parse bug）必须上抛——收紧 catch 在 search_faq 调用方。
     """
-    raw = get_mcp_faq_client().search_faq(query, top_k)
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except (ValueError, TypeError):
-        return []
-    items = parsed.get("matches") if isinstance(parsed, dict) else None
+    result = get_rag_mcp_client().call_tool(
+        "search_faq", {"query": query, "top_k": top_k}
+    )
+    items = result.get("matches") or []
     rows = []
-    for it in items or []:
+    for it in items:
         if not isinstance(it, dict):
             continue
         # ragent-py 检索返回 chunk 文本（含问题+SQL+要点），归一到 {text} 供注入
@@ -104,13 +105,42 @@ def search_faq(query: str, top_k: int = 3) -> str:
     输出：JSON，matches 为命中案例 [{question, sql, note, tables, score}]；无匹配时 matches=[]。
     用于：写 SQL 前查「这类问题以前怎么算」——业务口径（毛利率/退货率/出勤率/库存周转等）
     和常见分组/排序模板都在这里。
-    不要用来找数据表——用 search_tables；不要用来查业务数据行——此工具只读 FAQ 知识库。"""
-    # 优先走 MCP（ragent-py RAG）；不可用降级本地 seed，返回契约不变。
+    不要用来找数据表——用 search_tables；不要用来查业务数据行——此工具只读 FAQ 知识库。
+
+    P2：MCP-first + catch 收紧（Q6 决议）。
+      - MCP 成功 → 走 MCP 路径
+      - MCP_INVALID_RESPONSE → 返回 {"error": "MCP_MCP_INVALID_RESPONSE: ..."}
+        （不 fallback；决策 4：协议错重试同结果，flag 状态无关）
+      - MCP_UNAVAILABLE + flag 未锁 → 降级本地 seed（既有契约）
+      - MCP_UNAVAILABLE + flag 锁定 → 返回 {"error": "MCP_MCP_UNAVAILABLE: ..."}
+      - 其它 Exception（非 MCPBoundaryError，如 parse bug）→ 向上抛，让上游记录 + 降级
+    """
     try:
         rows = _mcp_search_faq(query, top_k)
-        if rows:
-            return json.dumps({"matches": rows}, ensure_ascii=False)
-    except Exception as exc:
-        logger.warning("MCP FAQ search unavailable, falling back to local seed: %s", exc)
-    rows = _search_faq_rows(query, top_k)
+    except MCPBoundaryError as exc:
+        # INVALID_RESPONSE：决策 4 明令「不 fallback（重试同结果）」
+        if exc.code.value == "MCP_INVALID_RESPONSE":
+            logger.warning(
+                "FAQ search failed (MCP_INVALID_RESPONSE, no fallback): %s",
+                exc.detail,
+            )
+            return json.dumps(
+                {"error": f"MCP_{exc.code.value}: {exc.detail}"},
+                ensure_ascii=False,
+            )
+        # UNAVAILABLE：flag-gated fallback
+        if not _fallback_allowed():
+            logger.warning(
+                "FAQ search failed (MCP_UNAVAILABLE, no fallback): %s",
+                exc.detail,
+            )
+            return json.dumps(
+                {"error": f"MCP_{exc.code.value}: {exc.detail}"},
+                ensure_ascii=False,
+            )
+        logger.warning(
+            "MCP FAQ unavailable, falling back to local seed: %s [%s]",
+            exc.detail, exc.code.value,
+        )
+        rows = _search_faq_rows(query, top_k)
     return json.dumps({"matches": rows}, ensure_ascii=False)

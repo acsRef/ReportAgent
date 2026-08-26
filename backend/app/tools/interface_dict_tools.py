@@ -1,8 +1,17 @@
-"""接口/表字段字典检索工具：httpx 直连 ragent-py 的 /retrieve。
+"""接口/表字段字典检索工具：MCP-first + flag-gated HTTP fallback。
 
 数据字典（表结构语义 + 接口字段字典）存放在 ragent-py 的专用知识库，
 灌入由 ragent-py/mcp_server 负责；本模块是 ReportAgent 侧的读取面。
-RAGENT_URL 未配置或字典库无匹配时静默降级——绝不阻塞 SQL 生成。
+
+P2 RAG/MCP Boundary 改造（docs/plans/2026-08-26-p2-rag-mcp-boundary.md）：
+  - 正路走 MCP client `search_dictionary`；失败时 flag-gated HTTP fallback
+    （PHASE2_MCP_ONLY 未锁 + UNAVAILABLE 时走原 httpx /retrieve 路径）。
+  - 失败语义五分类（mcp_errors.MCPErrorCode）：
+      - MCP_INVALID_RESPONSE → 显式 error JSON（不 retry 不 fallback）
+      - MCP_UNAVAILABLE flag-locked → 显式 error JSON 含 MCP code
+      - HTTP fallback 异常 → 既有错误形状（"字典服务不可达…"）
+  - 工具契约对 Agent 不变：成功 matches=[{text, source, section_path, score,
+    data_source_type}]，失败 {"error": ...}。
 """
 from __future__ import annotations
 
@@ -15,6 +24,8 @@ import httpx  # 关键：模块级 `httpx.post`/`httpx.request` 调用，单测�
 from langchain_core.tools import tool
 
 from app.tools import ragent_token_cache
+from app.tools.mcp_client import _fallback_allowed, get_rag_mcp_client
+from app.tools.mcp_errors import MCPBoundaryError
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +97,85 @@ def _dict_kb_id(base: str, token: str) -> str:
     raise LookupError(f"ragent-py 中不存在名为 {kb_name} 的知识库")
 
 
+def _items_to_matches(items: list[dict]) -> list[dict]:
+    """将 MCP/HTTP 检索的 items 列表规范化为工具层 matches。
+
+    字段裁剪（Q8 决策 3 稳定字段集）：
+      - text（截 400）、source（title 优先，回退 document_id）、section_path、
+        score、data_source_type（表名命中→table，流式关键字→stream）
+      - 内部字段（chunk_id / document_id / kb_id 等）不外露
+    """
+    matches = []
+    for it in items[:_MAX_MATCHES]:
+        if not isinstance(it, dict):
+            continue
+        matches.append({
+            "text": (it.get("text") or "")[:_MAX_MATCH_TEXT],
+            "source": it.get("title") or it.get("document_id", ""),
+            "section_path": it.get("section_path", ""),
+            "score": it.get("score", 0.0),
+            "data_source_type": _infer_data_source(
+                it.get("title", ""), it.get("text", "")
+            ),
+        })
+    return matches
+
+
+def _search_dict_via_mcp(query: str, top_k: int) -> list[dict]:
+    """正路：MCP `search_dictionary` → 规范化 items。
+
+    Raises:
+        MCPBoundaryError: 失败时显式分类。
+    """
+    result = get_rag_mcp_client().call_tool(
+        "search_dictionary", {"query": query, "top_k": top_k}
+    )
+    items = result.get("matches") or []
+    return [it for it in items if isinstance(it, dict)]
+
+
+def _search_dict_http(query: str, top_k: int) -> tuple[list[dict], bool]:
+    """HTTP fallback：原 httpx /api/v1/retrieve；返回 (items, has_degraded)。
+
+    失败抛错（httpx.HTTPError / LookupError / 401 重登一次后仍败 → 状态码翻译）。
+    """
+    base = _base()
+    if not base:
+        raise RuntimeError("字典服务未配置（RAGENT_URL 为空）")
+    token = _login_token(base)
+    kb_id = _dict_kb_id(base, token)
+
+    def _retrieve():
+        return httpx.request(
+            "POST", f"{base}/api/v1/retrieve",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"query": query, "kb_ids": [kb_id], "top_k": top_k},
+            timeout=30,
+        )
+
+    resp = _retrieve()
+    if resp.status_code == 401:  # token 过期 → 失效共享缓存 + 重登一次
+        original_detail = resp.text[:200]
+        with _TOKEN_LOCK:
+            _token_cache.pop(base, None)
+        ragent_token_cache.invalidate(base)
+        token = _login_token(base)
+        resp = _retrieve()
+        # 重登后仍失败（账号被锁、无权等）→ 按 status 翻译，别退回通用 HTTP 文案。
+        # 与 ragent-py 侧 6d31a80 的 original_detail 保留模式对齐。
+        if resp.status_code == 401:
+            raise RuntimeError(
+                f"登录失败：请检查 RAGENT_USER / RAGENT_PASSWORD；原始响应：{original_detail}"
+            )
+        if resp.status_code == 403:
+            raise RuntimeError(f"无权读取字典知识库：{resp.text[:200]}")
+        if resp.status_code != 200:
+            raise RuntimeError(f"字典检索失败：HTTP {resp.status_code} {resp.text[:200]}")
+    resp.raise_for_status()
+    body = resp.json()
+    return body.get("items") or [], bool(body.get("degraded"))
+
+
 @tool
 def search_interface_dictionary(query: str, top_k: int = 5) -> str:
     """在数据字典知识库中检索字段/接口/表的含义释义。
@@ -93,65 +183,52 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
     输出：JSON，matches 为命中片段 [{text, source, score}]；无匹配时 matches=[] 且 note 说明；
     字典服务未配置/不可达时返回 error 字段（调用方按无字典处理，不阻塞主流程）。
     用于：用户问题涉及接口字段或不明确字段含义时查释义；写 SQL 前确认业务口径。
-    不要用来找数据表——用 search_tables；不要用来执行查询——此工具只读字典文档。"""
-    base = _base()
-    if not base:
-        return json.dumps({"error": "字典服务未配置（RAGENT_URL 为空）"}, ensure_ascii=False)
+    不要用来找数据表——用 search_tables；不要用来执行查询——此工具只读字典文档。
+
+    P2：MCP-first。失败语义：
+      - MCP 成功 → 返回 MCP items 规范化结果
+      - MCPBoundaryError(UNAVAILABLE) + flag 未锁 → HTTP fallback（既有契约）
+      - MCPBoundaryError(UNAVAILABLE) + flag 锁定 → error JSON 含 MCP code
+      - MCPBoundaryError(INVALID_RESPONSE) → error JSON 含 MCP code（不 fallback）
+      - HTTP fallback 失败 → 既有错误形状（"字典服务不可达…"/"登录失败…"/"无权读取…"）
+    """
     try:
-        token = _login_token(base)
-        kb_id = _dict_kb_id(base, token)
-        resp = httpx.request(
-            "POST", f"{base}/api/v1/retrieve",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"query": query, "kb_ids": [kb_id], "top_k": top_k},
-            timeout=30,
-        )
-        if resp.status_code == 401:  # token 过期 → 失效共享缓存 + 重登一次
-            original_detail = resp.text[:200]
-            with _TOKEN_LOCK:
-                _token_cache.pop(base, None)
-            ragent_token_cache.invalidate(base)
-            token = _login_token(base)
-            resp = httpx.request(
-                "POST", f"{base}/api/v1/retrieve",
-                headers={"Authorization": f"Bearer {token}"},
-                json={"query": query, "kb_ids": [kb_id], "top_k": top_k},
-                timeout=30,
+        items = _search_dict_via_mcp(query, top_k)
+    except MCPBoundaryError as exc:
+        # MCP_INVALID_RESPONSE 不走 fallback（重试同结果）；UNAVAILABLE + flag 锁定不走 fallback
+        if exc.code.value == "MCP_INVALID_RESPONSE" or not _fallback_allowed():
+            logger.warning(
+                "dictionary lookup failed (MCP, no fallback): %s [%s]",
+                exc.detail, exc.code.value,
             )
-            # 重登后仍失败（账号被锁、无权等）→ 按 status 翻译，别退回通用 HTTP 文案。
-            # 与 ragent-py 侧 6d31a80 的 original_detail 保留模式对齐。
-            if resp.status_code == 401:
-                return json.dumps(
-                    {"error": f"登录失败：请检查 RAGENT_USER / RAGENT_PASSWORD；原始响应：{original_detail}"},
-                    ensure_ascii=False,
-                )
-            if resp.status_code == 403:
-                return json.dumps(
-                    {"error": f"无权读取字典知识库：{resp.text[:200]}"}, ensure_ascii=False,
-                )
-            if resp.status_code != 200:
-                return json.dumps(
-                    {"error": f"字典检索失败：HTTP {resp.status_code} {resp.text[:200]}"},
-                    ensure_ascii=False,
-                )
-        resp.raise_for_status()
-        items = resp.json().get("items", [])
-        if not items:
-            return json.dumps({"matches": [], "note": f"字典库无匹配：{query}"}, ensure_ascii=False)
-        matches = [
-            {"text": (it.get("text") or "")[:_MAX_MATCH_TEXT],
-             "source": it.get("title") or it.get("document_id", ""),
-             "section_path": it.get("section_path", ""),
-             "score": it.get("score", 0.0),
-             "data_source_type": _infer_data_source(it.get("title", ""), it.get("text", ""))}
-            for it in items[:_MAX_MATCHES]
-        ]
-        return json.dumps({"matches": matches}, ensure_ascii=False)
-    except LookupError as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
-    except httpx.HTTPError as exc:
-        logger.warning("dictionary lookup failed: %s", exc)
-        return json.dumps({"error": f"字典服务不可达：{exc}"}, ensure_ascii=False)
-    except Exception as exc:  # 最后防线：字典链路任何异常都不阻塞主流程
+            return json.dumps(
+                {"error": f"MCP_{exc.code.value}: {exc.detail}"},
+                ensure_ascii=False,
+            )
+        # UNAVAILABLE + flag 未锁 → HTTP fallback
+        logger.warning(
+            "MCP unavailable, falling back to HTTP: %s [%s]",
+            exc.detail, exc.code.value,
+        )
+        try:
+            items, _has_degraded = _search_dict_http(query, top_k)
+        except LookupError as exc_lookup:
+            return json.dumps({"error": str(exc_lookup)}, ensure_ascii=False)
+        except httpx.HTTPError as exc_http:
+            logger.warning("dictionary lookup failed: %s", exc_http)
+            return json.dumps({"error": f"字典服务不可达：{exc_http}"}, ensure_ascii=False)
+        except Exception as exc_other:
+            logger.warning("dictionary lookup HTTP fallback failed: %s", exc_other)
+            return json.dumps({"error": str(exc_other)}, ensure_ascii=False)
+    except Exception as exc:
+        # 其它 Exception（非 MCPBoundaryError）→ 走 HTTP fallback 兜底
         logger.warning("dictionary lookup unexpected error: %s", exc)
-        return json.dumps({"error": f"字典检索异常：{exc}"}, ensure_ascii=False)
+        try:
+            items, _has_degraded = _search_dict_http(query, top_k)
+        except Exception as exc_http:
+            return json.dumps({"error": f"字典检索异常：{exc_http}"}, ensure_ascii=False)
+
+    if not items:
+        return json.dumps({"matches": [], "note": f"字典库无匹配：{query}"}, ensure_ascii=False)
+    matches = _items_to_matches(items)
+    return json.dumps({"matches": matches}, ensure_ascii=False)

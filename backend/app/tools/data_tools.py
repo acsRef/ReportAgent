@@ -20,7 +20,8 @@ def search_tables(query: str, top_k: int = 3) -> str:
     输入：query（中文描述），top_k（返回条数，默认 3）
     输出：JSON 数组，每项 {table_name, columns[{name,type}], ddl, description, score}
     示例：search_tables('退货原因') → 优先返回 fact_returns（退货事实表）
-    失败：ragent-py 字典库不可达或无命中时返回空数组，不报错。"""
+    失败：MCP 不可达 + flag 锁定 / MCP 协议错 → 返回空数组（graceful 退化，SQL 生成不阻塞）；
+          其它失败路径（HTTP fallback 异常等）→ 同样返回空数组。"""
     return json.dumps(search_tables_from_rag(query, top_k), ensure_ascii=False)
 
 
@@ -32,7 +33,7 @@ def get_table_ddl(table_name: str) -> str:
     输入：table_name（英文下划线格式，如 'fact_sales'、'dim_product'）
     输出：CREATE TABLE 文本
     示例：get_table_ddl('dim_region') → 返回含 region_name、province、city 的建表语句
-    失败：表不存在或 ragent-py 字典库不可达时返回 'Table xxx not found'"""
+    失败：表不存在或 MCP 不可达 + flag 锁定 → 返回 'Table xxx not found'。"""
     ddl = get_table_ddl_from_rag(table_name)
     if ddl is None:
         return f"Table '{table_name}' not found"
@@ -46,5 +47,5 @@ def list_tables() -> str:
     输入：无参数。
     输出：JSON 数组，每项 {table_name, description, column_count}
     限制：不返回字段详情。需要字段结构用 get_table_ddl。需要语义搜索用 search_tables。
-    失败：ragent-py 字典库不可达时返回空数组，不报错。"""
+    失败：MCP / HTTP 字典库不可达时返回空数组（graceful 退化）。"""
     return json.dumps(list_tables_from_rag(), ensure_ascii=False)
