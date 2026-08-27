@@ -123,7 +123,14 @@ CREATE TABLE IF NOT EXISTS memory.semantic_entry (
     source VARCHAR(64),
     access_count INT DEFAULT 0,
     last_access_time TIMESTAMP DEFAULT NOW(),
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    -- P4b lifecycle (memory-architecture §六): scope/confidence/status/session_id/expires_at/updated_at
+    scope VARCHAR(16) DEFAULT 'user',
+    confidence VARCHAR(16) DEFAULT 'medium',
+    status VARCHAR(16) DEFAULT 'active',
+    session_id VARCHAR(64),
+    expires_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Soft-migrate semantic_entry.user_id from VARCHAR(128) to INT.
@@ -146,6 +153,34 @@ BEGIN
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_semantic_entry_user ON memory.semantic_entry (user_id);
+
+-- P4b soft-migrate: add lifecycle columns to existing semantic_entry (idempotent).
+-- Fresh installs already have them via CREATE TABLE above; this covers older DBs.
+-- Backfill: existing rows keep current recallable semantics → status='active',
+-- scope='user', confidence derived from importance (>=0.7 high else medium).
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='memory' AND table_name='semantic_entry' AND column_name='scope') THEN
+        ALTER TABLE memory.semantic_entry ADD COLUMN scope VARCHAR(16) DEFAULT 'user';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='memory' AND table_name='semantic_entry' AND column_name='confidence') THEN
+        ALTER TABLE memory.semantic_entry ADD COLUMN confidence VARCHAR(16) DEFAULT 'medium';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='memory' AND table_name='semantic_entry' AND column_name='status') THEN
+        ALTER TABLE memory.semantic_entry ADD COLUMN status VARCHAR(16) DEFAULT 'active';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='memory' AND table_name='semantic_entry' AND column_name='session_id') THEN
+        ALTER TABLE memory.semantic_entry ADD COLUMN session_id VARCHAR(64);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='memory' AND table_name='semantic_entry' AND column_name='expires_at') THEN
+        ALTER TABLE memory.semantic_entry ADD COLUMN expires_at TIMESTAMP;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='memory' AND table_name='semantic_entry' AND column_name='updated_at') THEN
+        ALTER TABLE memory.semantic_entry ADD COLUMN updated_at TIMESTAMP DEFAULT NOW();
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_semantic_entry_status_user ON memory.semantic_entry (user_id, status);
 
 -- ============================================================
 -- observability schema
