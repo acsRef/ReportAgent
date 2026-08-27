@@ -15,7 +15,10 @@ import json
 import pytest
 
 from app import context
-from app.context import _engine
+# P4a：Conversation Engine 实现迁入 app.memory.conversation；_engine 现为 re-export facade。
+# build_context 内对 compress_and_extract / call_llm 的调用解析到 memory.conversation globals，
+# 故 monkeypatch target 必须是 memory.conversation（沿用 _engine 局部别名减少改动面）。
+from app.memory import conversation as _engine
 
 pytestmark = pytest.mark.smoke
 

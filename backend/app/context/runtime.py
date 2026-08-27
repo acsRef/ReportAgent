@@ -9,13 +9,12 @@ P3 plan §2.2 + review v1 钉住：
 """
 from __future__ import annotations
 
-from app.context import _engine as _engine_module
-from app.context._engine import (
-    _prepare_conversation_context as _engine_prepare_conversation_context,
-)
 from app.context.assembler import ContextAssembler, ContextBundle, RecallItem
 from app.context.decision import ContextDecisionPolicy, LegacyFallbackPolicy
 from app.context.policy import AgentContextPolicy, ContextPolicyResolver
+# P4a：conversation 引擎迁入 app.memory（domain 层）；context 经 memory 域调用
+from app.memory.conversation import prepare_conversation_context
+# MemoryManager 是宪法 §6  sanctioned 读写网关（非 raw 原语），context 依赖合法
 from app.infra.memory.memory_manager import MemoryManager
 
 
@@ -49,9 +48,9 @@ class ContextRuntime:
             agent_policy=agent_policy,
             session_state=state_dict or {},
         )
-        # Step 3：conversation context（_engine 私有 async helper；**不**通过 facade
+        # Step 3：conversation context（app.memory 域 async helper；**不**通过 facade
         # 避免循环；与现 build_session_context 实质等价）
-        conversation_context = await _engine_prepare_conversation_context(
+        conversation_context = await prepare_conversation_context(
             session_id, user_id,
         )
         # Step 4：memory recall；1:1 包装 string 为 RecallItem（review P0 #2）

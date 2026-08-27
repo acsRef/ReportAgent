@@ -14,7 +14,11 @@ import pytest
 
 from app import context
 from app.agent import requirement_parser, sql_graph
-from app.context import _engine
+# P4a：compress_and_extract 实现在 app.memory.conversation；build_context 解析其 globals，
+# patch target 须随之改（沿用 _engine 别名最小化改动）。L3 写入路径：
+# prepare_conversation_context → memory.manager.remember_conversation_facts →
+# MemoryManager.remember_preference → UserMemory.save（下方 um_mod patch 仍拦截）。
+from app.memory import conversation as _engine
 from app.infra.checkpoint.session import session_manager
 from app.infra.conversation import repository as conv_repo
 from app.infra.memory import user_memory as um_mod

@@ -144,7 +144,7 @@ class TestContextRuntimeFiveStepOrchestration:
             return "RECALL_STRING"
 
         with patch(
-            "app.context.runtime._engine_prepare_conversation_context",
+            "app.context.runtime.prepare_conversation_context",
             new=fake_prepare_ctx,
         ), patch(
             "app.infra.memory.memory_manager.MemoryManager.recall",
@@ -189,7 +189,7 @@ class TestContextRuntimeFiveStepOrchestration:
             return "x"
 
         with patch(
-            "app.context.runtime._engine_prepare_conversation_context",
+            "app.context.runtime.prepare_conversation_context",
             new=fake_prepare_ctx,
         ), patch(
             "app.infra.memory.memory_manager.MemoryManager.recall",
@@ -213,7 +213,7 @@ class TestContextRuntimeFiveStepOrchestration:
             return ""  # 当前实现：无召回时返回 ""
 
         with patch(
-            "app.context.runtime._engine_prepare_conversation_context",
+            "app.context.runtime.prepare_conversation_context",
             new=fake_prepare_ctx,
         ), patch(
             "app.infra.memory.memory_manager.MemoryManager.recall",

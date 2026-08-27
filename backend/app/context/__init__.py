@@ -24,7 +24,7 @@ _warnings.warn(
     stacklevel=2,
 )
 
-# 旧 sync API（兼容路径）
+# 旧 sync API（兼容路径）——实现在 app.memory.conversation（P4a 迁出）；此处 re-export
 from app.context._engine import (  # noqa: E402
     COMPRESS_BATCH,
     L2_5_MAX_CHARS,
@@ -37,8 +37,8 @@ from app.context._engine import (  # noqa: E402
     format_context_block,
     format_messages,
 )
-from app.context._engine import (  # noqa: E402  async glue
-    _prepare_conversation_context as _engine_prepare_conversation_context,
+from app.memory.conversation import (  # noqa: E402  async glue（memory 域）
+    prepare_conversation_context as _prepare_conversation_context,
 )
 
 # 新 API（re-export，让外部 `from app.context import ContextRuntime` 可用）
@@ -60,12 +60,12 @@ from app.context.runtime import ContextRuntime, context_runtime  # noqa: E402
 
 
 async def build_session_context(session_id: str, user_id: int | str) -> str:
-    """P3 兼容 facade：直调 _engine 路径（review P0 #1）。
+    """P3 兼容 facade：直调 memory 域 conversation glue（review P0 #1）。
 
     **不**转发 ContextRuntime.build —— 后者需 query/agent 入参且引入
     MemoryManager.recall 副作用。本函数与 P2 行为逐字等价。
     """
-    return await _engine_prepare_conversation_context(session_id, user_id)
+    return await _prepare_conversation_context(session_id, user_id)
 
 
 __all__ = [

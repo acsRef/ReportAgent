@@ -51,9 +51,15 @@ class TestBackwardCompatibleImports:
         assert hasattr(_engine, "compress_and_extract")
 
     def test_async_glue_moved_to_engine(self):
-        # review P0 #1：原 build_session_context async glue 实质进 _engine
+        # review P0 #1：原 build_session_context async glue 实质进 _engine；
+        # P4a：实现再迁入 app.memory.conversation（domain 层），_engine 退化为 re-export facade。
+        # 强钉子：_engine 上的实现对象 __module__ 必须指向 app.memory.conversation（证明确实搬家）。
         from app.context import _engine
         assert hasattr(_engine, "_prepare_conversation_context")
+        assert _engine.build_context.__module__ == "app.memory.conversation", (
+            "P4a 后 build_context 实现应在 app.memory.conversation，_engine 仅 re-export"
+        )
+        assert _engine.prepare_conversation_context.__module__ == "app.memory.conversation"
 
 
 # --- 新 API re-export -----------------------------------------------------
