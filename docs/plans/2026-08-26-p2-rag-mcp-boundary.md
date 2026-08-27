@@ -35,7 +35,7 @@
 - 回归：503 passed + 1 skipped
 
 **Task 3 Step 3 — schema contract 钉子**
-- 分支 `p2-task3`：review 修订 `???`（待 commit）
+- 分支 `p2-task3`：commit `80b108c`（review PASS）
 - `tests/contracts/test_mcp_contract_schema.py` 9 钉子，**与 Task 2 TestValidateMatchesContract 14 例分工**——后者是 helper 行为级，前者是契约面冻结：
   - 钉子 1：`_INTERNAL_RESULT_FIELDS` 快照冻结（5 字段：chunk_id/document_id/embedding/rerank_score/kb_id）——同 LEGACY BRIDGE 快照手法，增删须同步 Task 4 文档
   - 钉子 1b：稳定表与内部表不相交——同一字段既「Agent 可依赖」又「boundary strip」是契约自相矛盾
@@ -45,13 +45,22 @@
 - **production 代码零改动**——所有断言对当前 Task 2 实现的契约面成立
 - red 验证：临时把 `kb_id` 从 denylist 移除 → 钉子 1（快照漂移）+ 钉子 2（kb_id 泄漏 + 出现稳定表之外字段）同时 red → 撤除 → green
 - 回归：512 passed + 1 skipped（503 + 9 新增）
-- **决议（取代 Step 2 原文「schema 三工具 source=='mcp'」的过宽表述）**：`metadata.source` 语义 = **「该 Tool 请求满足时的实际正路 runtime 通道」**，不是 capability 上游来源。据此：
-  - `search_tables` / `get_table_ddl` → `"mcp"`（MCP-first dispatcher，ragent-py search_dictionary 通道）
-  - `list_tables` → `"local"`（无 MCP 等价工具，正路 `_list_dict_docs` HTTP 直连，rag_schema.py:16/:157 实证；标 mcp 即 metadata 对 runtime 撒谎，trace 观测错误）
-  - `search_interface_dictionary` / `search_faq` 同为 MCP-first，但 source 标注策略 **Task 4 mcp-contract.md 定夺**，Step 2 钉子暂不约束
-- 钉子 6 个：白名单 12 工具双向断言 / source ∈ {local,mcp} / MCP-first 标 mcp / **HTTP 直连反向钉 local** / 禁入 RAG 内部机制工具名（embedding/vector_search/rerank/chunk/ingest/upsert/list_docs/query_pgvector/kb_manage 子串）/ description 含「用于：」
-- P2 修订：allowlist fixture 改为「清空重建 + 退出恢复快照」——抗跨测试全局 registry 污染（探针测试先行注入 junk tool，allowlist 仍绿验证）
-- 回归：503 passed + 1 skipped
+
+**Task 3 Step 4 — failure semantics matrix + 最终回归**
+- 分支 `p2-task3`：commit `???`（待 commit，本次合并）
+- `tests/smoke/test_mcp_failure_matrix.py` 9 钉子（8 格矩阵 + 1 retry 预算硬上限），**与 Task 2 dispatcher tests 分工**——后者测「一次调用走对路径」（UNAVAILABLE×flag-off、INVALID×flag-on、EMPTY 等覆盖），本文件补齐矩阵剩余 cell + retry 预算 + fallback 闸门的端到端钉死：
+  - 新增 TIMEOUT × {flag off, on} 两格（Task 2 未覆盖）
+  - 新增 INVALID_RESPONSE × flag off 一格（Task 2 只测了 flag on）
+  - 新增 transport 调用次数断言（Task 2 未做）
+  - 8 格用 parametrize 一次性穷举，避免漏 cell
+  - 单独 retry 预算硬上限测试（宪法 §11「MCP 2」固定值，防止悄悄改 retry 退化为 1 或放大到 3+）
+- **production 代码零改动**
+- red 验证：临时把 `_call_with_retry` 的 `for attempt in (1, 2):` 改成 `(1, 1)` → TIMEOUT×2 cell + retry 预算硬上限同时 red → 撤除 → green（注意：`(1, 1)` 是元组字面量含两个 1，等于迭代两次 attempt=1，不是「1 次」；正确的「1 次」是 `(1,)` singleton tuple 或去掉循环——记录在此防再次踩坑）
+- 回归：521 passed + 1 skipped（512 + 9 新增）
+- **Task 3 全部 4 钉子 + 5 测试文件落地**：import boundary / tool allowlist / schema contract / failure matrix
+- 挂起项（跑批窗口补做）：
+  1. `_strip_internal_fields` 当前是 denylist（黑名单）—— 后续 cleanup 可改 stable-field allowlist（review 第 3 轮 P2 指出，非当前 blocker）
+  2. 真实跨进程 MCP 验证（ragent-py + backend 联合跑通 search_dictionary / search_faq）+ e2e 补跑 → 跑批窗口补做
 
 ## Preconditions（P1 已冻结，P2 不重判）
 
@@ -259,7 +268,7 @@ class MCPBoundaryError(RuntimeError):
 - [ ] **Step 1: import boundary test**——扫描 backend/app：`app.tools.mcp_client` / `app.tools.mcp_errors` 的 import 只允许出现在 tools/ 包内；全文禁 `D:/PyProject/ragent-py`、`import mcp_server`、`from mcp_server`（除 mcp_faq_client 的 StdioServerParameters 配置项字符串）。red 验证：临时在 sql_graph 加 `from app.tools.rag_schema import x` → 红；撤 → 绿。
 - [ ] **Step 2: tool allowlist test**——`register_all_tools()` 后 registry.all_tools().keys() == 白名单集（含既有 sql/report 工具全量枚举）；逐条断言 metadata 含 when_to_use 语义行（沿用 test_tool_descriptions 风格）；source ∈ {"local","mcp"} 且 schema 三工具 source=="mcp"。**（Step 2 review 第 1 轮修订：「schema 三工具」表述过宽——source 语义定为「实际正路 runtime 通道」，list_tables 正路 HTTP 直连必须 local；详见顶部落地记录 Task 3 Step 2 条目。）**
 - [ ] **Step 3: schema contract test**——样本含 chunk_id/document_id/embedding 字段的 mock items → call_tool 规范化输出无这些键；text 缺失 → MCP_INVALID_RESPONSE。
-- [ ] **Step 4: 全量回归 + Commit** — `test(contracts): MCP 边界四类钉子（import/allowlist/schema/failure） + plan: p2-rag-mcp-boundary`
+- [x] **Step 4: 全量回归 + Commit** — `test(contracts): MCP 边界四类钉子（import/allowlist/schema/failure） + plan: p2-rag-mcp-boundary`
 
 ### Task 4: docs/architecture/mcp-contract.md（第六份架构文档）
 
