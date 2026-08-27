@@ -53,19 +53,15 @@ class ContextRuntime:
         conversation_context = await prepare_conversation_context(
             session_id, user_id,
         )
-        # Step 4：memory recall；1:1 包装 string 为 RecallItem（review P0 #2）
+        # Step 4：memory recall（P4b 结构化，不再 1:1 包 string）
         recall_items: list[RecallItem] = []
         if decision.semantic or decision.query:
-            text = await MemoryManager().recall(
+            recall_items = await MemoryManager().recall_structured(
                 query,
-                user_id,
+                str(user_id),
                 top_k_queries=decision.top_k_queries,
                 top_k_preferences=decision.top_k_preferences,
             )
-            if text:
-                recall_items = [
-                    RecallItem(raw_text=text, source="legacy_memory_manager"),
-                ]
         # Step 5：assemble
         return self._assembler.assemble(
             conversation_context=conversation_context,

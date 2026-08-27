@@ -143,14 +143,11 @@ def test_infra_memory_does_not_import_app_memory_or_context():
     )
 
 
-# --- 5 + 6. recall API 边界（P4a NOT doing + 签名不变） ---------------------
-
-
-def test_recall_structured_not_introduced_in_p4a():
-    from app.infra.memory import MemoryManager
-    assert not hasattr(MemoryManager, "recall_structured"), (
-        "recall_structured 属 P4b；P4a 明确 NOT doing"
-    )
+# --- 6. recall API 边界（P4a 保持 string API） -------------------------------
+#
+# P4a 的 `test_recall_structured_not_introduced_in_p4a` 钉子已于 P4b T4 移除：
+# P4b 正是 recall_structured 的落地处（见 test_structured_recall_contract.py）。
+# recall() -> str 兼容面由下方 + test_structured_recall_contract 双重保证。
 
 
 def test_recall_still_returns_str():

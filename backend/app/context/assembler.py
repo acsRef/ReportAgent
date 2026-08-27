@@ -10,17 +10,22 @@ P3 plan §2.2 + review P0 #2 钉住：
 """
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from app.context.policy import AgentContextPolicy
 from app.state.checkpoint_adapter import CURRENT_SCHEMA_VERSION
 
 
 class RecallItem(TypedDict):
-    """P3 单一来源："legacy_memory_manager"。P4 扩展 "memory_query" /
-    "memory_semantic" 等。"""
+    """P4b 扩：kind/score/ref_id 供 structured recall 与 P4c 冲突消解/预算用。
+    raw_text + source 保留（兼容 P3 1:1 包装 + legacy join）。"""
     raw_text: str
-    source: Literal["legacy_memory_manager"]
+    source: Literal[
+        "legacy_memory_manager", "memory_query", "memory_semantic", "memory_preference",
+    ]
+    kind: NotRequired[str]        # "query"/"semantic"/"preference"
+    score: NotRequired[float]
+    ref_id: NotRequired[int]
 
 
 class ContextBundle(TypedDict):

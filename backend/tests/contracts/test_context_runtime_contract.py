@@ -139,16 +139,20 @@ class TestContextRuntimeFiveStepOrchestration:
             captured["conversation"] = (session_id, user_id)
             return "CTX_FROM_ENGINE"
 
-        async def fake_recall(self, query, user_id, top_k_queries=2, top_k_preferences=3):
+        async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
+                                         top_k_preferences=3):
             captured["recall"] = (query, user_id, top_k_queries, top_k_preferences)
-            return "RECALL_STRING"
+            return [{
+                "raw_text": "结构化召回", "kind": "query",
+                "source": "memory_query", "score": 0.9, "ref_id": 3,
+            }]
 
         with patch(
             "app.context.runtime.prepare_conversation_context",
             new=fake_prepare_ctx,
         ), patch(
-            "app.infra.memory.memory_manager.MemoryManager.recall",
-            new=fake_recall,
+            "app.infra.memory.memory_manager.MemoryManager.recall_structured",
+            new=fake_recall_structured,
         ):
             runtime = ContextRuntime()
             bundle = await runtime.build(
@@ -161,14 +165,14 @@ class TestContextRuntimeFiveStepOrchestration:
         # Step 2：fallback 全开 → conversation=True → 调用 _prepare
         assert captured["conversation"] == ("s-1", 42)
         assert bundle["conversation_context"] == "CTX_FROM_ENGINE"
-        # Step 3-4：fallback semantic+query=True → 调 MemoryManager.recall
-        # review P0 #2 关键钉子：string 1:1 包装为单条 RecallItem，不解析
-        assert captured["recall"] == ("2024 销售", 42, 2, 3)
-        assert bundle["recall_items"] == [
-            RecallItem(raw_text="RECALL_STRING", source="legacy_memory_manager"),
-        ]
-        # Step 5：assemble → assembled_context 含 RECALL + CTX
-        assert "RECALL_STRING" in bundle["assembled_context"]
+        # Step 3-4：fallback semantic+query=True → 调 recall_structured
+        # P4b：Step4 用结构化召回（不再 1:1 包 string）；runtime 传 str(user_id)
+        assert captured["recall"] == ("2024 销售", "42", 2, 3)
+        assert bundle["recall_items"][0]["kind"] == "query"
+        assert bundle["recall_items"][0]["source"] == "memory_query"
+        assert bundle["recall_items"][0]["ref_id"] == 3
+        # Step 5：assemble → assembled_context 含 结构化召回 + CTX
+        assert "结构化召回" in bundle["assembled_context"]
         assert "CTX_FROM_ENGINE" in bundle["assembled_context"]
         # schema_version 字段
         assert bundle["schema_version"] == "v2"
@@ -184,16 +188,17 @@ class TestContextRuntimeFiveStepOrchestration:
 
         recall_called = {"hit": False}
 
-        async def fake_recall(self, query, user_id, top_k_queries=2, top_k_preferences=3):
+        async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
+                                         top_k_preferences=3):
             recall_called["hit"] = True
-            return "x"
+            return []
 
         with patch(
             "app.context.runtime.prepare_conversation_context",
             new=fake_prepare_ctx,
         ), patch(
-            "app.infra.memory.memory_manager.MemoryManager.recall",
-            new=fake_recall,
+            "app.infra.memory.memory_manager.MemoryManager.recall_structured",
+            new=fake_recall_structured,
         ):
             runtime = ContextRuntime(policy=NoRecallPolicy())
             bundle = await runtime.build(
@@ -204,20 +209,21 @@ class TestContextRuntimeFiveStepOrchestration:
         assert bundle["recall_items"] == []
 
     @pytest.mark.asyncio
-    async def test_build_empty_recall_string_yields_empty_items(self):
-        """MemoryManager.recall() 返回空 string（无召回）→ RecallItem 列表为空。"""
+    async def test_build_empty_recall_yields_empty_items(self):
+        """recall_structured() 返回空 list（无召回）→ RecallItem 列表为空。"""
         async def fake_prepare_ctx(session_id, user_id):
             return "CTX"
 
-        async def fake_recall(self, query, user_id, top_k_queries=2, top_k_preferences=3):
-            return ""  # 当前实现：无召回时返回 ""
+        async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
+                                         top_k_preferences=3):
+            return []  # 无 active 召回
 
         with patch(
             "app.context.runtime.prepare_conversation_context",
             new=fake_prepare_ctx,
         ), patch(
-            "app.infra.memory.memory_manager.MemoryManager.recall",
-            new=fake_recall,
+            "app.infra.memory.memory_manager.MemoryManager.recall_structured",
+            new=fake_recall_structured,
         ):
             runtime = ContextRuntime()
             bundle = await runtime.build(

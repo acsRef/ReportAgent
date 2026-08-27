@@ -3,11 +3,59 @@ from __future__ import annotations
 from app.infra.memory.query_memory import QueryMemory
 from app.infra.memory.user_memory import UserMemory
 
+# memory_type → RecallItem.kind 映射（业务定义/事实 vs 偏好）
+_PREFERENCE_TYPES = frozenset({"stable_preference", "temporary_preference"})
+
 
 class MemoryManager:
     def __init__(self):
         self._query_memory = QueryMemory()
         self._user_memory = UserMemory()
+
+    async def recall_structured(
+        self,
+        query: str,
+        user_id: str,
+        *,
+        top_k_queries: int = 2,
+        top_k_preferences: int = 3,
+    ) -> list[dict]:
+        """P4b：structured 召回（memory-architecture §六）。
+
+        返回 list[dict]，字段与 `app.context.assembler.RecallItem` 结构同构
+        （raw_text/source/kind/score/ref_id）。**不** import context 类型——
+        persistence 层不反向依赖 domain；调用方（ContextRuntime）按 RecallItem
+        消费（TypedDict 运行时即 dict）。
+
+        QueryMemory + UserMemory 底层本就返回结构化行，这里映射为结构化条目，
+        **不**拍平。candidate/expired 已在 UserMemory.search SQL 层排除（T3）。
+        """
+        items: list[dict] = []
+
+        queries = await self._query_memory.search_similar(
+            query, top_k=top_k_queries, user_id=int(user_id),
+        )
+        for q in queries:
+            items.append({
+                "raw_text": (
+                    f"[历史查询] {q['question']} → {q['sql'][:80]} "
+                    f"(匹配度{q.get('score', 0):.2f})"
+                ),
+                "source": "memory_query", "kind": "query",
+                "score": float(q.get("score", 0.0)), "ref_id": q.get("id"),
+            })
+
+        prefs = await self._user_memory.search(user_id, query, top_k=top_k_preferences)
+        for p in prefs:
+            kind = "preference" if p.memory_type in _PREFERENCE_TYPES else "semantic"
+            source = "memory_preference" if kind == "preference" else "memory_semantic"
+            items.append({
+                "raw_text": f"[{p.memory_type}] {p.content[:120]} (相关度{p.score:.2f})",
+                "source": source, "kind": kind,
+                "score": float(p.score), "ref_id": p.id,
+            })
+
+        return items
 
     async def recall(
         self,
@@ -16,26 +64,15 @@ class MemoryManager:
         top_k_queries: int = 2,
         top_k_preferences: int = 3,
     ) -> str:
-        lines = []
+        """legacy string API（P4b 起委托 recall_structured，单点格式化，无逻辑双写）。
 
-        # A-4：历史查询召回按 user_id 隔离（透传给 query_template 查询）。
-        queries = await self._query_memory.search_similar(
-            query, top_k=top_k_queries, user_id=int(user_id),
+        保留原因：legacy parent_graph 仍用 `mm.recall()->str`（CLAUDE.md §13 不动）。
+        """
+        items = await self.recall_structured(
+            query, user_id,
+            top_k_queries=top_k_queries, top_k_preferences=top_k_preferences,
         )
-        for q in queries:
-            lines.append(
-                f"[历史查询] {q['question']} → {q['sql'][:80]} "
-                f"(匹配度{q.get('score', 0):.2f})"
-            )
-
-        prefs = await self._user_memory.search(user_id, query, top_k=top_k_preferences)
-        for p in prefs:
-            lines.append(
-                f"[{p.memory_type}] {p.content[:120]} "
-                f"(相关度{p.score:.2f})"
-            )
-
-        return "\n".join(lines) if lines else ""
+        return "\n".join(i["raw_text"] for i in items) if items else ""
 
     async def remember_query(
         self,
