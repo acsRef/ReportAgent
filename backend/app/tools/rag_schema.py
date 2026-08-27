@@ -12,7 +12,8 @@ chunk 文本格式实测：
 P2 RAG/MCP Boundary 改造（docs/plans/2026-08-26-p2-rag-mcp-boundary.md）：
   - search_tables / get_table_ddl 正路走 MCP `search_dictionary`，HTTP 直连降级为
     flag-gated fallback（PHASE2_MCP_ONLY 未锁 + UNAVAILABLE 时走 _retrieve_dict_http）；
-    MCP INVALID_RESPONSE 不走 fallback（重试同结果）。
+    MCP_INVALID_RESPONSE → 不 retry（_call_with_retry 仅 MCP_TIMEOUT 触发重试）
+    + 不 fallback（dispatcher 显式分支直接 raise）。
   - list_tables 无 MCP 等价工具，仍走 HTTP 直连（_list_dict_docs）。
   - 失败路径把 MCPBoundaryError 的 code/detail 写进 log，工具契约对 Agent 保持不变
     （search_tables 仍返回 []，get_table_ddl 仍返回 None）。
@@ -139,7 +140,8 @@ def _retrieve_dict(query: str, top_k: int) -> list[dict]:
         return _retrieve_dict_via_mcp(query, top_k)
     except MCPBoundaryError as exc:
         if exc.code.value == "MCP_INVALID_RESPONSE":
-            # 协议错：重试同结果，直接上抛
+            # 协议错：_call_with_retry 仅 MCP_TIMEOUT 触发重试 + dispatcher
+            # 不走 HTTP fallback（重试同结果也不值得）→ 直接上抛。
             raise
         if not _fallback_allowed():
             # flag 锁定：不走 HTTP fallback
