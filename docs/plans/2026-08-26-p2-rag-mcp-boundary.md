@@ -25,7 +25,26 @@
 - `tests/contracts/test_mcp_boundary_freeze.py` 4 钉子（tools/ 外禁 import rag_schema/interface_dict_tools/mcp_client/mcp_errors；禁真 import mcp_server；非 tools/ 禁硬编码 ragent-py 路径）；red 验证注入 sql_graph 违规 import 命中后撤除
 
 **Task 3 Step 2 — tool allowlist 钉子（review 第 1 轮 P1 修订：source 语义定死）**
-- 分支 `p2-task3`：`b75ce55` + review 修订
+- 分支 `p2-task3`：`b75ce55` + review 修订 `8277129`；master `6498d12`（merge）
+- **决议（取代 Step 2 原文「schema 三工具 source=='mcp'」的过宽表述）**：`metadata.source` 语义 = **「该 Tool 请求满足时的实际正路 runtime 通道」**，不是 capability 上游来源。据此：
+  - `search_tables` / `get_table_ddl` → `"mcp"`（MCP-first dispatcher，ragent-py search_dictionary 通道）
+  - `list_tables` → `"local"`（无 MCP 等价工具，正路 `_list_dict_docs` HTTP 直连，rag_schema.py:16/:157 实证；标 mcp 即 metadata 对 runtime 撒谎，trace 观测错误）
+  - `search_interface_dictionary` / `search_faq` 同为 MCP-first，但 source 标注策略 **Task 4 mcp-contract.md 定夺**，Step 2 钉子暂不约束
+- 钉子 6 个：白名单 12 工具双向断言 / source ∈ {local,mcp} / MCP-first 标 mcp / **HTTP 直连反向钉 local** / 禁入 RAG 内部机制工具名（embedding/vector_search/rerank/chunk/ingest/upsert/list_docs/query_pgvector/kb_manage 子串）/ description 含「用于：」
+- P2 修订：allowlist fixture 改为「清空重建 + 退出恢复快照」——抗跨测试全局 registry 污染（探针测试先行注入 junk tool，allowlist 仍绿验证）
+- 回归：503 passed + 1 skipped
+
+**Task 3 Step 3 — schema contract 钉子**
+- 分支 `p2-task3`：review 修订 `???`（待 commit）
+- `tests/contracts/test_mcp_contract_schema.py` 9 钉子，**与 Task 2 TestValidateMatchesContract 14 例分工**——后者是 helper 行为级，前者是契约面冻结：
+  - 钉子 1：`_INTERNAL_RESULT_FIELDS` 快照冻结（5 字段：chunk_id/document_id/embedding/rerank_score/kb_id）——同 LEGACY BRIDGE 快照手法，增删须同步 Task 4 文档
+  - 钉子 1b：稳定表与内部表不相交——同一字段既「Agent 可依赖」又「boundary strip」是契约自相矛盾
+  - 钉子 2：完整 boundary 链（call_tool → _validate_matches_contract 即 tool 层实际使用面）端到端剥离内部字段；同时不许出现稳定表之外字段
+  - 钉子 3：参数化 4 例（缺 text / 缺 score / text 非 str / score 为 None）端到端 → MCP_INVALID_RESPONSE
+  - 钉子 4：EMPTY_RESULT（matches=[]）合法端到端；schema drift（`{}` / `{results:[]}`）伪装成空命中则 INVALID（端到端冻结 Task 2 review 第 3 轮 P1 分界）
+- **production 代码零改动**——所有断言对当前 Task 2 实现的契约面成立
+- red 验证：临时把 `kb_id` 从 denylist 移除 → 钉子 1（快照漂移）+ 钉子 2（kb_id 泄漏 + 出现稳定表之外字段）同时 red → 撤除 → green
+- 回归：512 passed + 1 skipped（503 + 9 新增）
 - **决议（取代 Step 2 原文「schema 三工具 source=='mcp'」的过宽表述）**：`metadata.source` 语义 = **「该 Tool 请求满足时的实际正路 runtime 通道」**，不是 capability 上游来源。据此：
   - `search_tables` / `get_table_ddl` → `"mcp"`（MCP-first dispatcher，ragent-py search_dictionary 通道）
   - `list_tables` → `"local"`（无 MCP 等价工具，正路 `_list_dict_docs` HTTP 直连，rag_schema.py:16/:157 实证；标 mcp 即 metadata 对 runtime 撒谎，trace 观测错误）
