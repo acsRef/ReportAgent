@@ -33,6 +33,7 @@ from app.context import build_session_context
 from app.models.requirement import RequirementAssumption, RequirementCard
 from app.infra.db import requirement_repository
 from app.infra.db.postgres import get_pool
+from app.state.checkpoint_adapter import migrate_checkpoint
 from app.infra.trace.sdk import get_tracer, traced_node
 from app.models.contracts import ErrorDetail, SchemaContext
 from app.models.requirement import RequirementCard
@@ -64,6 +65,7 @@ class RequirementAnalysisState(TypedDict, total=False):
 
 @traced_node("requirement_security_guard")
 def _security_guard(state: RequirementAnalysisState) -> dict:
+    state = migrate_checkpoint(dict(state))  # P3 (γ): graph 入口 v1→v2 adapter
     result = SecurityGuard.check(state["user_query"])
     out = {
         "security_score": result.score,

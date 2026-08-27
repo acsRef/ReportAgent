@@ -12,6 +12,7 @@ from app.tools.sql_tools import chart_advisor, insight_analyst
 from app.utils.text import safe_json_parse, strip_markdown_fence
 from app.tools.registry import registry
 from app.infra.trace.sdk import traced_node
+from app.state.checkpoint_adapter import migrate_checkpoint
 
 
 class ReportAgentState(TypedDict):
@@ -43,6 +44,7 @@ def _validate_qr(qr_raw) -> Optional[QueryResult]:
 
 @traced_node("report_plan_analysis")
 def _plan_analysis(state: ReportAgentState) -> dict:
+    state = migrate_checkpoint(dict(state))  # P3 (γ): graph 入口 v1→v2 adapter
     qr_raw = state.get("query_result")
     if not qr_raw:
         return {"assemble_plan": [], "assemble_step_idx": 0, "assemble_results": []}

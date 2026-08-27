@@ -31,6 +31,7 @@ from app.infra.trace.sdk import get_tracer, traced_node
 from app.models.contracts import ErrorDetail, SchemaContext
 from app.models.requirement import RequirementCard
 from app.services import requirement_service, report_version_service
+from app.state.checkpoint_adapter import migrate_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ async def _security_guard(state: ConfirmedExecutionState) -> dict:
     调整文本里的注入不被检查。mode=adjust 时 user_query 即调整文本；mode=confirm 时
     user_query 为空串，SecurityGuard 不会误拦。命中高风险 → 抛 SecurityRejectedError。
     """
+    state = migrate_checkpoint(dict(state))  # P3 (γ): graph 入口 v1→v2 adapter
     result = SecurityGuard.check(state.get("user_query", "") or "")
     if result.blocked:
         raise SecurityRejectedError(result.reason or "检测到高风险输入")

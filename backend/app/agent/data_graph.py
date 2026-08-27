@@ -10,6 +10,7 @@ from app.models.contracts import ErrorDetail, SchemaContext, TableSchema, Column
 from app.tools.data_tools import search_tables, get_table_ddl, list_tables
 from app.tools.registry import registry
 from app.infra.trace.sdk import traced_node
+from app.state.checkpoint_adapter import migrate_checkpoint
 
 
 class DataAgentState(TypedDict):
@@ -32,6 +33,7 @@ def _detect_intent(state: DataAgentState) -> dict:
     非数据查询返回 has_data_intent=False，让 _search_schema 短路、不调 rag 检索。
     修复：此前 `has_data_intent` 算了但两个分支都返回 []，意图门形同虚设。
     """
+    state = migrate_checkpoint(dict(state))  # P3 (γ): graph 入口 v1→v2 adapter
     query = state["user_query"]
     keywords_data = ["查询", "统计", "数据", "表", "字段", "销售", "订单", "库存",
                      "退货", "分析", "排名", "趋势", "多少", "哪个", "占比", "利润"]

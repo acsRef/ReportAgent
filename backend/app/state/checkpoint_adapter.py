@@ -40,12 +40,14 @@ def is_legacy_checkpoint(checkpoint: dict) -> bool:
 
 
 def migrate_checkpoint(checkpoint: dict) -> dict:
-    """三分支迁移：
+    """四分支迁移：
 
     - schema_version == CURRENT_SCHEMA_VERSION → 透传（idempotent）
     - schema_version == LEGACY_SCHEMA_VERSION
-      或（缺 + is_legacy_checkpoint） → rename → v2
-    - 其他 → raise MigrationError
+      或（缺 + is_legacy_checkpoint） → deterministic rename → v2
+    - 缺 schema_version + 不含 v1 marker → 视为 fresh input（graph 测试 /
+      新 session 起点）→ inject schema_version 透传；**不**强行 rename
+    - 显式 wrong version（如 "v999"）→ raise MigrationError（review #7 防误判钉子）
     """
     version = checkpoint.get("schema_version")
     if version == CURRENT_SCHEMA_VERSION:
@@ -54,6 +56,11 @@ def migrate_checkpoint(checkpoint: dict) -> dict:
         version is None and is_legacy_checkpoint(checkpoint)
     ):
         return _apply_legacy_rename(checkpoint)
+    if version is None:
+        # fresh input：无 marker 无 version，不强行 rename，仅注入 v2 schema_version
+        result = dict(checkpoint)
+        result["schema_version"] = CURRENT_SCHEMA_VERSION
+        return result
     raise MigrationError(
         f"unknown checkpoint shape: schema_version={version!r}, "
         f"keys_sample={sorted(checkpoint.keys())[:5]}"

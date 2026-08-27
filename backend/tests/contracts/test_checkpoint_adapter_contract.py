@@ -129,13 +129,19 @@ class TestMigrateCheckpointLegacyToV2:
 
 
 class TestMigrateCheckpointUnknownShape:
-    def test_raises_migration_error_on_unknown(self):
-        # review #7：缺 schema_version 又不是 legacy shape → raise MigrationError
-        unknown = {"foo": "bar"}
-        with pytest.raises(MigrationError):
-            migrate_checkpoint(unknown)
+    def test_fresh_input_no_marker_no_version_injects_v2(self):
+        # (γ) 落地补充：graph 入口节点收到 fresh state（如 graph 测试 / 新 session）
+        # 时不应 raise，而应 inject schema_version 透传；不强行 rename
+        fresh = {"user_query": "x", "schema_context": None, "chosen_tool": None}
+        result = migrate_checkpoint(fresh)
+        assert result["schema_version"] == CURRENT_SCHEMA_VERSION
+        # 字段不强行 rename / 不删
+        assert result["user_query"] == "x"
+        assert result["schema_context"] is None
+        assert result["chosen_tool"] is None
 
     def test_raises_migration_error_on_wrong_version(self):
+        # review #7 钉子：显式 wrong version 视为数据污染 → raise
         bad = {"schema_version": "v999"}
         with pytest.raises(MigrationError):
             migrate_checkpoint(bad)

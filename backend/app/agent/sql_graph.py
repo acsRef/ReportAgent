@@ -15,6 +15,7 @@ from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaCont
 from app.utils.text import extract_sql, safe_json_parse, strip_markdown_fence
 from app.infra.trace.sdk import traced_node
 from app.tools.sql_tools import validate_sql, execute_sql
+from app.state.checkpoint_adapter import migrate_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,7 @@ def _intent_analyze(state: SQLAgentState) -> dict:
 
 @traced_node("sql_plan")
 def _plan(state: SQLAgentState) -> dict:
+    state = migrate_checkpoint(dict(state))  # P3 (γ): graph 入口 v1→v2 adapter
     schema = state.get("schema_context")
     schema_text = "无可用表结构" if not schema else "\n".join(
         f"- {t.name}: {t.description}" for t in schema.tables
