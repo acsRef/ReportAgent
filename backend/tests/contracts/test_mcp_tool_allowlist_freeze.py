@@ -3,15 +3,23 @@
 规则：
 1. registry 注册面 == 12 个白名单工具（5 data + 2 sql + 5 report）——新工具加入必须
    同步更新白名单（迫使开发者显式确认业务语义）。
-2. 所有注册工具 metadata.source ∈ {"local", "mcp"}——source 字段是 Agent Contract 一部分，
+2. 所有注册工具 metadata.source ∈ {"local", "mcp"}——source 语义（review 第 1 轮决议）：
+   **「该 Tool 请求满足时的实际正路 runtime 通道」**，不是「capability 的上游来源」。
    非法值会让 dispatcher / 审计逻辑误判。
-3. schema 三工具（search_tables / get_table_ddl / list_tables）metadata.source == "mcp"——
-   它们底层走 MCP dispatcher（ragent-py search_dictionary 通道）。
+3. MCP-first dispatcher 工具（search_tables / get_table_ddl）metadata.source == "mcp"——
+   它们底层走 MCP dispatcher（ragent-py search_dictionary 通道）；反向钉：list_tables
+   无 MCP 等价工具，正路是 _list_dict_docs HTTP 直连，source 必须 == "local"——
+   metadata 撒谎会让 trace/审计看到「source=mcp 但无 MCP 调用」。
+   （search_interface_dictionary / search_faq 同为 MCP-first，但 source 标注策略
+   待 Task 4 mcp-contract.md 定夺，本钉子暂不约束。）
 4. 禁入 RAG 内部机制相关工具名：embedding / vector_search / rerank / chunk /
    query_pgvector / ingest / upsert / list_docs / kb_manage 子串——防有人把 RAG
    内部 API 包装成 ReportAgent 工具（违反 Forbidden Patterns 第 8 条「不绕过 MCP
    直连 RAG 内部机制」）。
 5. 每个工具 description 必含「用于：」边界行——五要素之一，未交代使用场景会让模型乱调。
+
+测试隔离：registry 是进程级 singleton，本套测试用「清空重建 + 退出恢复快照」
+fixture 保证白名单断言不受执行顺序影响、也不泄漏给其他测试（review 第 1 轮 P2）。
 
 离线可跑：registry 内存枚举，不触 PG / LLM / MCP。
 """
@@ -58,18 +66,39 @@ FORBIDDEN_TOOL_NAME_TOKENS: tuple[str, ...] = (
     "kb_manage",
 )
 
-# 必须 source="mcp" 的 schema 检索工具（dispatcher 底层走 MCP）
+# 必须 source="mcp" 的工具——正路经 MCP dispatcher（search_dictionary 通道）。
 MCP_SOURCED_TOOLS: frozenset[str] = frozenset(
-    {"search_tables", "get_table_ddl", "list_tables"}
+    {"search_tables", "get_table_ddl"}
 )
+
+# 反向钉：无 MCP 等价工具、正路 HTTP 直连的 schema 工具，source 必须 == "local"。
+LOCAL_SOURCED_TOOLS: frozenset[str] = frozenset({"list_tables"})
 
 ALLOWED_SOURCE_VALUES: frozenset[str] = frozenset({"local", "mcp"})
 
 
 @pytest.fixture
 def registered() -> None:
-    """确保 registry 已填充（register_all_tools 幂等，多次调用安全）。"""
-    register_all_tools()
+    """把 registry 构造成确定性状态，测试间零全局耦合。
+
+    registry 是进程级 singleton（app.tools.registry.registry）。仅「快照 + 恢复」
+    防不住别的测试先行注册临时工具造成的污染（白名单断言依赖执行顺序），所以
+    进入时 **清空重建**（clear + register_all_tools → 注册面恰好等于白名单），
+    退出时恢复原快照不泄漏给其他测试（review 第 1 轮 P2）。
+    register_all_tools 幂等，重复调用安全。
+    """
+    tools_snapshot = dict(registry._tools)
+    instances_snapshot = dict(registry._instances)
+    try:
+        registry._tools.clear()
+        registry._instances.clear()
+        register_all_tools()
+        yield
+    finally:
+        registry._tools.clear()
+        registry._tools.update(tools_snapshot)
+        registry._instances.clear()
+        registry._instances.update(instances_snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +124,7 @@ def test_registry_matches_expected_allowlist(registered):
 
 
 # ---------------------------------------------------------------------------
-# 钉子 2：source 字段全局约束 + schema 三工具必须 "mcp"
+# 钉子 2：source 字段全局约束 + MCP-first 工具标 "mcp" / HTTP 直连工具标 "local"
 # ---------------------------------------------------------------------------
 
 
@@ -111,13 +140,16 @@ def test_source_field_constrained_to_local_or_mcp(registered):
     )
 
 
-def test_schema_three_tools_marked_as_mcp_source(registered):
-    """schema 三工具（search_tables / get_table_ddl / list_tables）底层走 MCP
-    dispatcher（ragent-py search_dictionary 检索通道），故 metadata.source 必须
-    == "mcp"——plan 决策 2 + 决策 5 钉子 2 原文：「schema 三工具 source=='mcp'」。
+def test_mcp_first_tools_marked_as_mcp_source(registered):
+    """search_tables / get_table_ddl 正路经 MCP dispatcher（ragent-py
+    search_dictionary 检索通道），故 metadata.source 必须 == "mcp"。
 
-    source 标记让审计/限流/trace 知道这是 MCP 通道调用，便于与 fallback 路径
-    区分失败语义。"""
+    source 语义（review 第 1 轮决议）：**该 Tool 请求满足时的实际正路 runtime
+    通道**。source 标记让审计/限流/trace 识别 MCP 通道调用——标错即观测信息错。
+
+    注意 list_tables 不在此列：它无 MCP 等价工具，正路是 _list_dict_docs
+    HTTP 直连（见反向钉子）。search_interface_dictionary / search_faq 同为
+    MCP-first，但 source 标注策略待 Task 4 mcp-contract.md 定夺。"""
     bad: list[str] = []
     for name in MCP_SOURCED_TOOLS:
         meta = registry.get_metadata(name)
@@ -125,7 +157,28 @@ def test_schema_three_tools_marked_as_mcp_source(registered):
         if meta.source != "mcp":
             bad.append(f"{name}: source={meta.source!r}（期望 'mcp'）")
     assert not bad, (
-        "schema 三工具必须 source='mcp'（底层走 MCP dispatcher，plan 决策 5 钉子 2）:\n"
+        "MCP-first 工具必须 source='mcp'（正路走 MCP dispatcher）:\n"
+        + "\n".join(bad)
+    )
+
+
+def test_http_direct_tools_stay_local_source(registered):
+    """反向钉：list_tables 无 MCP 等价工具，正路是 rag_schema._list_dict_docs
+    HTTP 直连（不经 dispatcher），metadata.source 必须 == "local"。
+
+    review 第 1 轮 P1：把 HTTP 直连工具标成 source="mcp" 是 metadata 对 runtime
+    行为的错误描述——trace 里会看到「tool=list_tables source=mcp」但实际没有
+    任何 MCP 调用。plan Step 2 原文「schema 三工具 source=='mcp'」写宽了，
+    以 runtime truth 为准（rag_schema.py:16/:157 明确 list_tables 维持 HTTP 直连）。
+    """
+    bad: list[str] = []
+    for name in LOCAL_SOURCED_TOOLS:
+        meta = registry.get_metadata(name)
+        assert meta is not None, f"{name} 未注册"
+        if meta.source != "local":
+            bad.append(f"{name}: source={meta.source!r}（期望 'local'，正路 HTTP 直连）")
+    assert not bad, (
+        "HTTP 直连工具的 source 不许谎报为 'mcp'（review 第 1 轮 P1）:\n"
         + "\n".join(bad)
     )
 

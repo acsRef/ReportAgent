@@ -66,7 +66,9 @@ def register_all_tools():
             ),
             capability="schema_list",
             agent_type="data",
-            source="mcp",
+            # source 语义（review 第 1 轮决议）：Tool 请求满足时的实际正路 runtime 通道。
+            # list_tables 无 MCP 等价工具，正路是 _list_dict_docs HTTP 直连，故 local；
+            # search_tables / get_table_ddl 走 MCP-first dispatcher，故 mcp。
             risk_level="low",
             output_schema={"tables": "array"},
         ),
