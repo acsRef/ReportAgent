@@ -20,6 +20,20 @@
 1. `_strip_internal_fields` 当前是 denylist（黑名单）—— 后续 cleanup 可改 stable-field allowlist（review 第 3 轮 P2 指出，非当前 blocker）
 2. 真实跨进程 MCP 验证（ragent-py + backend 联合跑通 search_dictionary / search_faq）+ e2e 补跑 → 跑批窗口补做
 
+**Task 3 Step 1 — import boundary 钉子**
+- 落地：master `25b29b0`（merge），feat: `b17d987`
+- `tests/contracts/test_mcp_boundary_freeze.py` 4 钉子（tools/ 外禁 import rag_schema/interface_dict_tools/mcp_client/mcp_errors；禁真 import mcp_server；非 tools/ 禁硬编码 ragent-py 路径）；red 验证注入 sql_graph 违规 import 命中后撤除
+
+**Task 3 Step 2 — tool allowlist 钉子（review 第 1 轮 P1 修订：source 语义定死）**
+- 分支 `p2-task3`：`b75ce55` + review 修订
+- **决议（取代 Step 2 原文「schema 三工具 source=='mcp'」的过宽表述）**：`metadata.source` 语义 = **「该 Tool 请求满足时的实际正路 runtime 通道」**，不是 capability 上游来源。据此：
+  - `search_tables` / `get_table_ddl` → `"mcp"`（MCP-first dispatcher，ragent-py search_dictionary 通道）
+  - `list_tables` → `"local"`（无 MCP 等价工具，正路 `_list_dict_docs` HTTP 直连，rag_schema.py:16/:157 实证；标 mcp 即 metadata 对 runtime 撒谎，trace 观测错误）
+  - `search_interface_dictionary` / `search_faq` 同为 MCP-first，但 source 标注策略 **Task 4 mcp-contract.md 定夺**，Step 2 钉子暂不约束
+- 钉子 6 个：白名单 12 工具双向断言 / source ∈ {local,mcp} / MCP-first 标 mcp / **HTTP 直连反向钉 local** / 禁入 RAG 内部机制工具名（embedding/vector_search/rerank/chunk/ingest/upsert/list_docs/query_pgvector/kb_manage 子串）/ description 含「用于：」
+- P2 修订：allowlist fixture 改为「清空重建 + 退出恢复快照」——抗跨测试全局 registry 污染（探针测试先行注入 junk tool，allowlist 仍绿验证）
+- 回归：503 passed + 1 skipped
+
 ## Preconditions（P1 已冻结，P2 不重判）
 
 1. `frontend/src/legacy/components/chat/{AgentTimeline,ChatCards,EmptyState}.tsx` 属 legacy 冻结面（P1 执行中按「引用关系判定」追加认定，见 p1 plan 落地记录偏差①）。
@@ -224,7 +238,7 @@ class MCPBoundaryError(RuntimeError):
 - Create: `backend/tests/graphs/test_mcp_failure_semantics.py`（四情形 × flag 两态矩阵；若纯工具层可测则放 contracts，以能离线为准）
 
 - [ ] **Step 1: import boundary test**——扫描 backend/app：`app.tools.mcp_client` / `app.tools.mcp_errors` 的 import 只允许出现在 tools/ 包内；全文禁 `D:/PyProject/ragent-py`、`import mcp_server`、`from mcp_server`（除 mcp_faq_client 的 StdioServerParameters 配置项字符串）。red 验证：临时在 sql_graph 加 `from app.tools.rag_schema import x` → 红；撤 → 绿。
-- [ ] **Step 2: tool allowlist test**——`register_all_tools()` 后 registry.all_tools().keys() == 白名单集（含既有 sql/report 工具全量枚举）；逐条断言 metadata 含 when_to_use 语义行（沿用 test_tool_descriptions 风格）；source ∈ {"local","mcp"} 且 schema 三工具 source=="mcp"。
+- [ ] **Step 2: tool allowlist test**——`register_all_tools()` 后 registry.all_tools().keys() == 白名单集（含既有 sql/report 工具全量枚举）；逐条断言 metadata 含 when_to_use 语义行（沿用 test_tool_descriptions 风格）；source ∈ {"local","mcp"} 且 schema 三工具 source=="mcp"。**（Step 2 review 第 1 轮修订：「schema 三工具」表述过宽——source 语义定为「实际正路 runtime 通道」，list_tables 正路 HTTP 直连必须 local；详见顶部落地记录 Task 3 Step 2 条目。）**
 - [ ] **Step 3: schema contract test**——样本含 chunk_id/document_id/embedding 字段的 mock items → call_tool 规范化输出无这些键；text 缺失 → MCP_INVALID_RESPONSE。
 - [ ] **Step 4: 全量回归 + Commit** — `test(contracts): MCP 边界四类钉子（import/allowlist/schema/failure） + plan: p2-rag-mcp-boundary`
 
