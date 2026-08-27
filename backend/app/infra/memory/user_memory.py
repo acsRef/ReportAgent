@@ -14,12 +14,18 @@ logger = logging.getLogger(__name__)
 # memory.semantic_entry 无限增长。淘汰是排序因子之外的「硬上限」补充——召回仍语义主导。
 USER_MEMORY_CAP = 200
 
+# P4b §五/§六：召回只取 active 且未过期（candidate/superseded/expired 一律排除）。
+# 字面片段（无 bind 参数）→ 不影响各查询 $n 占位编号。
+_ACTIVE_RECALL_FILTER = "status = 'active' AND (expires_at IS NULL OR expires_at > NOW())"
+
 
 class RankedMemory:
     def __init__(self, id: int, content: str, memory_type: str,
                  importance_score: float, access_count: int,
                  last_access_time: Optional[datetime.datetime],
-                 score: float):
+                 score: float,
+                 status: str = "active", scope: str = "user",
+                 confidence: str = "medium"):
         self.id = id
         self.content = content
         self.memory_type = memory_type
@@ -27,6 +33,10 @@ class RankedMemory:
         self.access_count = access_count
         self.last_access_time = last_access_time
         self.score = score
+        # P4b lifecycle (memory-architecture §六)
+        self.status = status
+        self.scope = scope
+        self.confidence = confidence
 
 
 class UserMemory:
@@ -41,20 +51,33 @@ class UserMemory:
         memory_type: str = "insight",
         importance_score: float = 0.3,
         source: str = "",
+        *,
+        scope: str = "user",
+        status: str = "active",
+        confidence: str = "medium",
+        session_id: Optional[str] = None,
+        expires_at: Optional[datetime.datetime] = None,
     ) -> int:
         pool = get_pool()
         is_new = False
         async with pool.acquire() as conn:
             existing = await conn.fetchrow(
-                "SELECT id, access_count FROM memory.semantic_entry "
+                "SELECT id, access_count, status FROM memory.semantic_entry "
                 "WHERE user_id=$1 AND content=$2",
                 user_id, content,
             )
             if existing:
+                # §五 收口：同内容若本次以 active（explicit statement）写入，
+                # 而既存为 candidate（LLM-inferred），promote 之（去重 + 状态提升合一）。
+                promote = (
+                    existing["status"] == "candidate" and status == "active"
+                )
                 await conn.execute(
                     "UPDATE memory.semantic_entry SET access_count=access_count+1, "
-                    "last_access_time=NOW() WHERE id=$1",
-                    existing["id"],
+                    "last_access_time=NOW()"
+                    + (", status=$3, confidence=$4, scope=$5, updated_at=NOW()" if promote else "")
+                    + " WHERE id=$1",
+                    *( (existing["id"], status, confidence, scope) if promote else (existing["id"],) ),
                 )
                 entry_id = existing["id"]
             else:
@@ -63,10 +86,13 @@ class UserMemory:
                 embedding = await embedder.embed_or_none(content)
                 row = await conn.fetchrow(
                     """INSERT INTO memory.semantic_entry
-                       (user_id, content, memory_type, importance_score, intent_embedding, source, access_count, last_access_time)
-                       VALUES ($1, $2, $3, $4, $5, $6, 1, NOW())
+                       (user_id, content, memory_type, importance_score, intent_embedding, source,
+                        access_count, last_access_time,
+                        scope, status, confidence, session_id, expires_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, 1, NOW(), $7, $8, $9, $10, $11)
                        RETURNING id""",
                     user_id, content, memory_type, importance_score, embedding, source,
+                    scope, status, confidence, session_id, expires_at,
                 )
                 entry_id = row["id"]
 
@@ -125,11 +151,12 @@ class UserMemory:
         async with pool.acquire() as conn:
             if embedding is not None:
                 rows = await conn.fetch(
-                    """SELECT id, content, memory_type, importance_score,
-                              access_count, last_access_time,
+                    f"""SELECT id, content, memory_type, importance_score,
+                              access_count, last_access_time, status, scope, confidence,
                               GREATEST(0, 1 - (intent_embedding <=> $1::vector)) AS sem_sim
                        FROM memory.semantic_entry
                        WHERE user_id=$2 AND intent_embedding IS NOT NULL
+                         AND {_ACTIVE_RECALL_FILTER}
                        ORDER BY sem_sim DESC
                        LIMIT $3""",
                     embedding, user_id, k * 3,
@@ -148,19 +175,21 @@ class UserMemory:
                 keywords = [w for w in query.lower().replace(",", " ").split() if len(w) > 1] if query else []
                 if not keywords:
                     rows = await conn.fetch(
-                        """SELECT id, content, memory_type, importance_score,
-                                  access_count, last_access_time
-                           FROM memory.semantic_entry WHERE user_id=$1
+                        f"""SELECT id, content, memory_type, importance_score,
+                                  access_count, last_access_time, status, scope, confidence
+                           FROM memory.semantic_entry
+                           WHERE user_id=$1 AND {_ACTIVE_RECALL_FILTER}
                            ORDER BY last_access_time DESC LIMIT $2""",
                         user_id, k * 3,
                     )
                 else:
                     patterns = [f"%{kw}%" for kw in keywords]
                     rows = await conn.fetch(
-                        """SELECT id, content, memory_type, importance_score,
-                                  access_count, last_access_time
+                        f"""SELECT id, content, memory_type, importance_score,
+                                  access_count, last_access_time, status, scope, confidence
                            FROM memory.semantic_entry
                            WHERE user_id=$1 AND content ILIKE ANY($2::text[])
+                             AND {_ACTIVE_RECALL_FILTER}
                            ORDER BY last_access_time DESC LIMIT $3""",
                         user_id, patterns, k * 3,
                     )
@@ -200,10 +229,11 @@ class UserMemory:
         now = datetime.datetime.now()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                """SELECT id, content, memory_type, importance_score,
-                          access_count, last_access_time
+                f"""SELECT id, content, memory_type, importance_score,
+                          access_count, last_access_time, status, scope, confidence
                    FROM memory.semantic_entry
                    WHERE user_id=$1 AND memory_type IN ('stable_preference', 'temporary_preference')
+                     AND {_ACTIVE_RECALL_FILTER}
                    ORDER BY last_access_time DESC LIMIT $2""",
                 user_id, k * 3,
             )
@@ -230,6 +260,9 @@ class UserMemory:
             access_count=row["access_count"] or 0,
             last_access_time=row.get("last_access_time"),
             score=score,
+            status=row.get("status", "active"),
+            scope=row.get("scope", "user"),
+            confidence=row.get("confidence", "medium"),
         )
 
     def _compute_score(
