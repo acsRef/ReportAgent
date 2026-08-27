@@ -310,10 +310,13 @@ async def _intent_analyze(state: RequirementAnalysisState) -> dict:
 2. 抽 `schema_version`：
    - `== CURRENT_SCHEMA_VERSION` → 透传（idempotent）
    - `== LEGACY_SCHEMA_VERSION` 或（缺失 + `is_legacy_checkpoint`）→ 走 legacy 映射表
-   - 其他 → `raise MigrationError`
+   - 缺失 schema_version + **不**含 v1 marker → 视为 **fresh input**（graph 入口节点收到 LangGraph merge 后无 checkpoint 时的合法起点 / graph 测试传 dict）→ inject `schema_version=CURRENT` 透传，**不**强行 rename（守住 review #7 钉子：unknown shape 不被误判为 legacy）
+   - 显式 wrong version（如 `"v999"`）→ `raise MigrationError`（数据污染信号）
 3. legacy 路径：按上表 deterministic rename → 返回新五块结构 + `schema_version=CURRENT`；unmapped 字段保留在 state_dict 顶层
 4. 写入侧永远 `CURRENT_SCHEMA_VERSION`（graph 节点返回的 state 已被 migrate 过，LangGraph 自然写入 v2）
 5. 缺失字段 → TypedDict `total=False` 缺省值（不抛错）
+
+> **Review #7 与 (γ) 折中说明**：review #7 要求"缺 schema_version 非 legacy → raise MigrationError 防误判"；但 (γ) 落地后 graph 入口节点收到的是 LangGraph merge 后的 state，fresh session（首次 invoke）也长这形状。两者运行时不可区分。P3 折中：(γ) 入口节点路径**不**raise fresh input（inject v2 透传）；wrong version **才**raise（显式污染信号）。ops / migration script 若需严格 raise unknown，调用专用 `strict_migrate_checkpoint`（P3 未实施，P4 按需补）。
 
 ### 2.5 `app.context` facade（review P0 #1 决议：**兼容路径不转发 runtime**）
 

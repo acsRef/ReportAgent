@@ -1,21 +1,17 @@
-"""分层对话上下文系统——让多轮对话连贯。
+"""Conversation Context Engine —— 旧 `app/context.py` 内容迁入（P3 Task 4）。
 
-此前每次 LLM 调用都是无状态的：只看当前 query + schema，不知道之前聊过什么，
-用户先问「2024 华东销售趋势」再说「再按产品细分」时，第二轮完全不知道「华东」。
+P3 plan §2.5 + review P0 #1 决议：
+- 旧 `backend/app/context.py`（230 行）三类职责拆分：
+  · Conversation Engine（sync 纯函数 + LLM 压缩）保留在本模块
+  · Runtime storage glue → `_prepare_conversation_context` async helper（本模块）
+  · Memory 落库增强 → `_save_l3_facts` async helper（本模块）
+- **本模块不依赖 runtime**；外部 import 通过 `app.context` facade（`__init__.py`）走通
 
-本模块把对话历史组织成四层（见 docs/plans/2026-08-01-memory-mechanism.md）：
+P4 决议：本模块整体搬到 `backend/app/memory/conversation.py`，runtime 接口不变。
 
-    L1   最近 RECENT_WINDOW 条原始消息            （app.conversations）
-    L2   叙事摘要 digest（≤ L2_MAX_CHARS，覆盖重写） （agent.session.digest）
-    L2.5 长期归档 mid_digest（≤ L2_5_MAX_CHARS）    （agent.session.mid_digest）
-    L3   结构化事实（字段映射/计算口径/偏好）        （memory.semantic_entry）
-
-唯一入口 `build_context`：给定历史消息 + 当前 digest 状态，返回
-(注入 prompt 的上下文字符串, 需回写 session 的 digest 字段, 本次被压缩的消息批次)。
-压缩是「覆盖重写」——绝不追加，这是防止摘要随轮次膨胀的关键。
-
-压缩用的 LLM 调用封装在 `compress_and_extract`，便于测试 mock。L3 事实的
-mem0 增强与落库在异步 glue `build_session_context` 里做（见本模块尾部）。
+`_save_l3_facts` 是 **Legacy Conversation/Memory Glue**：仍直接 `from
+app.infra.memory import mem0_extractor / UserMemory`。P4 移除 context 包对
+`infra.memory` 的直接依赖，Memory 写入归 Memory Manager。
 """
 from __future__ import annotations
 
@@ -26,7 +22,7 @@ from app.utils.text import safe_json_parse
 
 logger = logging.getLogger(__name__)
 
-# --- 关键常量 ----------------------------------------------------------------
+# --- 关键常量 ---------------------------------------------------------------
 RECENT_WINDOW = 10        # L1：保留最近 N 条原始消息
 COMPRESS_BATCH = 10       # 每 M 条超出窗口的消息触发一次压缩
 L2_MAX_CHARS = 800        # L2 digest 硬上限
@@ -167,15 +163,17 @@ def build_context(
     return "\n\n".join(parts), updates, compressed_batch
 
 
-# --- 异步 glue：把分层上下文接进真实存储链路 -----------------------------------
+# --- async helpers（私有，前缀 `_`） -----------------------------------------
 
 
-async def build_session_context(session_id: str, user_id: int | str) -> str:
-    """会话级上下文构建入口（供图节点调用）。
+async def _prepare_conversation_context(session_id: str, user_id: int | str) -> str:
+    """会话级 conversation context async glue（从旧 `build_session_context` 实质抽出）。
 
     取消息 + 当前 digest 状态 → `build_context` → 回写 digest（L2/L2.5）→ 把抽取的
     结构化事实写进 L3（含 mem0 增强）。返回前置进 LLM prompt 的上下文字符串。
     任何存储失败都降级为空上下文，绝不拖垮主查询链路。
+
+    **不**调 MemoryManager.recall —— 那是 ContextRuntime 新 API 的职责。
     """
     from app.infra.checkpoint.session import session_manager
     from app.infra.conversation.repository import get_messages
@@ -196,10 +194,14 @@ async def build_session_context(session_id: str, user_id: int | str) -> str:
 
 
 async def _save_l3_facts(user_id: int | str, updates: dict, compressed_batch: list[dict]) -> None:
-    """把压缩抽取的结构化事实写进 L3（memory.semantic_entry）。mem0 增强可选。
+    """**Legacy Conversation/Memory Glue**（review #9 决议）。
 
+    把压缩抽取的结构化事实写进 L3（memory.semantic_entry）。mem0 增强可选。
     去重由 UserMemory.save（相同 user_id+content 递增 access_count）天然处理；
     这里再按内容做一次保序去重，减少无谓写入。
+
+    **P4 removes this dependency from context package**：Memory 写入归 Memory Manager；
+    本 helper 整体搬到 `backend/app/memory/conversation.py`。
     """
     from app.infra.memory import mem0_extractor
     from app.infra.memory.user_memory import UserMemory

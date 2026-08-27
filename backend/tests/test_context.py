@@ -2,6 +2,11 @@
 
 覆盖 build_context 的窗口/压缩触发/覆盖重写/L2.5 归档，以及 compress_and_extract
 的 800 字硬上限、结构化事实透传、坏 JSON 兜底。LLM 用 monkeypatch 隔离。
+
+P3 Task 4 修订：旧 `app.context` module 升级为 package；`compress_and_extract` /
+`call_llm` 等内部函数实际位于 `app.context._engine` 子模块，monkeypatch 必须打到
+实际定义所在 module（`_engine`），而非 facade（`app.context`）。facade 仍 re-export
+这些名字以保外部 import 兼容。
 """
 from __future__ import annotations
 
@@ -10,6 +15,7 @@ import json
 import pytest
 
 from app import context
+from app.context import _engine
 
 pytestmark = pytest.mark.smoke
 
@@ -60,7 +66,7 @@ def test_build_context_no_compress_under_threshold():
 def test_build_context_triggers_compress_and_replaces(monkeypatch):
     """覆盖重写：新摘要替换旧摘要，绝不追加。"""
     monkeypatch.setattr(
-        context, "compress_and_extract",
+        _engine, "compress_and_extract",
         lambda old, batch: {"summary": "新摘要", "extracted_schemas": [], "extracted_preferences": []},
     )
     ctx, updates, batch = context.build_context(
@@ -83,7 +89,7 @@ def test_build_context_no_recompress_when_no_new_batch(monkeypatch):
         called["n"] += 1
         return {"summary": "x", "extracted_schemas": [], "extracted_preferences": []}
 
-    monkeypatch.setattr(context, "compress_and_extract", _spy)
+    monkeypatch.setattr(_engine, "compress_and_extract", _spy)
     # 22 条，但 digest_msg_count=12 已 == old_count(12) → 不压缩
     ctx, updates, batch = context.build_context(
         messages=_msgs(22), digest="已有摘要", digest_msg_count=12, digest_version=1,
@@ -98,7 +104,7 @@ def test_build_context_no_recompress_when_no_new_batch(monkeypatch):
 
 def test_build_context_archives_l2_5_at_interval(monkeypatch):
     monkeypatch.setattr(
-        context, "compress_and_extract",
+        _engine, "compress_and_extract",
         lambda old, batch: {"summary": "S" * 100, "extracted_schemas": [], "extracted_preferences": []},
     )
     # digest_version=4 → 压缩后 =5，命中 L2_ARCHIVE_INTERVAL → 归档 L2.5
@@ -115,7 +121,7 @@ def test_build_context_archives_l2_5_at_interval(monkeypatch):
 
 def test_compress_caps_summary_to_800(monkeypatch):
     monkeypatch.setattr(
-        context, "call_llm",
+        _engine, "call_llm",
         lambda *a, **k: json.dumps({"summary": "x" * 1000}, ensure_ascii=False),
     )
     result = context.compress_and_extract(None, _msgs(5))
@@ -128,7 +134,7 @@ def test_compress_passes_through_facts(monkeypatch):
         "extracted_schemas": [{"type": "field_mapping", "user_term": "销售额", "db_field": "total_amount"}],
         "extracted_preferences": ["用户偏好柱状图"],
     }
-    monkeypatch.setattr(context, "call_llm", lambda *a, **k: json.dumps(payload, ensure_ascii=False))
+    monkeypatch.setattr(_engine, "call_llm", lambda *a, **k: json.dumps(payload, ensure_ascii=False))
     result = context.compress_and_extract("旧", _msgs(3))
     assert result["summary"] == "摘要"
     assert result["extracted_schemas"][0]["db_field"] == "total_amount"
@@ -136,7 +142,7 @@ def test_compress_passes_through_facts(monkeypatch):
 
 
 def test_compress_bad_json_falls_back_empty(monkeypatch):
-    monkeypatch.setattr(context, "call_llm", lambda *a, **k: "这不是 JSON")
+    monkeypatch.setattr(_engine, "call_llm", lambda *a, **k: "这不是 JSON")
     result = context.compress_and_extract(None, _msgs(3))
     assert result["summary"] == ""
     assert result["extracted_schemas"] == []

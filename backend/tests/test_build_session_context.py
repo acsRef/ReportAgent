@@ -3,6 +3,10 @@
 存储/LLM 全部 mock，验证：无压缩路径不落库；压缩路径回写 digest 并把抽取事实
 存进 L3；sql_graph._plan/_generate_sql 与 requirement_parser 会把 conversation_context
 前置进 prompt。
+
+P3 Task 4 修订：facade `app.context.build_session_context` 内部转发到
+`_engine._prepare_conversation_context`；其 compress_and_extract 走 _engine module
+globals，monkeypatch 必须打到 `_engine`。
 """
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ import pytest
 
 from app import context
 from app.agent import requirement_parser, sql_graph
+from app.context import _engine
 from app.infra.checkpoint.session import session_manager
 from app.infra.conversation import repository as conv_repo
 from app.infra.memory import user_memory as um_mod
@@ -68,7 +73,7 @@ async def test_build_session_context_compress_persists_and_saves_l3(monkeypatch)
     monkeypatch.setattr(session_manager, "save_context_state", fake_save_ctx)
     monkeypatch.setattr(um_mod.UserMemory, "save", fake_um_save)
     monkeypatch.setattr(
-        context, "compress_and_extract",
+        _engine, "compress_and_extract",
         lambda old, batch: {
             "summary": "摘要X",
             "extracted_schemas": [{"type": "field_mapping", "user_term": "销售额", "db_field": "total_amount"}],
