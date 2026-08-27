@@ -163,7 +163,7 @@ Agent 永远看不到的工具面（RAG 内部机制，禁止出现在任何 too
 |---|---|
 | `MCP_TIMEOUT` | 重试预算内 retry（固定 2 次）；仍败 → 显式 unavailable 上抛，不伪装空结果 |
 | `MCP_UNAVAILABLE`（连接/握手失败） | flag 未锁 → fallback；flag 锁定 → 显式上抛 |
-| `MCP_INVALID_RESPONSE`（非 JSON/结构漂移） | 不 fallback（重试同结果）；记 trace + 显式错误 |
+| `MCP_INVALID_RESPONSE`（非 JSON/结构漂移） | 不 retry（_call_with_retry 仅 MCP_TIMEOUT 触发） + 不 fallback（dispatcher 显式分支）→ 记 trace + 显式错误 |
 | `EMPTY_RESULT`（正常零命中） | 合法返回 `[]` + note，与 unavailable 严格区分 |
 | quality insufficient | P2 不做质量判断（属 P14 Evaluation），仅在 doc 里声明非本期范围 |
 

@@ -117,7 +117,8 @@ def _patch_fallback(monkeypatch, return_value) -> _CountingCall:
             "UNAVAILABLE × flag ON",
         ),
         # ── INVALID_RESPONSE × {flag off, on} ──
-        # plan 决策 4：不 fallback（重试同结果）；两态都是显式上抛。
+        # plan 决策 4：不 retry（_call_with_retry 仅 MCP_TIMEOUT 触发）+ 不 fallback
+        # （dispatcher 显式分支直接 raise）→ 两态都是显式上抛。
         # 注意：与 UNAVAILABLE 不同——flag OFF 也不走 HTTP fallback（rag_schema:141
         # 显式分支「INVALID 直接 raise」，不读 flag）。
         (
