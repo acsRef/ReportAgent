@@ -26,6 +26,7 @@
 | Plan | 主题 | 备注 |
 |---|---|---|
 | [2026-08-26-p2-rag-mcp-boundary.md](2026-08-26-p2-rag-mcp-boundary.md) | P2 实施：RAG/MCP 边界——泛化 stdio MCP client（吸收 mcp_faq_client 模式）+ schema/字典/FAQ 三通道正路切 MCP、HTTP 直连降级 flag 管控 fallback + 五分类失败语义（禁静默空数组）+ 四类测试钉子（import/allowlist/schema/failure）+ 第六份架构文档 mcp-contract.md；PHASE2_MCP_ONLY flag，fallback 删除留 Phase 5 | 回链 [refactor-master-freeze](2026-08-25-refactor-master-freeze.md) §二/§八/§十八 P2；**Task 1+2+3 已落地 master（aa73a51 / bc5159c / 7baa3d0），4 轮 review 全部消化；Task 4/5 待开** |
+| [2026-08-29-p3-p4a-p4b-cumulative-review-and-fixes.md](2026-08-29-p3-p4a-p4b-cumulative-review-and-fixes.md) | P3+P4a+P4b cumulative review 修复清单——5 维度并行 review 出 14 findings（去重）：5 必修（UserMemory promote memory_type / migrate_checkpoint partial v1 / memory/semantic+query.py thin views / persistence migration 钉子 / SelectiveRecallPolicy 4 触发负例）+ 6 中修 + 3 可延后；11 commit 序列建议；新对话专用 | 回链 [P3](2026-08-27-p3-context-runtime.md) + [P4a](2026-08-27-p4a-conversation-memory-decouple.md) + [P4b](2026-08-27-p4b-memory-lifecycle-selective-recall.md)；**614 passed / 0 failed 基线；review 已完成，修复待下一对话** |
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
 ## 已完成
