@@ -1,10 +1,10 @@
 # P3 实施：Context Runtime 骨架 + State 五块归位（compatibility-first）
 
-> **状态**: 进行中
+> **状态**: 已完成
 > **上游**: [2026-08-25-refactor-master-freeze.md](../plans/2026-08-25-refactor-master-freeze.md) §六 / [state-contract.md](../architecture/state-contract.md) / [memory-architecture.md](../architecture/memory-architecture.md)
 > **接续**: P2 实施 ([2026-08-26-p2-rag-mcp-boundary.md](2026-08-26-p2-rag-mcp-boundary.md)，master 7baa3d0，475+ passed)
-> **后续**: P4 实施（Selective Recall 策略 + Semantic/Query/Conversation 底座 + Memory structured records 解耦）
-> **本次落地日期**: 2026-08-27
+> **后续**: P4 已落地（[P4a](2026-08-27-p4a-conversation-memory-decouple.md) + [P4b](2026-08-27-p4b-memory-lifecycle-selective-recall.md)，614 passed / 0 failed）
+> **本次落地日期**: 2026-08-27 → 2026-08-29
 > **Review v1 决议**: 已消化第一轮 review 的 P0×2 + P1×2 + 7 其他项 + checkpoint (γ) 落地路径
 
 ## Context（为什么做）

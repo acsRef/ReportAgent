@@ -1,10 +1,10 @@
 # P4b 实施：Memory lifecycle + structured recall + SelectiveRecallPolicy
 
-> **状态**: 进行中
+> **状态**: 已完成
 > **上游**: [伞形 plan](2026-08-25-refactor-master-freeze.md) §六 / [memory-architecture.md](../architecture/memory-architecture.md) §二/§三/§五/§六/§七 / [P4a plan](2026-08-27-p4a-conversation-memory-decouple.md) 附录 A
 > **接续**: P4a（分支 `p3` 续做，597 passed；conversation 已解耦，recall API 未动）
-> **后续**: P4c（6 graph caller 翻转接入 ContextRuntime + assembler Filter/Budget + golden before/after）
-> **落地日期**: 2026-08-27
+> **后续**: P4c（6 graph caller 翻转接入 ContextRuntime + assembler Filter/Budget + golden before/after）——见 §十四「未做」
+> **落地日期**: 2026-08-27 → 2026-08-29
 
 ## Context（为什么做）
 

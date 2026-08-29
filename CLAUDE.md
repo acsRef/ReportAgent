@@ -101,7 +101,7 @@ User → Security Guard → Context Runtime
 
 State 五块拆分与字段所有权：RequestState / RequirementState / ExecutionState / ReportState / RuntimeState。字段定义、immutable 规则、单一写者、生命周期见 [state-contract.md](docs/architecture/state-contract.md)。
 
-> 现状：拆分未执行，现役各图 state 是五块的子集；P3 落地（注意 checkpoint 兼容风险）。
+> 现状：P3 已落（State 5 块 TypedDict + checkpoint adapter v1↔v2 + MigrationError + graph `(γ)` 单点注入，p3 分支 614 passed / 0 failed）。后续按 State 拆分执行属工程化任务（无新设计决策），归在 P11 frontend 收尾前的小重构。
 
 ## 6. Memory Architecture
 
@@ -109,7 +109,7 @@ State 五块拆分与字段所有权：RequestState / RequirementState / Executi
 
 全部细则见 [memory-architecture.md](docs/architecture/memory-architecture.md)。
 
-> 现状：context.py 四层底座 + infra/memory 在位；Selective Recall 决策与 semantic_entry 扩展 P4。
+> 现状：P3/P4a/P4b 已落（p3 分支 614 passed / 0 failed）。context.py 四层底座 + infra/memory 在位；Conversation Memory 解耦至 `app/memory/` domain 层（P4a）；lifecycle 列 + active-only 召回过滤 + 固定 confidence 规则 + `recall_structured()` + `SelectiveRecallPolicy`（P4b）。P4c：graph caller 翻转接入 ContextRuntime + assembler Filter/Budget + golden before/after。
 
 ## 7. Tool & MCP Contract
 
