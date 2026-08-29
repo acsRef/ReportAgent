@@ -65,6 +65,7 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "Do NOT invent tables/columns（任何引用的表/字段都必须在可用表结构或字典里）。"
         "Do NOT fabricate query results（绝不预先生成数字）。"
         "Do NOT assume unavailable schema（未知字段走 assumption 走 confirmation）。"
+        "Do NOT call search_schema when schema is already known（本步骤 schema 已注入）。"
         "Do NOT generate SQL（SQL 在 Execution 阶段）。"
     ),
 }

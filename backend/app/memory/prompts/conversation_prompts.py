@@ -50,6 +50,7 @@ CONVERSATION_SUMMARIZE_V1: dict[str, str] = {
         "Do NOT invent tables/columns（不要为不在对话中的字段编 db_field）。"
         "Do NOT fabricate query results（不在摘要里写具体数字/趋势）。"
         "Do NOT assume unavailable schema（用户没提到的字段映射不要写）。"
+        "Do NOT call search_schema when schema is already known（本步骤不需要表结构）。"
         "Do NOT extract preferences that the user did not state explicitly."
         "Do NOT bypass max_chars limit——超长要主动裁剪。"
     ),

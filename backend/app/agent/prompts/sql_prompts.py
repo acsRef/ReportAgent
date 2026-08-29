@@ -228,7 +228,7 @@ SQL_GENERATE_V1: dict[str, str] = {
     "tool_policy": (
         "表名/列名以「可用表结构」里真实名称为准——FAQ 历史案例与示例 SQL 仅作参考，"
         "若与可用表结构冲突以可用表结构为准。"
-        "不要自己脑补表/字段。"
+        "schema 已注入 (来自 schema_text),不要自己脑补表/字段,也不要重复调 search_schema。"
     ),
     "output_schema": (
         "规则:"
