@@ -51,6 +51,7 @@ from app.context.decision import (  # noqa: E402
     ContextDecisionPolicy,
     LegacyFallbackPolicy,
     RecallDecision,
+    SelectiveRecallPolicy,
 )
 from app.context.policy import (  # noqa: E402
     AgentContextPolicy,
@@ -80,6 +81,7 @@ __all__ = [
     # 新 API
     "ContextRuntime", "context_runtime",
     "ContextDecisionPolicy", "RecallDecision", "LegacyFallbackPolicy",
+    "SelectiveRecallPolicy",
     "AgentContextPolicy", "ContextPolicyResolver",
     "ContextBundle", "RecallItem", "ContextAssembler",
 ]

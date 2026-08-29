@@ -88,20 +88,26 @@ class TestNewAPIReExports:
 
 
 class TestDeprecationWarningOnLegacyImport:
-    def test_facade_emits_deprecation_warning(self):
-        # 导入 app.context 时触发 DeprecationWarning（提示新代码优先 runtime）
-        import importlib
-        import sys
-        # 强制重新加载模块以触发 warning
-        sys.modules.pop("app.context", None)
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            importlib.import_module("app.context")
-        # 至少有一个 DeprecationWarning
-        dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-        assert dep, f"未触发 DeprecationWarning；实得 {[w.category for w in caught]}"
-        # 重新清理 sys.modules 让其他 test 仍能 import
-        sys.modules.pop("app.context", None)
+    def test_facade_source_wires_deprecation_warning(self):
+        # 钉子目的：facade 顶部必须挂 DeprecationWarning 提示新代码用 runtime。
+        # 不用 sys.modules.pop + reimport 触发——那会派生第二个 app.context.runtime
+        # 模块对象，令 ContextRuntime.build.__globals__ 与后续测试 monkeypatch 目标
+        # 分离（跨测试污染）。改为对 __init__.py 源码做 AST 检查：确认存在
+        # warnings.warn(..., DeprecationWarning, ...) 调用。零 reload、零污染。
+        import ast
+        from pathlib import Path
+        import app.context as _ctx_pkg
+
+        src = Path(_ctx_pkg.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        warns_dep = False
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "warn"):
+                for arg in node.args:
+                    if isinstance(arg, ast.Name) and arg.id == "DeprecationWarning":
+                        warns_dep = True
+        assert warns_dep, "app.context facade 未在模块顶部挂 warnings.warn(..., DeprecationWarning)"
 
 
 # --- review #10 关键钉子：facade 不引入 recall 副作用 ---------------------

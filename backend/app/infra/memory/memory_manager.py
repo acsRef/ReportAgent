@@ -95,6 +95,12 @@ class MemoryManager:
         memory_type: str = "insight",
         importance: float = 0.3,
         source: str = "",
+        *,
+        scope: str = "user",
+        status: str = "active",
+        confidence: str = "medium",
+        session_id: str | None = None,
+        expires_at=None,
     ) -> int:
         return await self._user_memory.save(
             user_id=user_id,
@@ -102,7 +108,18 @@ class MemoryManager:
             memory_type=memory_type,
             importance_score=importance,
             source=source,
+            scope=scope, status=status, confidence=confidence,
+            session_id=session_id, expires_at=expires_at,
         )
 
     async def record_query_failure(self, query_id: int) -> None:
         await self._query_memory.record_failure(query_id)
+
+    async def supersede_stable_preference(self, user_id: str, content: str) -> int:
+        """§六：新 active stable 写入前，把同 user 的其他 active stable_preference
+        置 superseded（新旧偏好冲突时旧 → superseded，避免多 active 互矛盾）。
+
+        V1 按 content 精确匹配（同一条偏好被显式重申时不产生双 active）；
+        语义相似度 supersede 属后期（P4b 不做）。返回受影响行数。
+        """
+        return await self._user_memory.supersede_stable_preferences(user_id, content)

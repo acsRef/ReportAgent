@@ -221,6 +221,22 @@ class UserMemory:
                 entry_id,
             )
 
+    async def supersede_stable_preferences(self, user_id: str, content: str) -> int:
+        """§六：把该 user 其他 active stable_preference（同 content）置 superseded。
+
+        V1 仅同 content 精确冲突处理（显式重申同一偏好时避免双 active）；
+        语义冲突 supersede 属后期。
+        """
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            res = await conn.execute(
+                "UPDATE memory.semantic_entry SET status='superseded', updated_at=NOW() "
+                "WHERE user_id=$1 AND memory_type='stable_preference' "
+                "AND status='active' AND content=$2",
+                user_id, content,
+            )
+        return int(str(res).split()[-1]) if res else 0
+
     async def get_user_preferences(
         self, user_id: str, top_k: Optional[int] = None
     ) -> list[RankedMemory]:

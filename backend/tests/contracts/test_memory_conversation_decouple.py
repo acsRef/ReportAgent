@@ -66,7 +66,7 @@ async def test_remember_conversation_facts_delegates_to_manager(monkeypatch):
     saved: list[dict] = []
 
     async def fake_remember(self, user_id, content, memory_type="insight",
-                            importance=0.3, source=""):
+                            importance=0.3, source="", **lifecycle):
         saved.append({"content": content, "importance": importance,
                       "memory_type": memory_type, "source": source})
         return 1
