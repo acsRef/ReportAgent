@@ -64,32 +64,22 @@ def test_unset_env_degrades_gracefully(monkeypatch):
     import app.tools.interface_dict_tools as mod
 
     monkeypatch.delenv("RAGENT_URL", raising=False)
-    # MCP 失败 → fallback 到 HTTP；HTTP 也因 RAGENT_URL 为空返回未配置错
     _force_mcp_unavailable(monkeypatch, mod)
     mod._token_cache.clear()
 
     out = json.loads(search_interface_dictionary.invoke({"query": "销售额"}))
-    assert "未配置" in out["error"]
+    assert "MCP_UNAVAILABLE" in out["error"]
 
 
 def test_happy_path_serializes_matches(monkeypatch, dict_env):
     from app.tools.interface_dict_tools import search_interface_dictionary
     import app.tools.interface_dict_tools as mod
 
-    _force_mcp_unavailable(monkeypatch, mod)
-
-    def fake_post(url, **kw):
-        return _Resp(200, {"access_token": "t"})
-
-    def fake_request(method, url, **kw):
-        if url.endswith("/api/v1/kb"):
-            return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
-        return _Resp(200, {"items": [{"chunk_id": "c1", "document_id": "d1",
-                                      "text": "total_amount 销售金额", "title": "dict-table_public_fact_sales.md",
-                                      "section_path": "", "score": 0.8}], "degraded": False})
-
-    monkeypatch.setattr(mod.httpx, "post", fake_post)
-    monkeypatch.setattr(mod.httpx, "request", fake_request)
+    _mock_mcp_success(monkeypatch, mod, matches=[
+        {"chunk_id": "c1", "document_id": "d1",
+         "text": "total_amount 销售金额", "title": "dict-table_public_fact_sales.md",
+         "section_path": "", "score": 0.8},
+    ])
     mod._token_cache.clear()
 
     out = json.loads(search_interface_dictionary.invoke({"query": "total_amount 是什么", "top_k": 3}))
@@ -103,23 +93,14 @@ def test_data_source_type_marked_stream_for_websocket(monkeypatch, dict_env):
     from app.tools.interface_dict_tools import search_interface_dictionary
     import app.tools.interface_dict_tools as mod
 
-    _force_mcp_unavailable(monkeypatch, mod)
-
-    def fake_post(url, **kw): return _Resp(200, {"access_token": "t"})
-    def fake_request(method, url, **kw):
-        if url.endswith("/api/v1/kb"):
-            return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
-        return _Resp(200, {"items": [
-            {"chunk_id": "c1", "document_id": "d1", "text": "amt = 实付金额",
-             "title": "market-push心跳与on_message字段说明", "section_path": "接口字典: market-push > 消息 `heartbeat` 字段",
-             "score": 0.8},
-            {"chunk_id": "c2", "document_id": "d2", "text": "total_amount = 销售金额",
-             "title": "dict-table_public_fact_sales.md", "section_path": "表 `public.fact_sales` > 字段",
-             "score": 0.7},
-        ], "degraded": False})
-
-    monkeypatch.setattr(mod.httpx, "post", fake_post)
-    monkeypatch.setattr(mod.httpx, "request", fake_request)
+    _mock_mcp_success(monkeypatch, mod, matches=[
+        {"chunk_id": "c1", "document_id": "d1", "text": "amt = 实付金额",
+         "title": "market-push心跳与on_message字段说明", "section_path": "接口字典: market-push > 消息 `heartbeat` 字段",
+         "score": 0.8},
+        {"chunk_id": "c2", "document_id": "d2", "text": "total_amount = 销售金额",
+         "title": "dict-table_public_fact_sales.md", "section_path": "表 `public.fact_sales` > 字段",
+         "score": 0.7},
+    ])
     mod._token_cache.clear()
 
     out = json.loads(search_interface_dictionary.invoke({"query": "amt", "top_k": 5}))
@@ -130,36 +111,19 @@ def test_data_source_type_marked_stream_for_websocket(monkeypatch, dict_env):
 
 def test_unreachable_returns_error_text(monkeypatch, dict_env):
     from app.tools.interface_dict_tools import search_interface_dictionary
-    import httpx as real_httpx
     import app.tools.interface_dict_tools as mod
 
     _force_mcp_unavailable(monkeypatch, mod)
-
-    def boom(*a, **kw):
-        raise real_httpx.ConnectError("refused")
-
-    monkeypatch.setattr(mod.httpx, "post", boom)
     mod._token_cache.clear()
     out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
-    assert "不可达" in out["error"]
+    assert "MCP_UNAVAILABLE" in out["error"]
 
 
 def test_empty_result_semantics(monkeypatch, dict_env):
     from app.tools.interface_dict_tools import search_interface_dictionary
     import app.tools.interface_dict_tools as mod
 
-    _force_mcp_unavailable(monkeypatch, mod)
-
-    def fake_post(url, **kw):
-        return _Resp(200, {"access_token": "t"})
-
-    def fake_request(method, url, **kw):
-        if url.endswith("/api/v1/kb"):
-            return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
-        return _Resp(200, {"items": [], "degraded": False})
-
-    monkeypatch.setattr(mod.httpx, "post", fake_post)
-    monkeypatch.setattr(mod.httpx, "request", fake_request)
+    _mock_mcp_success(monkeypatch, mod, matches=[])
     mod._token_cache.clear()
     out = json.loads(search_interface_dictionary.invoke({"query": "不存在的字段"}))
     assert out["matches"] == []
@@ -167,60 +131,29 @@ def test_empty_result_semantics(monkeypatch, dict_env):
 
 
 def test_second_401_returns_login_failed_text(monkeypatch, dict_env):
-    """重登后仍 401（账号被锁等）→ 登录失败文案 + 原始响应体，而非通用 HTTP 401。
-
-    终审 I-3：对齐 ragent-py 侧 6d31a80 的 original_detail 保留模式。
-    """
+    """P5 起 HTTP 401/403 路径已不再经 fallback，此用例保留为 MCP 错误路径验证。"""
     from app.tools.interface_dict_tools import search_interface_dictionary
     import app.tools.interface_dict_tools as mod
 
     _force_mcp_unavailable(monkeypatch, mod)
-
-    def fake_post(url, **kw):
-        return _Resp(200, {"access_token": "t"})
-
-    def fake_request(method, url, **kw):
-        if url.endswith("/api/v1/kb"):
-            return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
-        return _Resp(401, {"detail": "account locked"})  # 两次 retrieve 都 401
-
-    monkeypatch.setattr(mod.httpx, "post", fake_post)
-    monkeypatch.setattr(mod.httpx, "request", fake_request)
     mod._token_cache.clear()
     mod._kb_id_cache.clear()
 
     out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
-    assert "登录失败" in out["error"], f"未翻译为登录失败文案: {out!r}"
-    assert "account locked" in out["error"], f"未保留原始响应诊断体: {out!r}"
+    assert "MCP_UNAVAILABLE" in out["error"]
 
 
 def test_second_403_returns_permission_text(monkeypatch, dict_env):
-    """重登后 403 → 无权读取文案（I-3 的 status 分支）。"""
+    """P5 起 HTTP 403 路径已不再经 fallback，此用例保留为 MCP 错误路径验证。"""
     from app.tools.interface_dict_tools import search_interface_dictionary
     import app.tools.interface_dict_tools as mod
 
     _force_mcp_unavailable(monkeypatch, mod)
-
-    calls = {"retrieve": 0}
-
-    def fake_post(url, **kw):
-        return _Resp(200, {"access_token": "t"})
-
-    def fake_request(method, url, **kw):
-        if url.endswith("/api/v1/kb"):
-            return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
-        calls["retrieve"] += 1
-        return _Resp(401, {"detail": "expired"}) if calls["retrieve"] == 1 \
-            else _Resp(403, {"detail": "kb forbidden"})
-
-    monkeypatch.setattr(mod.httpx, "post", fake_post)
-    monkeypatch.setattr(mod.httpx, "request", fake_request)
     mod._token_cache.clear()
     mod._kb_id_cache.clear()
 
     out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
-    assert "无权读取" in out["error"], f"未翻译为无权读取文案: {out!r}"
-    assert "kb forbidden" in out["error"]
+    assert "MCP_UNAVAILABLE" in out["error"]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -272,30 +205,15 @@ class TestSearchInterfaceDictDispatcher:
         )
 
     def test_fallback_to_http_on_mcp_unavailable(self, monkeypatch, dict_env):
-        """MCP UNAVAILABLE + flag 未锁 → HTTP fallback（既有契约）。"""
+        """P5 起不再 HTTP fallback，MCP UNAVAILABLE 直接返回 MCP 错误。"""
         from app.tools.interface_dict_tools import search_interface_dictionary
         import app.tools.interface_dict_tools as mod
 
         _force_mcp_unavailable(monkeypatch, mod)
-
-        def fake_post(url, **kw):
-            return _Resp(200, {"access_token": "t"})
-
-        def fake_request(method, url, **kw):
-            if url.endswith("/api/v1/kb"):
-                return _Resp(200, [{"id": "kb-9", "name": "数据字典"}])
-            return _Resp(200, {"items": [{
-                "chunk_id": "c1", "document_id": "d1",
-                "text": "total_amount 销售金额", "title": "dict-table_public_fact_sales.md",
-                "section_path": "", "score": 0.8,
-            }], "degraded": False})
-
-        monkeypatch.setattr(mod.httpx, "post", fake_post)
-        monkeypatch.setattr(mod.httpx, "request", fake_request)
         mod._token_cache.clear()
 
         out = json.loads(search_interface_dictionary.invoke({"query": "total_amount"}))
-        assert out["matches"][0]["text"].startswith("total_amount")
+        assert "MCP_UNAVAILABLE" in out["error"]
 
     def test_flag_locked_returns_mcp_error_json(self, monkeypatch):
         """flag 锁定 → MCP UNAVAILABLE → 返回 JSON error 含 MCP_<CODE>。"""
@@ -303,16 +221,13 @@ class TestSearchInterfaceDictDispatcher:
         import app.tools.interface_dict_tools as mod
 
         _force_mcp_unavailable(monkeypatch, mod)
-        monkeypatch.setattr(mod, "_fallback_allowed", lambda: False)
 
         out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
         assert "error" in out
-        assert "MCP_UNAVAILABLE" in out["error"], (
-            f"flag 锁定时应把 MCP code 写进既有 error 形状: {out!r}"
-        )
+        assert "MCP_UNAVAILABLE" in out["error"]
 
     def test_invalid_response_returns_error_json_without_fallback(self, monkeypatch):
-        """MCP INVALID_RESPONSE → 显式错误（不 fallback；fallback 放行也无济于事）。"""
+        """MCP INVALID_RESPONSE → 显式错误。"""
         from app.tools.interface_dict_tools import search_interface_dictionary
         import app.tools.interface_dict_tools as mod
 
@@ -320,18 +235,10 @@ class TestSearchInterfaceDictDispatcher:
             monkeypatch, mod,
             side_effect=MCPBoundaryError(MCPErrorCode.MCP_INVALID_RESPONSE, "bad json"),
         )
-        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
-        http_called = []
-
-        monkeypatch.setattr(
-            mod.httpx, "post",
-            lambda *a, **kw: (http_called.append(1) or _Resp(200, {"access_token": "t"})),
-        )
 
         out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
         assert "error" in out
         assert "MCP_INVALID_RESPONSE" in out["error"]
-        assert not http_called, "INVALID_RESPONSE 不应触发 HTTP fallback"
 
     def test_mcp_empty_matches_returns_empty_with_note(self, monkeypatch):
         """MCP 合法空命中 → matches=[] + note（与 HTTP 路径契约一致）。"""
@@ -362,7 +269,6 @@ class TestMcpResponseSchemaValidation:
         fake = MagicMock()
         fake.call_tool.return_value = {"matches": [{"score": 0.9, "title": "x"}]}
         monkeypatch.setattr(mod, "get_rag_mcp_client", lambda: fake)
-        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
 
         out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
         assert "error" in out
@@ -375,22 +281,19 @@ class TestMcpResponseSchemaValidation:
         fake = MagicMock()
         fake.call_tool.return_value = {"matches": [{"text": "hello", "title": "x"}]}
         monkeypatch.setattr(mod, "get_rag_mcp_client", lambda: fake)
-        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
 
         out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
         assert "error" in out
         assert "MCP_INVALID_RESPONSE" in out["error"]
 
     def test_non_mcp_exception_propagates_without_fallback(self, monkeypatch):
-        """非 MCPBoundaryError（真程序 bug）→ 向上抛，不走 HTTP fallback（review 第 2 轮 P1/P2）。"""
+        """非 MCPBoundaryError（真程序 bug）→ 向上抛。"""
         from app.tools.interface_dict_tools import search_interface_dictionary
         import app.tools.interface_dict_tools as mod
 
         fake = MagicMock()
-        # RuntimeError 不是 MCPBoundaryError，按 faq_tools 一致语义：向上抛
         fake.call_tool.side_effect = RuntimeError("parse bug not related to MCP boundary")
         monkeypatch.setattr(mod, "get_rag_mcp_client", lambda: fake)
-        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
 
         with pytest.raises(RuntimeError, match="parse bug"):
             search_interface_dictionary.invoke({"query": "x"})
@@ -402,7 +305,6 @@ class TestMcpResponseSchemaValidation:
         fake = MagicMock()
         fake.call_tool.return_value = {"matches": "not a list"}
         monkeypatch.setattr(mod, "get_rag_mcp_client", lambda: fake)
-        monkeypatch.setattr(mod, "_fallback_allowed", lambda: True)
 
         out = json.loads(search_interface_dictionary.invoke({"query": "x"}))
         assert "error" in out

@@ -814,11 +814,12 @@ class TestResolvePhase2Flag:
         assert _resolve_phase2_flag() is False
 
     def test_app_env_dev_default_false(self, monkeypatch):
+        """P5 起默认 ON（停止 fallback），APP_ENV=development 也不再 false。"""
         monkeypatch.delenv("REPORTAGENT_E2E", raising=False)
         monkeypatch.delenv("PHASE2_MCP_ONLY", raising=False)
         monkeypatch.setenv("APP_ENV", "development")
-        assert _resolve_phase2_flag() is False
-        assert _fallback_allowed() is True
+        assert _resolve_phase2_flag() is True
+        assert _fallback_allowed() is False
 
     def test_app_env_production_default_true(self, monkeypatch):
         monkeypatch.delenv("REPORTAGENT_E2E", raising=False)

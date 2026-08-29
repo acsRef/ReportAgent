@@ -9,12 +9,10 @@ chunk 文本格式实测：
     ...
 本模块把检索到的 chunk 解析回结构化 {table_name, description, columns}。
 
-P2 RAG/MCP Boundary 改造（docs/plans/2026-08-26-p2-rag-mcp-boundary.md）：
-  - search_tables / get_table_ddl 正路走 MCP `search_dictionary`，HTTP 直连降级为
-    flag-gated fallback（PHASE2_MCP_ONLY 未锁 + UNAVAILABLE 时走 _retrieve_dict_http）；
-    MCP_INVALID_RESPONSE → 不 retry（_call_with_retry 仅 MCP_TIMEOUT 触发重试）
-    + 不 fallback（dispatcher 显式分支直接 raise）。
-  - list_tables 无 MCP 等价工具，仍走 HTTP 直连（_list_dict_docs）。
+P5 收口（docs/plans/2026-08-29-p5-tool-mcp-contract.md）：
+  - search_tables / get_table_ddl 仅走 MCP `search_dictionary`，不再 HTTP fallback；
+    P2 的 flag-gated fallback 已删除（PHASE2_MCP_ONLY 默认 ON）。
+  - list_tables 无 MCP 等价工具，仍走 HTTP 直连（_list_dict_docs）——P5 豁免。
   - 失败路径把 MCPBoundaryError 的 code/detail 写进 log，工具契约对 Agent 保持不变
     （search_tables 仍返回 []，get_table_ddl 仍返回 None）。
 """
@@ -124,32 +122,25 @@ def _retrieve_dict_http(query: str, top_k: int) -> list[dict]:
 
 
 def _retrieve_dict(query: str, top_k: int) -> list[dict]:
-    """字典 KB 检索 dispatcher：MCP-first + flag-gated HTTP fallback。
+    """字典 KB 检索 dispatcher：P5 起默认 MCP-only，fallback 仅显式 flag OFF 时可达（测试）。
 
-    行为：
+    行为（P5 收口：PHASE2_MCP_ONLY 默认 ON）：
       - MCP 成功 → 返回 MCP items
-      - MCPBoundaryError(UNAVAILABLE) + _fallback_allowed() → HTTP fallback
-      - MCPBoundaryError(UNAVAILABLE) + flag 锁定 → 上抛（调用方按各自契约处理）
-      - MCPBoundaryError(INVALID_RESPONSE) → 上抛（不 retry 不 fallback）
+      - MCPBoundaryError(INVALID_RESPONSE) → 直接上抛
+      - MCPBoundaryError(UNAVAILABLE/TIMEOUT) + _fallback_allowed() → HTTP fallback（仅测试）
+      - MCPBoundaryError + flag ON → 上抛
 
     Raises:
-        MCPBoundaryError: UNAVAILABLE flag-locked 或 INVALID_RESPONSE（调用方按工具
-            契约返回 [] 或 None；其它 Exception 走通用 except）。
+        MCPBoundaryError: 上抛给调用方按工具契约返回 [] 或 None
     """
     try:
         return _retrieve_dict_via_mcp(query, top_k)
     except MCPBoundaryError as exc:
         if exc.code.value == "MCP_INVALID_RESPONSE":
-            # 协议错：_call_with_retry 仅 MCP_TIMEOUT 触发重试 + dispatcher
-            # 不走 HTTP fallback（重试同结果也不值得）→ 直接上抛。
             raise
         if not _fallback_allowed():
-            # flag 锁定：不走 HTTP fallback
             raise
-        logger.warning(
-            "MCP unavailable, falling back to HTTP: %s [%s]",
-            exc.detail, exc.code.value,
-        )
+        logger.warning("MCP unavailable, falling back to HTTP: %s [%s]", exc.detail, exc.code.value)
         return _retrieve_dict_http(query, top_k)
 
 

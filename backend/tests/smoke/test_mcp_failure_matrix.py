@@ -49,8 +49,12 @@ class _CountingCall:
 
 
 def _set_flag(monkeypatch, on: bool) -> None:
-    """PHASE2_MCP_ONLY 锁定时 `_fallback_allowed()` 返回 False。"""
-    monkeypatch.setattr(rag_schema, "_fallback_allowed", lambda: not on)
+    """PHASE2_MCP_ONLY 锁定时 `_fallback_allowed()` 返回 False（P5 起 rag_schema 已无本符号，兼容 patch mcp_client）。"""
+    from app.tools import mcp_client as _mc
+
+    monkeypatch.setattr(_mc, "_fallback_allowed", lambda: not on)
+    if hasattr(rag_schema, "_fallback_allowed"):
+        monkeypatch.setattr(rag_schema, "_fallback_allowed", lambda: not on)
 
 
 def _patch_transport(monkeypatch, *, return_value=None, raise_value=None) -> _CountingCall:
@@ -79,8 +83,7 @@ def _patch_fallback(monkeypatch, return_value) -> _CountingCall:
     "expect_error_code,expect_return,cell_id",
     [
         # ── TIMEOUT × {flag off, on} ──
-        # plan 决策 4：MCP_TIMEOUT 重试预算内 retry（固定 2 次，宪法 §11）；
-        # 仍败 → flag off 走 fallback / flag on 显式 unavailable 上抛。
+        # P5 仍保留 fallback 代码但默认 ON；显式 flag OFF 时 TIMEOUT 仍走 fallback（测试）；ON 时上抛。
         (
             False,
             MCPBoundaryError(MCPErrorCode.MCP_TIMEOUT, "boom"),
@@ -98,8 +101,7 @@ def _patch_fallback(monkeypatch, return_value) -> _CountingCall:
             "TIMEOUT × flag ON",
         ),
         # ── UNAVAILABLE × {flag off, on} ──
-        # 连接/握手失败；plan 决策 4：不 retry（仅 TIMEOUT 触发），
-        # flag off 走 fallback，flag on 显式上抛。
+        # P5 保留 fallback；flag OFF 走 fallback，ON 上抛。
         (
             False,
             MCPBoundaryError(MCPErrorCode.MCP_UNAVAILABLE, "boom"),

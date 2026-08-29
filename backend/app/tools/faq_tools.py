@@ -144,18 +144,16 @@ def search_faq(query: str, top_k: int = 3) -> str:
     和常见分组/排序模板都在这里。
     不要用来找数据表——用 search_tables；不要用来查业务数据行——此工具只读 FAQ 知识库。
 
-    P2：MCP-first + catch 收紧（Q6 决议）。
-      - MCP 成功 → 走 MCP 路径
-      - MCP_INVALID_RESPONSE → 返回 {"error": "MCP_INVALID_RESPONSE: ..."}
-        （不 fallback；决策 4：协议错重试同结果，flag 状态无关）
-      - MCP_UNAVAILABLE + flag 未锁 → 降级本地 seed（既有契约）
-      - MCP_UNAVAILABLE + flag 锁定 → 返回 {"error": "MCP_UNAVAILABLE: ..."}
-      - 其它 Exception（非 MCPBoundaryError，如 parse bug）→ 向上抛，让上游记录 + 降级
+    P5 仍保留本地 fallback 代码但默认不走（PHASE2_MCP_ONLY 默认 ON）；仅测试显式 flag OFF 时可达。
+      - MCP 成功 → 返回 MCP matches
+      - MCPBoundaryError(INVALID_RESPONSE) → 返回 error（不 fallback）
+      - MCPBoundaryError(UNAVAILABLE) + flag OFF → 本地 fallback
+      - MCPBoundaryError(UNAVAILABLE) + flag ON → 返回 error
+      - 其它 Exception → 向上抛
     """
     try:
         rows = _mcp_search_faq(query, top_k)
     except MCPBoundaryError as exc:
-        # INVALID_RESPONSE：决策 4 明令「不 fallback（重试同结果）」
         if exc.code.value == "MCP_INVALID_RESPONSE":
             logger.warning(
                 "FAQ search failed (MCP_INVALID_RESPONSE, no fallback): %s",
@@ -165,7 +163,6 @@ def search_faq(query: str, top_k: int = 3) -> str:
                 {"error": f"{exc.code.value}: {exc.detail}"},
                 ensure_ascii=False,
             )
-        # UNAVAILABLE：flag-gated fallback
         if not _fallback_allowed():
             logger.warning(
                 "FAQ search failed (MCP_UNAVAILABLE, no fallback): %s",

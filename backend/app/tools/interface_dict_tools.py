@@ -192,19 +192,17 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
     用于：用户问题涉及接口字段或不明确字段含义时查释义；写 SQL 前确认业务口径。
     不要用来找数据表——用 search_tables；不要用来执行查询——此工具只读字典文档。
 
-    P2：MCP-first。失败语义：
+    P5 仍保留 HTTP fallback 代码但默认不走（PHASE2_MCP_ONLY 默认 ON）；仅测试显式设 flag OFF 时可达。
+    失败语义：
       - MCP 成功 → 返回 MCP items 规范化结果
-      - MCPBoundaryError(UNAVAILABLE) + flag 未锁 → HTTP fallback（既有契约）
-      - MCPBoundaryError(UNAVAILABLE) + flag 锁定 → error JSON 含 MCP code
-      - MCPBoundaryError(INVALID_RESPONSE) → error JSON 含 MCP code（不 fallback）
-      - HTTP fallback 失败 → 既有错误形状（"字典服务不可达…"/"登录失败…"/"无权读取…"）
-      - 其它 Exception（非 MCPBoundaryError）→ 向上抛，与 faq_tools catch 收紧一致
-        （review 第 2 轮 P1/P2 修订：避免真程序 bug 被 HTTP fallback 静默吞掉）
+      - MCPBoundaryError(INVALID_RESPONSE) → error JSON（不 fallback）
+      - MCPBoundaryError(UNAVAILABLE) + _fallback_allowed → HTTP fallback
+      - MCPBoundaryError(UNAVAILABLE) + flag ON → error JSON
+      - 其它 Exception → 向上抛
     """
     try:
         items = _search_dict_via_mcp(query, top_k)
     except MCPBoundaryError as exc:
-        # MCP_INVALID_RESPONSE 不走 fallback（重试同结果）；UNAVAILABLE + flag 锁定不走 fallback
         if exc.code.value == "MCP_INVALID_RESPONSE" or not _fallback_allowed():
             logger.warning(
                 "dictionary lookup failed (MCP, no fallback): %s [%s]",
@@ -214,7 +212,6 @@ def search_interface_dictionary(query: str, top_k: int = 5) -> str:
                 {"error": f"{exc.code.value}: {exc.detail}"},
                 ensure_ascii=False,
             )
-        # UNAVAILABLE + flag 未锁 → HTTP fallback（HTTP 失败在此分支内处理）
         logger.warning(
             "MCP unavailable, falling back to HTTP: %s [%s]",
             exc.detail, exc.code.value,

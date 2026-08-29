@@ -66,17 +66,18 @@ class _MCPConfig:
 
 
 def _resolve_phase2_flag() -> bool:
-    """PHASE2_MCP_ONLY 解析。
+    """PHASE2_MCP_ONLY 解析（P5 起默认 ON，停止本地 fallback）。
 
-    优先级：REPORTAGENT_E2E=1 > PHASE2_MCP_ONLY 显式值 > APP_ENV 推断。
+    优先级：REPORTAGENT_E2E=1 > PHASE2_MCP_ONLY 显式值 > 默认 ON。
     返回 True 表示锁定（不允许 fallback），False 表示放行。
+    P5 后默认 True；显式 PHASE2_MCP_ONLY=false 仍可放行以便离线测试。
     """
     if os.getenv("REPORTAGENT_E2E") == "1":
         return True
     explicit = os.getenv("PHASE2_MCP_ONLY")
     if explicit is not None:
         return explicit.strip().lower() in {"1", "true", "yes", "on"}
-    return os.getenv("APP_ENV", "production") != "development"
+    return True
 
 
 def _fallback_allowed() -> bool:

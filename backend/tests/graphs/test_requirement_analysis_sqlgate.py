@@ -253,50 +253,23 @@ def test_dictionary_lookup_passes_hits_to_parse_requirement(monkeypatch, sql_gat
 
     register_all_tools()
     fake_mcp = MagicMock()
-    fake_mcp.call_tool.side_effect = MCPBoundaryError(
-        MCPErrorCode.MCP_UNAVAILABLE, "test-forces-fallback"
-    )
+    fake_mcp.call_tool.return_value = {
+        "matches": [
+            {
+                "chunk_id": "c1", "document_id": "d1",
+                "text": "total_amount: 订单推送的销售金额（不含税）" * 5,
+                "title": "dict-table_public_fact_sales.md",
+                "section_path": "", "score": 0.9,
+            },
+            {
+                "chunk_id": "c2", "document_id": "d2",
+                "text": "amt 是 total_amount 的简写",
+                "title": "dict-fields.md",
+                "section_path": "", "score": 0.7,
+            },
+        ]
+    }
     monkeypatch.setattr(dict_mod, "get_rag_mcp_client", lambda: fake_mcp)
-
-    def make_resp(payload, status=200):
-        return _StubResp(status, payload)
-
-    class _StubResp:
-        def __init__(self, status, payload):
-            self.status_code = status
-            self._payload = payload
-        def raise_for_status(self):
-            if self.status_code >= 400:
-                raise RuntimeError(f"HTTP {self.status_code}")
-        def json(self):
-            return self._payload
-
-    def fake_post(url, **kw):
-        return make_resp({"access_token": "t"})
-
-    def fake_request(method, url, **kw):
-        if url.endswith("/api/v1/kb"):
-            return make_resp([{"id": "kb-9", "name": "数据字典"}])
-        return make_resp({
-            "items": [
-                {
-                    "chunk_id": "c1", "document_id": "d1",
-                    "text": "total_amount: 订单推送的销售金额（不含税）" * 5,
-                    "title": "dict-table_public_fact_sales.md",
-                    "section_path": "", "score": 0.9,
-                },
-                {
-                    "chunk_id": "c2", "document_id": "d2",
-                    "text": "amt 是 total_amount 的简写",
-                    "title": "dict-fields.md",
-                    "section_path": "", "score": 0.7,
-                },
-            ],
-            "degraded": False,
-        })
-
-    monkeypatch.setattr(dict_mod.httpx, "post", fake_post)
-    monkeypatch.setattr(dict_mod.httpx, "request", fake_request)
     dict_mod._token_cache.clear()
     dict_mod._kb_id_cache.clear()
 
