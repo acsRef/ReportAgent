@@ -55,6 +55,7 @@ class Tracer:
         )
         self._spans: list[Span] = []
         self._llm_calls: list[LLMCall] = []
+        self._prompt_versions: list[dict] = []  # P7 D3: 本地 prompt 版本追踪
         self._stack: list[Span] = []
 
     def backfill_identity(self, session_id: Optional[str] = None,
@@ -119,6 +120,22 @@ class Tracer:
             completion_tokens=completion_tokens,
             latency_ms=latency_ms,
         ))
+
+    def add_prompt_version(self, name: str, version: int | str) -> None:
+        """P7 D3: 记录当前请求使用的 prompt 版本。
+
+        每次 build_xxx_prompt(...) 调用前先调用此方法,关联到当前 span。
+        本地记录至 `_prompt_versions` list,Langfuse 实际接入留 P13。
+
+        调用时机约定: caller 在节点内调 LLM 前调用; 不强制要求在 span 内
+        (有则记 span_id,无则 span_id="" 兜底)。
+        """
+        span_id = self._current_span_id() or ''
+        self._prompt_versions.append({
+            "span_id": span_id,
+            "name": name,
+            "version": version,
+        })
 
     def _current_span_id(self) -> Optional[str]:
         return self._stack[-1].span_id if self._stack else None
