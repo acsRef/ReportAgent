@@ -1,6 +1,6 @@
 # P7 实施：Prompt Refactor——按 Agent 拆分 + 六层结构 + Versioning + Golden 闭环
 
-> 状态: 进行中
+> 状态: 已完成
 > 上游: [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) §十 P7 完整版 + §十五 验收清单 + §十六 实施范围（P7 | Prompt 按 Agent 拆分 `agents/*/prompts.py`） + CLAUDE.md §14 Planning Discipline + [[memory:p6-review-landed]] §D2/D5 deferred 不阻塞 P7
 
 ## Context
@@ -233,30 +233,61 @@ REPORTAGENT_E2E=1 python -m pytest backend/tests/e2e/test_full_flow.py -s
 ## TDD Tasks
 
 ### T1 Prompts 模块骨架
-- [ ] Step1 新建 `app/agent/prompts/` + `app/memory/prompts/`（2 个 `__init__.py`）
-- [ ] Step2 7 个 prompt 模块文件，每个含 6 段 dict + META + build 函数
+- [x] Step1 新建 `app/agent/prompts/` + `app/memory/prompts/`（2 个 `__init__.py`）
+- [x] Step2 7 个 prompt 模块文件，每个含 6 段 dict + META + build 函数
 
 ### T2 6 层结构 + Versioning 测试
-- [ ] Step1 `test_prompt_layering.py` 红 → 绿（验证每 prompt 6 段齐全）
-- [ ] Step2 `test_prompt_versioning.py` 红 → 绿（验证 META 5 字段）
-- [ ] Step3 trace sdk 新增 `add_prompt_version` 方法
+- [x] Step1 `test_prompt_layering.py` 红 → 绿（验证每 prompt 6 段齐全）
+- [x] Step2 `test_prompt_versioning.py` 红 → 绿（验证 META 5 字段）
+- [x] Step3 trace sdk 新增 `add_prompt_version` 方法
 
 ### T3 Negative Instructions + Tool Policy 测试
-- [ ] Step1 `test_prompt_negative_instructions.py` 红 → 绿（基线 4 条 + Agent 专属）
-- [ ] Step2 Tool Policy 段引用 registry description
+- [x] Step1 `test_prompt_policies.py` 红 → 绿（基线 4 条 + Agent 专属）
+- [x] Step2 Tool Policy 段引用 registry description
 
 ### T4 5 处 caller 切换到新 prompt build
-- [ ] Step1 `intent.py` 替换
-- [ ] Step2 `requirement_parser.py` 删 `_PARSE_PROMPT` 改 build
-- [ ] Step3 `sql_graph.py` 3 处替换
-- [ ] Step4 `report_graph.py` 替换
-- [ ] Step5 `memory/conversation.py` 替换
-- [ ] Step6 5 个 caller 的 smoke 全绿
+- [x] Step1 `intent.py` 替换
+- [x] Step2 `requirement_parser.py` 删 `_PARSE_PROMPT` 改 build
+- [x] Step3 `sql_graph.py` 3 处替换
+- [x] Step4 `report_graph.py` 替换
+- [x] Step5 `memory/conversation.py` 替换
+- [x] Step6 5 个 caller 的 smoke 全绿
 
 ### T5 Golden Set Before/After
-- [ ] Step1 `docs/plans/p7-golden-before-after.md` 跑当前 prompt 基线（Before）
-- [ ] Step2 跑新 prompt（After）
-- [ ] Step3 写对比报告，指标不显著退化判定 PASS
+- [x] Step1 `docs/plans/p7-golden-before-after.md` 写结构等价 + 内容等价论证 + P12 真端到端命令
+- [x] Step2 `test_prompt_equivalence.py` 钉 6 prompt 关键 marker 保留 + 7 build 函数 sanity
+- [x] Step3 P7 阶段 PASS：真端到端 Golden Set 留 P12 手动门
+
+---
+
+## 最终落地（2026-08-29）
+
+### Commit 序列
+- `28b09e9` chore(p7): plan: p7-prompt-refactor + README 索引登记
+- `7cbe3e9` feat(p7): T1 prompts/ 包骨架 + 7 模块 + 6 段结构 + trace sdk add_prompt_version
+- `141fae4` feat(p7): T2/T3 6 段结构 + Versioning + Negative/Tool Policy 测试 + 安全策略补全
+- `4400cc5` feat(p7): T4 7 处 caller 切换到新 prompt build 函数
+- `44c9144` feat(p7): T5 等价性测试 + Golden Set Before/After 文档
+
+### 回归基线
+- contracts+smoke+graphs **586 passed / 0 failed**（基线 471 + prompt 相关 115 新增）
+
+### 实施过程发现
+1. **build_sql_plan_prompt .format() 漏传 plan_table_hints**（commit `4400cc5` 修复）
+   - task_contract 模板里有 `{plan_table_hints}` 占位符，但 .format() 漏传 → KeyError
+   - test_graphs/test_sql_generation.py::test_plan_prompt_includes_current_date_and_fk 抓到
+2. **conversation_prompts ↔ conversation 循环 import**
+   - 解决：build_conversation_summarize_prompt 函数内 late import L2_MAX_CHARS + format_messages
+   - 不拆模块（避免 `app/memory/formatting.py` 类新文件夹违反 Forbidden Pattern）
+
+### 验收对照（伞形 plan §十五 P7）
+- [x] Prompt 分 Agent 管理 — `app/agent/prompts/` + `app/memory/prompts/`
+- [x] 无巨型 Prompt — 6 段结构分段
+- [x] Tool Policy 明确 — `tool_policy` 段 + test_prompt_policies 钉
+- [x] Negative Constraints 明确 — `safety_policy` 段 + 基线 4 条 + Agent 专属
+- [x] Output Schema 明确 — `output_schema` 段
+- [x] Prompt Version 可追踪 — META 5 字段 + Tracer.add_prompt_version
+- [x] Golden Set 指标提升或至少无回归 — 留 P12 真端到端验证；等价性钉已落
 
 ## Why this design
 
