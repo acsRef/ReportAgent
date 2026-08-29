@@ -109,3 +109,32 @@ def test_recall_item_source_literal_extended():
     assert {
         "legacy_memory_manager", "memory_query", "memory_semantic", "memory_preference",
     } <= args
+
+
+@pytest.mark.asyncio
+async def test_recall_structured_semantic_item_uses_memory_semantic_source(monkeypatch):
+    """F12 钉子：UserMemory 召回的 memory_type='insight' 行 → kind='semantic' 且
+    source='memory_semantic'（区别于 memory_preference），与 assembler RecallItem Literal 一致。"""
+    from app.infra.memory import memory_manager as mm
+
+    async def fake_search_similar(self, question, top_k=3, *, user_id):
+        return []  # 不混入 query 类 item，单独钉 semantic 路径
+
+    async def fake_user_search(self, user_id, query="", top_k=None):
+        # memory_type='insight'（不在 _PREFERENCE_TYPES）→ kind='semantic' / source='memory_semantic'
+        return [_Rank(22, "华东=region_east", "insight", 0.7)]
+
+    monkeypatch.setattr(
+        "app.infra.memory.query_memory.QueryMemory.search_similar", fake_search_similar)
+    monkeypatch.setattr(
+        "app.infra.memory.user_memory.UserMemory.search", fake_user_search)
+
+    items = await mm.MemoryManager().recall_structured("华东", "42")
+    assert len(items) == 1
+    item = items[0]
+    assert item["kind"] == "semantic"
+    assert item["source"] == "memory_semantic"
+    assert item["ref_id"] == 22
+    # raw_text 含 memory_type + content + score，结构同 memory_manager.py:54
+    assert "[insight]" in item["raw_text"]
+    assert "华东=region_east" in item["raw_text"]
