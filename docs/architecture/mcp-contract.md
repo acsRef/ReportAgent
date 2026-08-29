@@ -64,12 +64,12 @@ Agent 可见工具（12 个，`test_mcp_tool_allowlist_freeze` 双向断言）�
 | 情形 | 行为 |
 |---|---|
 | `MCP_TIMEOUT` | 重试预算内 retry（固定 2 次，宪法 §11）；仍败 → 显式上抛，不伪装空结果 |
-| `MCP_UNAVAILABLE` | P5 起直接显式上抛（`{"error": "MCP_UNAVAILABLE: ..."}`），不再 HTTP fallback |
+| `MCP_UNAVAILABLE` | 默认显式上抛（`{"error": "MCP_UNAVAILABLE: ..."}`），flag ON 时不走 fallback；显式 OFF 时测试矩阵可走 fallback |
 | `MCP_INVALID_RESPONSE` | 不 retry 不 fallback → 显式上抛 |
 | `EMPTY_RESULT` | 合法 `[]`，与 unavailable 严格区分 |
 | quality insufficient | P14 Evaluation 范畴，本契约不做质量判断 |
 
-`PHASE2_MCP_ONLY` 默认 ON（`mcp_client._resolve_phase2_flag` 返回 True）；`REPORTAGENT_E2E=1` 仍覆盖；显式 `PHASE2_MCP_ONLY=false` 可放行但 P5 代码已无 fallback 分支（仅测试可验证）。
+`PHASE2_MCP_ONLY` 默认 ON（`mcp_client._resolve_phase2_flag` 返回 True）；`REPORTAGENT_E2E=1` 仍覆盖；flag ON 时 fallback 分支跳过直接上抛，显式 `PHASE2_MCP_ONLY=false` 时 fallback 可达（仅 `test_mcp_failure_matrix` 矩阵测试用，保留 flag-gated 而非硬删）。
 
 ## 六、RAG vs ReportAgent 职责划分
 
@@ -88,8 +88,8 @@ ReportAgent：requirement understanding / schema reasoning / SQL generation / SQ
 
 | 契约要素 | 现状 |
 |---|---|
-| MCP 通道 | `mcp_client.RagMCPClient` 单例 + `search_dictionary/search_faq` MCP-first；P5 已删 HTTP fallback |
+| MCP 通道 | `mcp_client.RagMCPClient` 单例 + `search_dictionary/search_faq` MCP-first；P5 默认 MCP-only（PHASE2_MCP_ONLY ON 时不走 fallback） |
 | 14 字段 | `registry.ToolMetadata` 14 字段 + `validate()` + 四问 description 全绿 |
 | Failure 语义 | `MCPBoundaryError` 三码 + retry 2 + 显式 error JSON；`test_mcp_failure_matrix` P5 矩阵全绿 |
 | 边界断言 | `test_mcp_boundary_freeze`（import 禁）+ `test_mcp_tool_allowlist_freeze`（白名单/source/禁词/用于）+ `test_mcp_contract_schema`（稳定/内部字段）全绿 |
-| Fallback | 已删除（`rag_schema._retrieve_dict` / `interface_dict_tools.search_interface_dictionary` / `faq_tools.search_faq` 均 MCP-only） |
+| Fallback | flag-gated 保留但默认不走（`rag_schema._retrieve_dict` / `interface_dict_tools.search_interface_dictionary` / `faq_tools.search_faq` 均 flag ON 时直接上抛，显式 OFF 时可达供测试） |

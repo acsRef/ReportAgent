@@ -44,10 +44,12 @@ P5 只做 Tool/MCP 契约与 Registry；不碰 `app/llm.py` / `llm_resilience.py
 - `all_tools()` 已有，`list_by_capability/list_by_agent` 保留
 - `register()` 时同步校验（fail-fast）
 
-### D4 PHASE2_MCP_ONLY ON + 删 fallback
-- `backend/app/tools/mcp_client.py`：`_resolve_phase2_flag()` 默认改 `True`（P5 起停止本地 fallback），`REPORTAGENT_E2E=1` 仍覆盖；`_fallback_allowed()` 语义不变（`not flag`）。
-- `backend/app/tools/rag_schema.py`：`_retrieve_dict` 删除 HTTP fallback 分支（`MCP_UNAVAILABLE + _fallback_allowed` → 直接上抛）；`_retrieve_dict_http` 保留但标记 deprecated，仅 `list_tables` 的 `_list_dict_docs` 保留（无 MCP 等价）。
-- `backend/app/tools/interface_dict_tools.py`：`search_interface_dictionary` 删除 HTTP fallback 分支；`_search_dict_http` 同上保留 deprecated。
+### D4 PHASE2_MCP_ONLY ON + flag-gated fallback（默认不走）
+- `backend/app/tools/mcp_client.py`：`_resolve_phase2_flag()` 默认改 `True`（P5 起默认不走 fallback），`REPORTAGENT_E2E=1` 仍覆盖；`_fallback_allowed()` 语义不变（`not flag`）。
+- `backend/app/tools/rag_schema.py`：`_retrieve_dict` 保留 flag-gated fallback（`MCP_UNAVAILABLE + _fallback_allowed` 时走 `_retrieve_dict_http`），但默认 ON 时直接上抛；`_retrieve_dict_http` 保留，`list_tables` 的 `_list_dict_docs` 仍为正路（无 MCP 等价）。
+- `backend/app/tools/interface_dict_tools.py`：`search_interface_dictionary` 同样保留 flag-gated fallback；`_search_dict_http` 保留；默认 ON 时不走。
+- `backend/app/tools/faq_tools.py`：同上保留 flag-gated 本地 fallback，默认 ON 时不走。
+- 实现选择：flag-gated + 默认 ON 而非硬删，理由：保留 `test_mcp_failure_matrix` P5 矩阵的 flag 注入验证；三处 fallback 代码测试显式 OFF 时可达，生产默认跳过。
 - `list_tables` 例外：仍 `source=local` 走 `_list_dict_docs` HTTP（无 MCP 等价，P2 review 决议），在 `mcp-contract.md` 单列豁免。
 
 ### D5 P2 残留收口
@@ -61,8 +63,9 @@ P5 只做 Tool/MCP 契约与 Registry；不碰 `app/llm.py` / `llm_resilience.py
 | `backend/app/tools/registry.py` | 扩展 ToolMetadata 14 字段 + permission alias + validate() |
 | `backend/app/tools/__init__.py` | 12 工具补 8 字段 + description 四问重写 |
 | `backend/app/tools/mcp_client.py` | `_resolve_phase2_flag` 默认 ON |
-| `backend/app/tools/rag_schema.py` | 删 fallback 分支，保留 _retrieve_dict_http deprecated |
-| `backend/app/tools/interface_dict_tools.py` | 删 fallback 分支 |
+| `backend/app/tools/rag_schema.py` | 保留 flag-gated fallback 但默认 ON 时直接上抛 |
+| `backend/app/tools/interface_dict_tools.py` | 同上保留 flag-gated fallback |
+| `backend/app/tools/faq_tools.py` | 同上保留 flag-gated 本地 fallback |
 | `backend/tests/contracts/test_tool_contract_14_fields.py` | 新建：14 字段完整性 + 四问 + 取值合法性 |
 | `backend/tests/contracts/test_mcp_tool_allowlist_freeze.py` | 同步更新（如需）：source 约束保持，list_tables 豁免重申 |
 | `docs/architecture/mcp-contract.md` | 新建：第六份架构文档 |
@@ -134,9 +137,9 @@ cd frontend && npm run test:run
 - [ ] Step 2 重写 `__init__.py` 12 description
 - [ ] Step 3 跑 allowlist + 14 字段全绿
 
-### T3 PHASE2_MCP_ONLY ON + 删 fallback
-- [ ] Step 1 写 fallback 删除钉子：flag ON 时 UNAVAILABLE 不调 HTTP
-- [ ] Step 2 改 `mcp_client._resolve_phase2_flag` 默认 True + 删 `rag_schema/_retrieve_dict` 与 `interface_dict_tools` fallback 分支
+### T3 PHASE2_MCP_ONLY ON + flag-gated fallback（默认不走）
+- [ ] Step 1 写 flag ON 时 UNAVAILABLE 不走 fallback 的矩阵钉子
+- [ ] Step 2 改 `mcp_client._resolve_phase2_flag` 默认 True；`rag_schema/_retrieve_dict` / `interface_dict_tools` / `faq_tools` 保留 flag-gated fallback（默认 ON 时跳过，显式 OFF 时可达供测试）
 - [ ] Step 3 跑 `test_mcp_client`/`test_mcp_failure_matrix` 全绿
 
 ### T4 mcp-contract.md + P2 残留收口
