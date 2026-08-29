@@ -205,16 +205,18 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
             _uid = int(_uid_raw) if _uid_raw not in (None, "") else 0
         except (TypeError, ValueError):
             _uid = 0
+        from app.llm.config import LLMConfig
+
+        _cfg = LLMConfig()
+        _est_chars = len(user_query) + 8000
+        _remaining = max(0, _cfg.context_window - _est_chars // 4)
         _bundle = await ContextRuntime().build(
             session_id=state["session_id"],
             user_id=_uid,
             query=user_query,
             agent="confirmed_execution_sql_agent",  # P4c: 符合 ContextPolicyResolver prefix 规则
             state_dict=dict(state),
-            # P4c post-review F2 (第二轮) P1: remaining_token_budget 等项目 unified
-            # input context window / prompt budget accounting (P5/P6 Unified LLM
-            # Migration 收敛) 后再传. 当前 None = configured-only 路径.
-            # 防护钉 test_graph_caller_does_not_invent_remaining_budget.
+            remaining_token_budget=_remaining,
         )
         conversation_context = _bundle["conversation_context"]
         assembled_context = _bundle["assembled_context"]

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from app.llm import call_llm
+from app.llm import get_llm_adapter
 from app.memory.manager import remember_conversation_facts
 from app.utils.text import safe_json_parse
 
@@ -90,8 +90,11 @@ def compress_and_extract(old_digest: str | None, batch_messages: list[dict]) -> 
 2. extracted_schemas 只提取新出现或变更的字段映射/计算口径。
 3. extracted_preferences 只提取明确、稳定的用户偏好指令。"""
 
-    raw = call_llm(prompt, max_tokens=1000)
-    result = safe_json_parse(raw)
+    try:
+        result = get_llm_adapter().generate_structured(prompt, max_tokens=1000)
+    except Exception:
+        raw = get_llm_adapter().generate(prompt, max_tokens=1000)
+        result = safe_json_parse(raw)
     if not isinstance(result, dict):
         result = {}
     summary = str(result.get("summary") or "")[:L2_MAX_CHARS]

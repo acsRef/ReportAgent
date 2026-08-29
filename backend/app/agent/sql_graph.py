@@ -9,7 +9,7 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 from app.context import format_context_block
-from app.llm import call_llm, _format_tools_for_prompt
+from app.llm import _format_tools_for_prompt, get_llm_adapter
 from app.tools.registry import registry
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
 from app.utils.text import extract_sql, safe_json_parse, strip_markdown_fence
@@ -210,8 +210,11 @@ def _intent_analyze(state: SQLAgentState) -> dict:
 - confidence: 0.7-0.95，越匹配越高
 - needs_options_group: 用户没指定时间/区域范围等细节时 true，完全明确时 false"""
 
-    raw = call_llm(prompt, max_tokens=1500)
-    parsed = safe_json_parse(raw)
+    try:
+        parsed = get_llm_adapter().generate_structured(prompt, max_tokens=1500)
+    except Exception:
+        raw = get_llm_adapter().generate(prompt, max_tokens=1500)
+        parsed = safe_json_parse(raw)
 
     fallback_options = [
         IntentOption(label="📊 各区域对比汇总", description="按区域/产品维度对比汇总指标",
@@ -354,9 +357,11 @@ def _plan(state: SQLAgentState) -> dict:
     if _ctx_injected:
         prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
 
-    plan_text = call_llm(prompt, max_tokens=1500)
-
-    plan_dict = safe_json_parse(plan_text)
+    try:
+        plan_dict = get_llm_adapter().generate_structured(prompt, max_tokens=1500)
+    except Exception:
+        plan_text = get_llm_adapter().generate(prompt, max_tokens=1500)
+        plan_dict = safe_json_parse(plan_text)
     fallback_decision = ClarifyDecision(
         action="clarify",
         missing_dimensions=["time", "region", "metric"],
@@ -503,7 +508,7 @@ def _generate_sql(state: SQLAgentState) -> dict:
     if _ctx_injected:
         prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
 
-    sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
+    sql = get_llm_adapter().generate([{"role": "user", "content": prompt}], max_tokens=1500)
 
     sql = extract_sql(sql)
 

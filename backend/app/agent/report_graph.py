@@ -6,7 +6,7 @@ from typing import Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from app.llm import call_llm, _format_tools_for_prompt
+from app.llm import _format_tools_for_prompt, get_llm_adapter
 from app.models.contracts import ComponentSpec, QueryResult, ReportSpec
 from app.tools.sql_tools import chart_advisor, insight_analyst
 from app.utils.text import safe_json_parse, strip_markdown_fence
@@ -70,9 +70,11 @@ def _plan_analysis(state: ReportAgentState) -> dict:
 格式：
 {{"steps": [{{"tool": "...", "args": {{}}, "description": "..."}}], "reasoning": "..."}}"""
 
-    plan_text = call_llm(prompt, max_tokens=1500)
-
-    plan = safe_json_parse(plan_text)
+    try:
+        plan = get_llm_adapter().generate_structured(prompt, max_tokens=1500)
+    except Exception:
+        plan_text = get_llm_adapter().generate(prompt, max_tokens=1500)
+        plan = safe_json_parse(plan_text)
     if isinstance(plan, dict):
         steps = plan.get("steps", [])
     else:

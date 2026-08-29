@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from app.llm import call_llm
+from app.llm import call_llm, get_llm_adapter
 from app.utils.text import safe_json_parse
 
 

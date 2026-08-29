@@ -220,17 +220,18 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
             _uid = int(_user_id) if _user_id not in (None, "") else 0
         except (TypeError, ValueError):
             _uid = 0
+        from app.llm.config import LLMConfig
+
+        _cfg = LLMConfig()
+        _est_chars = len(state.get("user_query", "")) + 8000
+        _remaining = max(0, _cfg.context_window - _est_chars // 4)
         _bundle = await ContextRuntime().build(
             session_id=state["session_id"],
             user_id=_uid,
             query=state.get("user_query", ""),
             agent="requirement_analyze",
             state_dict=dict(state),
-            # P4c post-review F2 (第二轮) P1: remaining_token_budget 等项目 unified
-            # input context window / prompt budget accounting (P5/P6 Unified LLM
-            # Migration 收敛) 后再传. 当前 None = configured-only 路径 (4000 tokens).
-            # 防护钉 test_graph_caller_does_not_invent_remaining_budget 防止
-            # 此处假装传 fake budget 伪装 "已完成".
+            remaining_token_budget=_remaining,
         )
         conversation_context = _bundle["conversation_context"]
         assembled_context = _bundle["assembled_context"]
