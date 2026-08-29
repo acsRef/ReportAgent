@@ -33,12 +33,16 @@ _policy = MemoryPolicy()
 
 async def remember_conversation_facts(
     user_id: int | str, updates: dict, compressed_batch: list[dict],
+    *, session_id: str | None = None,
 ) -> None:
     """兼容入口（conversation.prepare_conversation_context 仍调它，时机不变）。
 
     P4b：把 LLM 压缩抽取的 schema/preference facts 路由到 `remember_inferred_facts`
     → status=candidate（§五 line 49「LLM inferred 不进 active」）。这是相对
     P3/P4a 的**行为修正**：以前当 insight/active 写并被召回，现落 candidate 不被召回。
+
+    P4b F9：透传 `session_id` 给 `remember_inferred_facts`（plan §F9）——session-scope
+    候选条目能正确归属（schema M4: session-bound preference 区分）。
     """
     facts: list[str] = []
     for s in updates.get("extracted_schemas") or []:
@@ -57,7 +61,9 @@ async def remember_conversation_facts(
 
     if not facts:
         return
-    await remember_inferred_facts(user_id, list(dict.fromkeys(facts)))  # 保序去重
+    await remember_inferred_facts(
+        user_id, list(dict.fromkeys(facts)), session_id=session_id,  # 保序去重
+    )
 
 
 async def remember_inferred_facts(
