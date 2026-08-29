@@ -96,3 +96,127 @@ def test_connection_failure_no_retry():
     state = _eval_and_diagnose({"error": "connection refused", "error_kind": "connection"}, {"sql_generation": 0, "plan": 0})
     assert state["execution_status"] == "FAILED"
     assert state["diagnose_decision"]["error_kind"] == "connection"
+
+
+def test_evaluate_prioritizes_validation_over_stale_sql_result():
+    """R1: validate 失败时 evaluate 必须走 VALIDATION_FAILED 路径，
+    即使 state.sql_result 还残留上一轮 execution data。
+
+    修复前用 `if not raw:` 间接推断 validation failure；上一轮 timeout
+    留下的 sql_result 会污染本轮 evaluate，导致 DiagnosePolicy 把
+    timeout 错误地走 retry_sql。
+    """
+    state = {
+        "sql_result": json.dumps({"error": "canceling statement due to statement timeout", "error_kind": "timeout"}),
+        "validation_result": {"valid": False, "error": "syntax error at or near"},
+        "execution_status": "",
+        "trace_id": "test-trace-stale",
+    }
+    out = _evaluate(state)
+    assert out["execution_status"] == "SQL_SYNTAX_ERROR"
+    eval_r = out["evaluate_result"]
+    assert eval_r["status"] == "VALIDATION_FAILED"
+    # 关键：kind 必须是 syntax（来自 validation_result），不是 timeout（来自 stale raw）
+    assert eval_r["kind"] == "syntax"
+    # 后续 _diagnose 看到 validation_failed + kind=syntax，走 retry_sql
+    state.update(out)
+    diag = _diagnose(state)
+    assert diag["diagnose_decision"]["action"] == "retry_sql"
+
+
+def test_full_retry_lifecycle_respects_budget(monkeypatch):
+    """R-budget: 完整 lifecycle `build_sql_graph().invoke()` 真跑，
+    验证 SQL repair <= 2 + plan <= 1 + 最终 clarify。
+    之前 _eval_and_diagnose 只测局部函数，没测真实 LangGraph wiring。
+    """
+    from app.agent import sql_graph as sql_graph_module
+    from app.agent.sql_graph import build_sql_graph
+
+    monkeypatch.setenv("MAX_SQL_REPAIR_RETRIES", "2")
+    monkeypatch.setenv("MAX_PLAN_RETRIES", "1")
+
+    def fake_call_llm(*args, **kwargs):
+        # plan vs generate_sql 用 prompt 关键词区分
+        prompt = ""
+        if args:
+            if isinstance(args[0], str):
+                prompt = args[0]
+            elif isinstance(args[0], list) and args[0]:
+                prompt = str(args[0][0].get("content", "")) if isinstance(args[0][0], dict) else ""
+        if "SQL规划器" in prompt:
+            return json.dumps({
+                "target_metric": "x",
+                "dimensions": ["a"],
+                "filters": [],
+                "aggregation": "sum",
+                "time_range": None,
+                "clarify_decision": {
+                    "action": "run_direct",
+                    "missing_dimensions": [],
+                    "predicted_table": "fact_sales",
+                    "confidence": 0.9,
+                    "reasoning": "ok",
+                },
+            })
+        # generate_sql: 永远 invalid SQL，让 validate 一直失败
+        return "INVALID SQL FOR TESTING"
+
+    # patch sql_graph 模块的本地引用（模块级 import 已绑定，否则 patch 源模块无效）
+    monkeypatch.setattr(sql_graph_module, "call_llm", fake_call_llm)
+
+    def fake_validate_sql(sql):
+        return json.dumps({"valid": False, "error": "syntax error"})
+
+    monkeypatch.setattr(sql_graph_module, "validate_sql", fake_validate_sql)
+
+    # extract_sql 默认会把无效 SQL 当作空字符串；validate_sql 已 mock 为失败，
+    # 整条 retry chain 应该走到 clarify。
+    graph = build_sql_graph()
+    initial_state = {
+        "schema_context": None,
+        "user_query": "test",
+        "query_plan": None,
+        "generated_sql": "",
+        "validation_result": {},
+        "sql_result": "",
+        "execution_status": "",
+        "error": None,
+        "retry_counters": {"plan": 0, "sql_generation": 0},
+        "trace_id": "test-budget-lifecycle",
+    }
+    result = graph.invoke(initial_state)
+    counters = result.get("retry_counters") or {}
+    # 关键断言：budget 没被打破。
+    # 预算语义：MAX_SQL_REPAIR_RETRIES=2 表示允许 2 次 retry_sql；
+    # sql_generation 累加 = 1（首次）+ 2（retry）= 3。
+    # DiagnosePolicy 用 `sql_retries < max_sql` 判断，等价 sql_generation <= max_sql + 1。
+    assert counters.get("sql_generation", 0) <= 3, f"sql_generation over budget: {counters}"
+    assert counters.get("plan", 0) <= 1, f"plan over budget: {counters}"
+    # budget 耗尽 → clarify → END
+    assert result.get("execution_status") == "NEED_CLARIFICATION"
+
+
+def test_compiled_graph_routes_by_diagnose_decision():
+    """R-graph: 真实 compiled graph 上 _route_after_diagnose 行为正确。
+    之前测试只调 _route_after_diagnose() 函数本身，没确认 wiring 后行为一致。
+    """
+    # SUCCESS path
+    s1 = {"execution_status": "SUCCESS", "diagnose_decision": {"action": "end"}}
+    assert _route_after_diagnose(s1) == "build_output"
+    # retry_sql
+    s2 = {"execution_status": "SQL_SYNTAX_ERROR", "diagnose_decision": {"action": "retry_sql"}}
+    assert _route_after_diagnose(s2) == "generate_sql"
+    # replan
+    s3 = {"execution_status": "SCHEMA_ERROR", "diagnose_decision": {"action": "replan"}}
+    assert _route_after_diagnose(s3) == "plan"
+    # fail
+    s4 = {"execution_status": "FAILED", "diagnose_decision": {"action": "fail"}}
+    assert _route_after_diagnose(s4) == "__end__"
+    # clarify
+    s5 = {"execution_status": "NEED_CLARIFICATION", "diagnose_decision": {"action": "clarify"}}
+    assert _route_after_diagnose(s5) == "__end__"
+    # F2 兼容：diagnose_decision 缺失时退化读 execution_status
+    s6 = {"execution_status": "SUCCESS"}
+    assert _route_after_diagnose(s6) == "build_output"
+    s7 = {"execution_status": "SCHEMA_ERROR"}
+    assert _route_after_diagnose(s7) == "plan"

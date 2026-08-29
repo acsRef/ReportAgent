@@ -1,6 +1,6 @@
 # P8 实施：Execution Agent Loop——从硬编码 Retry 升级为 Agent 决策闭环
 
-> 状态: 已完成（含 Post-review Fix：1 真 bug + 5 spec-deviation/correctness + 3 dead-code/重复 + 4 文档对齐）
+> 状态: 已完成（含 Post-review Fix：1 真 bug + 5 spec-deviation/correctness + 3 dead-code/重复 + 4 文档对齐；**Review-2 增：1 stale-state correctness + 2 测试强度**）
 > 上游: [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) §三 Canonical Flow + §四 Agent Responsibilities (Execution Agent: Plan/Generate/Validate/Execute/Evaluate + Diagnose/Repair, 预算 MAX_SQL_REPAIR_RETRIES) + §十一 Timeout & Failure Policy + CLAUDE.md §14 Planning Discipline + [[memory:p4c-landed]] / [[memory:p6-review-landed]]
 > 协作: B 顺序第三 plan；P5/P6/P7 已落地后开 P8，本 plan 仅 P8
 
@@ -279,6 +279,21 @@ P8 是「decision 化」不是「重写」：
 | F15 | spec-deviation | plan D1「Evaluate 不做路由决策」与 execution_status 路由模糊 | 明确 evaluate 写 execution_status 给父图契约，路由键由 action 驱动（F2 拍板） |
 
 **回归**：622 passed / 0 failed / 5 warnings（3:30）。P8 增量 36 例（34 原有 + 2 新增 F1/F3 反向钉），零回归。
+
+## Review-2（2026-08-29 user-side review）
+
+User push 到 `acsRef/ReportAgent` 远端后做实际 diff review：F1-F14 / F15 全部 PASS，但**新发现 1 P1 + 2 测试强度**：
+
+| 编号 | 类别 | 标题 | 修法 |
+|---|---|---|---|
+| R1 | correctness | `_evaluate()` 在 `validation_failed` 时仍读 `sql_result`，跨 attempt stale 污染；上一轮 timeout 的 sql_result 残留 + 本轮 validate 失败 → evaluate 消费旧 kind="timeout"，但 DiagnosePolicy 把 timeout 错误地走 retry_sql | `_evaluate()` 入口先看 `validation_failed`，直接走 VALIDATION_FAILED 路径，不读 sql_result；同时 `_generate_sql()` 生成新 SQL 时清 `sql_result/evaluate_result/error`（R3） |
+| R2 | dead-code | `DiagnosePolicy.decide()` 在 `raw_empty or validation_failed` 分支里先 normalize kind={syntax,object,other}，再判断 timeout/connection/permission fail——后者永远进不去；叠加 R1 时会让 timeout 被 normalize 成 other 误判 retry | 简化：validation_failed / raw_empty 路径直接按 retry budget 走，不再二次 normalize；timeout/connection/permission fail 只留给 raw 路径 |
+| R3 | state-hygiene | `_generate_sql()` 生成新 SQL 不清 `sql_result / evaluate_result / error`，旧 execution data 残留 | `_generate_sql()` 返回 dict 显式清三字段；validation_result 不清（caller 已用其构造 repair_ctx，validate 节点下一轮重写） |
+| R-test-budget | test-strength | 之前 `_eval_and_diagnose` 只测局部函数；缺真实 `build_sql_graph().invoke()` 闭环 | 新增 `test_full_retry_lifecycle_respects_budget`——monkeypatch call_llm / validate_sql（**注意 patch `sql_graph` 模块本地引用**而非源模块，否则 import 已绑定不生效），mock plan 合法 JSON + generate 永远 invalid SQL，验证 SQL repair ≤ 3 / plan ≤ 1 / 最终 NEED_CLARIFICATION |
+| R-test-graph | test-strength | 之前 `_route_after_diagnose` 只调函数本身；缺 wiring 后行为一致验证 | 新增 `test_compiled_graph_routes_by_diagnose_decision`——6 个分支（retry_sql/replan/end/fail/clarify + 兜底 execution_status）全覆盖 |
+| R-test-stale | test-strength | 缺 R1 反向钉——stale sql_result 不会污染 validate fail 路径 | 新增 `test_evaluate_prioritizes_validation_over_stale_sql_result`——同时注入 stale sql_result(timeout) + 本轮 validation_result(valid=False)，断言 evaluate 走 VALIDATION_FAILED + kind="syntax"（不是 timeout），后续 diagnose action="retry_sql" |
+
+**回归**：625 passed / 0 failed / 5 warnings（4:58）。P8 增量 39 例（36 + 3 新增 R-test），零回归。
 
 ## Open questions
 

@@ -100,10 +100,12 @@ class DiagnosePolicy:
         kind = (error_kind or "other").lower()
         if kind not in ("syntax", "object", "timeout", "connection", "permission", "other"):
             kind = "other"
+        # R2: validation_failed / raw_empty 路径直接按 retry budget 走，不再二次
+        # normalize kind。修复前先把 kind 限制到 {"syntax","object","other"}，
+        # 导致 timeout/connection/permission fail 分支永远进不去；叠加 R1
+        # 修好的 _evaluate 优先 validation 路径后，validation_failed 时
+        # evaluate_result.kind 已是 "syntax"，timeout 不再泄漏进来。
         if raw_empty or validation_failed:
-            kind = kind if kind in ("syntax", "object", "other") else "other"
-            if kind in ("timeout", "connection", "permission"):
-                return DiagnoseDecision(action="fail", reason=f"{kind}: non-recoverable validation failure", error_kind=kind, recoverable=False, retry_target="end", confidence=0.9)
             if sql_retries < max_sql:
                 return DiagnoseDecision(action="retry_sql", reason=f"{kind}: retry sql {sql_retries+1}/{max_sql} (validation)", error_kind=kind, recoverable=True, retry_target="generate_sql", confidence=0.7)
             if plan_retries < max_plan:
@@ -487,7 +489,16 @@ def _generate_sql(state: SQLAgentState) -> dict:
     retry = state.get("retry_counters", {}) or {}
     retry = dict(retry)
     retry["sql_generation"] = retry.get("sql_generation", 0) + 1
-    return {"generated_sql": sql, "retry_counters": retry}
+    # R3: 清掉上一轮 execution-derived state，避免下一轮 _evaluate 读 stale
+    # sql_result / evaluate_result / error 跨 attempt 污染。validation_result
+    # 不清——caller 已用它构造 repair_ctx，validate 节点会在下一轮重写。
+    return {
+        "generated_sql": sql,
+        "retry_counters": retry,
+        "sql_result": "",
+        "evaluate_result": None,
+        "error": None,
+    }
 
 
 @traced_node("sql_validate")
@@ -512,14 +523,24 @@ def _execute(state: SQLAgentState) -> dict:
 
 @traced_node("sql_evaluate")
 def _evaluate(state: SQLAgentState) -> dict:
-    raw = state.get("sql_result", "")
-    if not raw:
-        validation = state.get("validation_result") or {}
-        kind = "other"
+    # R1: validation_failed 必须优先于 sql_result 检查——上一轮 execution
+    # 留下的 stale sql_result 不能污染本轮 evaluate 判断。修复前 _evaluate
+    # 用 `if not raw:` 间接推断 validation failure，结果上一轮 timeout/
+    # connection kind 会被错误消费；现显式先看 validation_failed 直接走
+    # VALIDATION_FAILED 路径，不读 sql_result。
+    validation = state.get("validation_result") or {}
+    if validation.get("valid") is False:
+        kind = "syntax"
         if isinstance(validation, dict) and validation.get("error"):
             kind = "syntax"
         return {
             "evaluate_result": EvaluateResult(status="VALIDATION_FAILED", kind=kind, validation_result=validation).model_dump(),
+            "execution_status": "SQL_SYNTAX_ERROR",
+        }
+    raw = state.get("sql_result", "")
+    if not raw:
+        return {
+            "evaluate_result": EvaluateResult(status="VALIDATION_FAILED", kind="other", validation_result=validation).model_dump(),
             "execution_status": "SQL_SYNTAX_ERROR",
         }
     try:
