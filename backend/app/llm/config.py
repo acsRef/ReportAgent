@@ -22,4 +22,5 @@ class LLMConfig:
             "base_url": self.base_url,
             "temperature": self.temperature,
             "max_retries": 0,
+            "timeout": self.timeout,
         }
