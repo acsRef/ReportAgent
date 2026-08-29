@@ -58,6 +58,17 @@ P4c 关键接入点（caller + assembler）已经在离线层级验证。**所�
 4. **SelectiveRecallPolicy 4 触发 + §三分流** — `tests/contracts/test_memory_write_pipeline_contract.py` + P4c Task 3 新增 24 钉
 5. **graph caller 真接入** — `tests/contracts/test_p4c_graph_caller_integration.py` 8/8 + `tests/graphs/test_context_runtime_main_chain.py` 3/3
 
+## 后续阶段 input — `remaining_token_budget` 主图 caller 真传
+
+**P4c 第二轮 post-review (REQUEST CHANGES P1) 决议（诚实降级）**：
+- Assembler `min(remaining, configured)` 接口与算法在 `assembler.py` + `runtime.py` 已实装
+- 真实 graph caller (`requirement_analysis_graph._requirement_parse` + `confirmed_execution_graph._confirmed_sql_agent`) 当前**不传** `remaining_token_budget`（None → 4000 tokens configured-only 路径）
+- **不做** fake pass：项目当前**没有** unified input context window / prompt budget accounting（CLAUDE.md §8 P5/P6 Unified LLM Migration 收敛点）
+- 防护钉 `test_graph_caller_does_not_invent_remaining_budget` 拦截任何给 `remaining_token_budget` 传字面量（4000/8000 等）的潜在伪装
+- 等 P5/P6 或后续 Context Budget 阶段补上——届时须先升 plan + 人工检查防护钉
+
+**影响**：P4c F2 在 assembler 层完整闭合；graph caller 传值由后续阶段负责。offline 681 passed baseline 不破。
+
 ## 验收
 
 - ✅ Task 5 Step 1-3（offline proxy + 新钉 + before vs after diff）完成

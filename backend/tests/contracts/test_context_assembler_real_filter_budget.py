@@ -132,11 +132,13 @@ class TestTokenBudget:
             f"configured 应仍生效: len={len(bundle['assembled_context'])}"
         )
 
-    def test_remaining_token_budget_none_uses_configured_only(self):
-        """remaining_token_budget=None 时仅走 configured (向后兼容 P3 不裁剪 API)."""
-        import os
-        # 显式 unset env 走默认 4000 tokens
-        os.environ.pop("P4C_ASSEMBLER_TOKEN_BUDGET", None)
+    def test_remaining_token_budget_none_uses_configured_only(self, monkeypatch):
+        """remaining_token_budget=None 时仅走 configured (向后兼容 P3 不裁剪 API).
+
+        P4c post-review F3 (第二轮) P2: 用 monkeypatch.delenv 替代 os.environ.pop,
+        防止污染 pytest 全局环境.
+        """
+        monkeypatch.delenv("P4C_ASSEMBLER_TOKEN_BUDGET", raising=False)
         asm = ContextAssembler()
         items = [_item("memory_query", "query", i, "x" * 100, 0.5) for i in range(20)]
         bundle = asm.assemble(

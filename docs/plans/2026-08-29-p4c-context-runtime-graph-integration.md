@@ -208,6 +208,7 @@ pytest backend/tests/golden/   # 行为差异要在 docs/p4c-golden-before-after
 
 | 不做 | 归属 | 理由 |
 |---|---|---|
+| **主图 caller 传 `remaining_token_budget` 真实值（graph 端 remaining-prompt accounting）** | **P4c 第二轮 post-review REQUEST CHANGES P1 决议降级**：F2 接口与算法已在 assembler `min(remaining, configured)` 实现；但**项目当前无 unified input context window / prompt budget 来源**（只有 `call_llm(max_tokens=1500)` 输出 cap）。graph caller 真不传 `remaining_token_budget`（None → 4000 tokens configured-only 路径）是诚实 deferred state。等 P5/P6 Unified LLM Migration 收敛（CLAUDE.md §8）或后续 Context Budget 阶段补上。防护钉 `test_graph_caller_does_not_invent_remaining_budget` 拦截任何字面量 fake budget | 真要传时须先升 plan + 人工检查防护钉 |
 | `MemoryManager.recall_structured()` 签名改 | 不做 | P4b 已落 |
 | `semantic_entry` 表扩展 | 不做 | P4b 已落 |
 | `_engine._save_l3_facts` 时机拆分 | 不做 | 伞形 plan 留后期（P4c 不动时机） |
