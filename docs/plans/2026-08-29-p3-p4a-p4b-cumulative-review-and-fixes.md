@@ -1,9 +1,10 @@
 # P3+P4a+P4b Cumulative Review & 修复清单
 
-> **状态**: 进行中（review 已完成，修复待下一对话）
+> **状态**: 暂缓（review 已完成，14 项 finding 修复未落地；项目已演进超出原 plan 范围——master HEAD `a6e9246` 现含 P4c/P5/P6/P7 共 586 passed 基线，部分 finding 由后续 Phase 落实，部分仍 open）
 > **范围**: p3 分支 `8e146ed..367a582`（14 commits，P3 + P4a + P4b 三 Phase 累计）
 > **基线**: `cd backend && pytest --ignore=tests/e2e -q` → **614 passed / 0 failed / 1 warning**（warning = facade DeprecationWarning by design）
 > **关联 plan**: [P3](2026-08-27-p3-context-runtime.md) / [P4a](2026-08-27-p4a-conversation-memory-decouple.md) / [P4b](2026-08-27-p4b-memory-lifecycle-selective-recall.md)
+> **暂缓说明**: 见 README「暂缓」区。本 plan 14 项 finding 在 `a6e9246` 后未回头修。重启时需逐项 re-check 是否仍适用当前代码 base；不要假设"未做 = 仍需做"。
 
 ## Context（为什么做）
 

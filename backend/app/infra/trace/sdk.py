@@ -56,6 +56,7 @@ class Tracer:
         self._spans: list[Span] = []
         self._llm_calls: list[LLMCall] = []
         self._prompt_versions: list[dict] = []  # P7 D3: 本地 prompt 版本追踪
+        self._decisions: list[dict] = []  # P8 D5: Diagnose 决策本地记录
         self._stack: list[Span] = []
 
     def backfill_identity(self, session_id: Optional[str] = None,
@@ -135,6 +136,18 @@ class Tracer:
             "span_id": span_id,
             "name": name,
             "version": version,
+        })
+
+    def add_decision(self, name: str, **fields: Any) -> None:
+        """P8 D5: 记录 Diagnose 决策。
+
+        本地记录至 `_decisions` list, 关联当前 span, P13 Langfuse 接入时落库。
+        """
+        span_id = self._current_span_id() or ''
+        self._decisions.append({
+            "span_id": span_id,
+            "name": name,
+            **fields,
         })
 
     def _current_span_id(self) -> Optional[str]:

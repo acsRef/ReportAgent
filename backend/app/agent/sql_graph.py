@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from dataclasses import dataclass
 from datetime import date
-from typing import Literal, Optional, TypedDict
+from typing import Any, Literal, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
@@ -13,7 +15,7 @@ from app.llm import _format_tools_for_prompt, call_llm
 from app.tools.registry import registry
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
 from app.utils.text import extract_sql, safe_json_parse
-from app.infra.trace.sdk import traced_node
+from app.infra.trace.sdk import current_tracer, traced_node
 from app.tools.sql_tools import validate_sql, execute_sql
 from app.state.checkpoint_adapter import migrate_checkpoint
 from app.agent.prompts import (
@@ -23,6 +25,97 @@ from app.agent.prompts import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_max_sql_retries() -> int:
+    try:
+        return int(os.getenv("MAX_SQL_REPAIR_RETRIES", "2"))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _get_max_plan_retries() -> int:
+    try:
+        return int(os.getenv("MAX_PLAN_RETRIES", "1"))
+    except (TypeError, ValueError):
+        return 1
+
+
+@dataclass
+class RepairContext:
+    """P8 D4: 7 要素上下文回灌。plan §D4 alignment：
+    original_requirement / target_metric / prev_sql / error / error_kind /
+    validation_result / retry_count / hint。
+    schema 仅引用（不在 prompt 重复拼接；_format_repair_ctx 不渲染该字段，F7 拍板）。
+    """
+
+    original_requirement: str = ""
+    plan: Optional[Any] = None
+    target_metric: str = ""
+    prev_sql: str = ""
+    error: str = ""
+    error_kind: str = ""
+    validation_result: Optional[dict] = None
+    retry_count: Optional[dict] = None
+    hint: Optional[str] = None
+
+
+class EvaluateResult(BaseModel):
+    # F10: EvaluateResult.status 只描述"发生了什么"——纯状态枚举。
+    # 路由语义（SQL_SYNTAX_ERROR / SCHEMA_ERROR / NEED_CLARIFICATION）由
+    # DiagnoseDecision.action + execution_status 承担，不进此处。
+    status: Literal["SUCCESS", "FAILED", "VALIDATION_FAILED"] = "SUCCESS"
+    kind: Optional[str] = None
+    error: Optional[ErrorDetail] = None
+    validation_result: Optional[dict] = None
+
+
+class DiagnoseDecision(BaseModel):
+    # F3: 加 "end" 表示成功 / pass-through；"fail" 只表示真实失败决策。
+    action: Literal["retry_sql", "replan", "clarify", "fail", "end"]
+    reason: str
+    error_kind: str
+    recoverable: bool
+    # F2: retry_target 是 plan 早期伪代码字段，与 action 重复；
+    # 当前路由由 action 直接驱动，retry_target 保留仅供 trace 用。
+    retry_target: Literal["generate_sql", "plan", "end"] = "end"
+    hint: Optional[str] = None
+    confidence: float = 0.5
+
+
+class DiagnosePolicy:
+    @staticmethod
+    def decide(
+        *,
+        error_kind: str = "other",
+        retry_counters: Optional[dict] = None,
+        validation_failed: bool = False,
+        raw_empty: bool = False,
+    ) -> DiagnoseDecision:
+        retry_counters = retry_counters or {}
+        sql_retries = retry_counters.get("sql_generation", 0)
+        plan_retries = retry_counters.get("plan", 0)
+        max_sql = _get_max_sql_retries()
+        max_plan = _get_max_plan_retries()
+        kind = (error_kind or "other").lower()
+        if kind not in ("syntax", "object", "timeout", "connection", "permission", "other"):
+            kind = "other"
+        if raw_empty or validation_failed:
+            kind = kind if kind in ("syntax", "object", "other") else "other"
+            if kind in ("timeout", "connection", "permission"):
+                return DiagnoseDecision(action="fail", reason=f"{kind}: non-recoverable validation failure", error_kind=kind, recoverable=False, retry_target="end", confidence=0.9)
+            if sql_retries < max_sql:
+                return DiagnoseDecision(action="retry_sql", reason=f"{kind}: retry sql {sql_retries+1}/{max_sql} (validation)", error_kind=kind, recoverable=True, retry_target="generate_sql", confidence=0.7)
+            if plan_retries < max_plan:
+                return DiagnoseDecision(action="replan", reason=f"{kind}: replan {plan_retries+1}/{max_plan} (validation)", error_kind=kind, recoverable=True, retry_target="plan", confidence=0.6)
+            return DiagnoseDecision(action="clarify", reason=f"{kind}: budget exhausted after validation", error_kind=kind, recoverable=False, retry_target="end", confidence=0.5)
+        if kind in ("timeout", "connection", "permission"):
+            return DiagnoseDecision(action="fail", reason=f"{kind}: non-recoverable", error_kind=kind, recoverable=False, retry_target="end", confidence=0.9)
+        if sql_retries < max_sql:
+            return DiagnoseDecision(action="retry_sql", reason=f"{kind}: retry sql {sql_retries+1}/{max_sql}", error_kind=kind, recoverable=True, retry_target="generate_sql", confidence=0.7)
+        if plan_retries < max_plan:
+            return DiagnoseDecision(action="replan", reason=f"{kind}: replan {plan_retries+1}/{max_plan}", error_kind=kind, recoverable=True, retry_target="plan", confidence=0.6)
+        return DiagnoseDecision(action="clarify", reason=f"{kind}: budget exhausted", error_kind=kind, recoverable=False, retry_target="end", confidence=0.5)
 
 
 class ClarifyDecision(BaseModel):
@@ -72,7 +165,7 @@ class ChatCard(BaseModel):
     payload: dict = {}
 
 
-class SQLAgentState(TypedDict):
+class SQLAgentState(TypedDict, total=False):
     schema_context: Optional[SchemaContext]
     user_query: str
     query_plan: Optional[QueryPlanWithClarify]
@@ -80,29 +173,18 @@ class SQLAgentState(TypedDict):
     validation_result: dict
     sql_result: str
     execution_status: str
-    # C-6: 与所有父图（parent_graph / confirmed_execution_graph）的
-    # Optional[ErrorDetail] 对齐。此前是 Optional[str]，边界处靠父图防御性
-    # 转换屏蔽——一旦本图真写 str 进 error 就是无声的类型错位。
     error: Optional[ErrorDetail]
     retry_counters: dict
     query_result: Optional[QueryResult]
     chosen_tool: Optional[str]
-    # Structured fields the user PATCHed via /requirement. When set,
-    # _plan MUST treat these as authoritative and ignore inferences
-    # from the free-form `user_query`. Populated by
-    # confirmed_execution_graph._confirmed_sql_agent; ignored by the
-    # legacy interrupt-based flow.
     confirmed_requirement: Optional[str]
-    # 层7/B-3: 声明 trace_id（调用点早已传入），避免 LangGraph 静默丢弃
-    # 导致子图 span 落进共享 _local[""] 桶。
     trace_id: str
-    # 分层对话上下文（L1/L2/L2.5 渲染后的字符串），由调用方 build_session_context
-    # 构建后传入；_plan/_generate_sql 会前置进 prompt，让多轮对话连贯。
     conversation_context: Optional[str]
+    assembled_context: Optional[str]
+    evaluate_result: Optional[dict]
+    diagnose_decision: Optional[dict]
 
 
-# 事实表 → 维度表外键链路（单一来源）。v2 修订：抽成独立常量并同时拼进 _plan 与
-# _generate_sql——真正写 JOIN 的是 _generate_sql，必须能看到具体外键对照，不能只靠列名猜。
 _FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
 - fact_sales: date_id→dim_date, region_id→dim_region, product_id→dim_product, customer_id→dim_customer
 - fact_returns: return_date_id→dim_date, product_id→dim_product, sale_id→fact_sales
@@ -129,8 +211,6 @@ _PLAN_FEWSHOT = """[示例1]
 输出: {"target_metric":"退货数","dimensions":["商品"],"filters":[{"field":"month","operator":"=","value":"上个月"}],"aggregation":"count","time_range":"上个月","clarify_decision":{"action":"run_direct","missing_dimensions":[],"predicted_table":"fact_returns","confidence":0.82,"reasoning":"时间(上个月)、商品、指标(退货)三维度均明确"}}"""
 
 
-# SQL 生成专项规则。与 _generate_sql 的 prompt 内联在规则块里；独立成常量
-# 便于测试断言 prompt 内容、也避免 f-string 把规则文本越嵌越乱。
 _SQL_GENERATION_RULES = """多表 JOIN 规则（必须逐条遵守）:
 - 多表关联优先使用 LEFT JOIN，禁止使用 RIGHT JOIN
 - FROM 后面的第一张表就是主表，其余表都是通过 JOIN 挂上来的维度表/关联表
@@ -160,25 +240,16 @@ _SQL_GENERATION_RULES = """多表 JOIN 规则（必须逐条遵守）:
 
 @traced_node("intent_analyze")
 def _intent_analyze(state: SQLAgentState) -> dict:
-    """Stage 1: pure LLM intent analysis.
-
-    Reads the user's query, looks at the available tool list, and emits a
-    `chat_card` of type `intent_card` with 3-4 candidate analyses. Does NOT
-    touch SQL or any data tool — this is the cheap pre-flight step.
-    """
     user_query = state.get("user_query", "")
-
     tools_block = _format_tools_for_prompt()
     prompt = build_sql_intent_analyze_prompt(
         user_query=user_query,
         tools_block=tools_block,
     )
-
     raw = call_llm(prompt, max_tokens=1500)
     parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(parsed, dict):
         parsed = {}
-
     fallback_options = [
         IntentOption(label="📊 各区域对比汇总", description="按区域/产品维度对比汇总指标",
                      tool="group_compare"),
@@ -187,12 +258,10 @@ def _intent_analyze(state: SQLAgentState) -> dict:
         IntentOption(label="🏆 Top 排名", description="Top N 排名 + 占比",
                      tool="trend_analysis"),
     ]
-
     options: list[IntentOption] = []
     needs_options_group = False
     confidence = 0.5
     reasoning = ""
-
     if isinstance(parsed, dict) and isinstance(parsed.get("options"), list):
         for opt in parsed["options"][:4]:
             if not isinstance(opt, dict):
@@ -207,7 +276,6 @@ def _intent_analyze(state: SQLAgentState) -> dict:
                 tool=tool_name,
                 params_preview=opt.get("params_preview", {}) if isinstance(opt.get("params_preview"), dict) else {},
             ))
-
         try:
             confidence = float(parsed.get("confidence", 0.5))
         except (TypeError, ValueError):
@@ -215,14 +283,11 @@ def _intent_analyze(state: SQLAgentState) -> dict:
         confidence = max(0.0, min(1.0, confidence))
         needs_options_group = bool(parsed.get("needs_options_group", False))
         reasoning = str(parsed.get("reasoning", ""))[:300]
-
-    # Fallback if LLM failed
     if len(options) < 3:
         options = fallback_options[:max(3, len(fallback_options))]
         needs_options_group = True
         confidence = max(0.0, confidence) or 0.5
         reasoning = reasoning or "LLM 输出不完整,使用默认候选"
-
     payload = IntentCardPayload(
         title="我能这样帮你分析 — 选一个继续",
         options=options,
@@ -232,7 +297,6 @@ def _intent_analyze(state: SQLAgentState) -> dict:
         version=1,
         payload=payload.model_dump(),
     )
-
     return {
         "intent_card": intent_card.model_dump(),
         "intent_needs_options_group": needs_options_group,
@@ -244,12 +308,11 @@ def _intent_analyze(state: SQLAgentState) -> dict:
 
 @traced_node("sql_plan")
 def _plan(state: SQLAgentState) -> dict:
-    state = migrate_checkpoint(dict(state))  # P3 (γ): graph 入口 v1→v2 adapter
+    state = migrate_checkpoint(dict(state))
     schema = state.get("schema_context")
     schema_text = "无可用表结构" if not schema else "\n".join(
         f"- {t.name}: {t.description}" for t in schema.tables
     )
-
     chosen_tool = state.get("chosen_tool")
     tool_hint = ""
     if chosen_tool:
@@ -257,38 +320,50 @@ def _plan(state: SQLAgentState) -> dict:
             f"\n\n用户已选定分析工具: {chosen_tool}\n"
             f"请围绕这个工具方向写 SQL,例如 group_compare 优先 GROUP BY,trend_analysis 优先按时间排序。\n"
         )
-
     confirmed_requirement = state.get("confirmed_requirement")
     confirmed_block = ""
     if confirmed_requirement:
-        # 权威来源：用户已在需求卡上填好并 PATCH 确认。自由文本
-        # user_query 仅作参考，以下结构化字段才是生成 SQL 的依据。
-        # 措辞保持克制，避免辅助指令干扰 LLM 的 JSON 输出。
         confirmed_block = (
             f"\n\n已确认需求（以下字段为权威依据，优先于对自由文本的推断）：\n"
             f"{confirmed_requirement}\n"
         )
-
-    # v2 修订：注入当前日期——_plan 判断「今年/上月」是否可推断需要知道今天几号。
     today = date.today().isoformat()
-
+    # F1: _plan 入口保留 retry_counters（不重置）。_diagnose 在 replan 时已
+    # 把 plan +=1、清零会让 sql_generation 计数被无端覆盖，单次分析最坏 4 次
+    # SQL retry（plan §D3 契约 max_sql=2 形同虚设）。只在 counters 不存在时初始化。
+    counters = dict(state.get("retry_counters") or {})
+    counters.setdefault("plan", 0)
+    counters.setdefault("sql_generation", 0)
+    diagnose = state.get("diagnose_decision")
+    repair_ctx = None
+    if diagnose is not None and isinstance(diagnose, dict) and diagnose.get("action") == "replan":
+        raw_dec = diagnose
+        repair_ctx = RepairContext(
+            original_requirement=state.get("user_query", ""),
+            plan=state.get("query_plan"),
+            target_metric=getattr(state.get("query_plan"), "target_metric", "") if state.get("query_plan") else "",
+            prev_sql=state.get("generated_sql", ""),
+            error=state.get("sql_result", "")[:500] if isinstance(state.get("sql_result"), str) else str(state.get("sql_result", ""))[:500],
+            error_kind=raw_dec.get("error_kind", "other"),
+            validation_result=state.get("validation_result"),
+            retry_count=counters,
+            hint=raw_dec.get("reason", ""),
+        )
     prompt = build_sql_plan_prompt(
         today=today,
-        user_query=state["user_query"],
+        # F9: 一致用 .get()，与 SQLAgentState total=False 契约对齐；空 query
+        # 让 LLM 自己提示缺字段，build 端不抛 KeyError。
+        user_query=state.get("user_query", ""),
         schema_text=schema_text,
         tool_hint=tool_hint,
         confirmed_block=confirmed_block,
         plan_table_hints=_PLAN_TABLE_HINTS,
         plan_fewshot=_PLAN_FEWSHOT,
+        repair_ctx=repair_ctx,
     )
-
-    # 分层对话上下文前置（多轮连贯）：有才加，不打扰单轮场景。
-    # P4c: 优先 state["assembled_context"]（含 selective recall 全景），
-    # fallback state["conversation_context"] 向后兼容。
     _ctx_injected = state.get("assembled_context") or state.get("conversation_context")
     if _ctx_injected:
         prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
-
     raw = call_llm(prompt, max_tokens=1500)
     plan_dict = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(plan_dict, dict):
@@ -304,20 +379,19 @@ def _plan(state: SQLAgentState) -> dict:
             plan = QueryPlanWithClarify(**plan_dict)
             return {
                 "query_plan": plan,
-                "retry_counters": {"plan": 0, "sql_generation": 0},
+                "retry_counters": counters,
             }
         except Exception as exc:
             logger.warning("plan node: Pydantic validation failed, falling back to clarify: %s", exc)
     else:
         logger.warning("plan node: LLM output not parseable as JSON")
-
     plan = QueryPlanWithClarify(
-        target_metric=state["user_query"],
+        target_metric=state.get("user_query", ""),
         clarify_decision=fallback_decision,
     )
     return {
         "query_plan": plan,
-        "retry_counters": {"plan": 0, "sql_generation": 0},
+        "retry_counters": counters,
     }
 
 
@@ -325,21 +399,12 @@ def _plan(state: SQLAgentState) -> dict:
 def _generate_sql(state: SQLAgentState) -> dict:
     plan = state.get("query_plan")
     schema = state.get("schema_context")
-
     schema_text = "无可用表结构" if not schema else "\n".join(
         f"表 {t.name} ({t.description}):\n"
         + "\n".join(f"  {c.name} ({c.type})" for c in t.columns)
         for t in schema.tables
     )
-
-    # v2 修订：注入当前日期（相对时间「今年/上月/近 N 天」换算成 [start,end) 的基准）
-    # + 外键链路（写 JOIN 的节点必须看到具体外键对照，不能只靠列名猜）。
     today = date.today().isoformat()
-
-    # Schema RAG Phase 1：把与当前问题最相关的历史案例（FAQ）注入 prompt，
-    # 给 LLM 提供业务口径与 SQL 模板参考。走 registry 通道（统一注册面）：
-    # 通过 registry.get(["search_faq"]) 取工具实例，解析 JSON，注入。
-    # 任何失败降级为空块，不影响主流程。
     faq_block = ""
     try:
         faq_tools = registry.get(["search_faq"])
@@ -352,14 +417,10 @@ def _generate_sql(state: SQLAgentState) -> dict:
         if faq_rows:
             def _format_faq_row(r: dict) -> str:
                 parts = [f"问题：{r.get('question', '')}"]
-                # Tool Contract P2：{question, text, score}——MCP 路径与本地 fallback
-                # 路径暴露同一 schema；text 由 ragent-py chunk 或本地 _format_faq_text
-                # 序列化（sql+note+tables）而来，下游只读 text，不再分别读 sql/note/tables。
                 text = r.get("text") or ""
                 if text:
                     parts.append(text)
                 return "\n\n".join(parts)
-
             faq_lines = "\n\n".join(
                 f"【参考案例 {i}】{_format_faq_row(r)}"
                 for i, r in enumerate(faq_rows, 1)
@@ -371,7 +432,40 @@ def _generate_sql(state: SQLAgentState) -> dict:
             )
     except Exception as exc:
         logger.warning("search_faq failed, generating SQL without FAQ context: %s", exc)
-
+    repair_ctx: Optional[RepairContext] = None
+    prev_validation = state.get("validation_result") or {}
+    prev_sql = (state.get("generated_sql") or "").strip()
+    prev_sql_result = state.get("sql_result") or ""
+    _exec_err = ""
+    _error_kind = "other"
+    if prev_sql_result:
+        try:
+            _parsed_result = json.loads(prev_sql_result)
+            if isinstance(_parsed_result, dict):
+                _exec_err = _parsed_result.get("error") or ""
+                _error_kind = _parsed_result.get("error_kind") or "other"
+        except json.JSONDecodeError:
+            _parsed_result = None
+    if prev_sql and (prev_validation.get("valid") is False or _exec_err):
+        error_to_show = prev_validation.get("error") or _exec_err
+        diagnose = state.get("diagnose_decision")
+        hint = ""
+        if isinstance(diagnose, dict):
+            hint = diagnose.get("reason", "") or diagnose.get("hint", "")
+        # F7: 删 schema_context_ref（set-but-never-rendered，F7 拍板）+
+        # fewshot（faq_block 已由 6 段 task_contract 注入完整版，repair 段不再重复，
+        # F8 拍板）。其余 7 要素保留。
+        repair_ctx = RepairContext(
+            original_requirement=state.get("user_query", ""),
+            plan=plan,
+            target_metric=plan.target_metric if plan else "",
+            prev_sql=prev_sql,
+            error=str(error_to_show)[:800],
+            error_kind=_error_kind,
+            validation_result=prev_validation if prev_validation.get("valid") is False else None,
+            retry_count=state.get("retry_counters"),
+            hint=hint,
+        )
     prompt = build_sql_generate_prompt(
         today=today,
         target_metric=plan.target_metric if plan else "",
@@ -383,51 +477,15 @@ def _generate_sql(state: SQLAgentState) -> dict:
         fk_chain_hints=_FK_CHAIN_HINTS,
         faq_block=faq_block,
         sql_generation_rules=_SQL_GENERATION_RULES,
+        repair_ctx=repair_ctx,
     )
-
-    # Retry feedback loop: when regenerating after a failure, feed the failed
-    # SQL and its error back to the LLM. Without this the retry loop is blind —
-    # the same prompt reproduces the same invalid SQL (e.g. a hallucinated
-    # column) until retries are exhausted.
-    #
-    # Two failure sources must BOTH be checked: a validation failure
-    # (validation_result.valid is False) AND an execution failure (sql_result
-    # carries an "error"). Bug: previously only validation was checked, so when
-    # validate passed but execute failed (e.g. column does not exist at runtime)
-    # the error was silently dropped and the retry regenerated identical SQL.
-    prev_validation = state.get("validation_result") or {}
-    prev_sql = (state.get("generated_sql") or "").strip()
-    prev_sql_result = state.get("sql_result") or ""
-    _exec_err = ""
-    if prev_sql_result:
-        try:
-            _parsed_result = json.loads(prev_sql_result)
-            if isinstance(_parsed_result, dict):
-                _exec_err = _parsed_result.get("error") or ""
-        except json.JSONDecodeError:
-            _parsed_result = None
-    if prev_sql and (prev_validation.get("valid") is False or _exec_err):
-        error_to_show = prev_validation.get("error") or _exec_err
-        prompt += f"""
-
-【上一次生成失败，必须修正】
-上一次的 SQL：
-{prev_sql}
-错误：{error_to_show}
-请针对该错误修正 SQL：只使用上面「可用表结构」中真实存在的表名和列名，不要臆造列。"""
-
-    # 分层对话上下文前置（与 _plan 一致）。
-    # P4c: 优先 state["assembled_context"]（含 selective recall 全景），
-    # fallback state["conversation_context"] 向后兼容。
     _ctx_injected = state.get("assembled_context") or state.get("conversation_context")
     if _ctx_injected:
         prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
-
     sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
-
     sql = extract_sql(sql)
-
-    retry = state.get("retry_counters", {})
+    retry = state.get("retry_counters", {}) or {}
+    retry = dict(retry)
     retry["sql_generation"] = retry.get("sql_generation", 0) + 1
     return {"generated_sql": sql, "retry_counters": retry}
 
@@ -438,7 +496,6 @@ def _validate(state: SQLAgentState) -> dict:
     if not sql:
         return {"validation_result": {"valid": False, "error": "无SQL语句"},
                 "execution_status": "SQL_SYNTAX_ERROR"}
-
     validation = json.loads(validate_sql(sql))
     logger.info("validate_sql result for sql[:60]=%s -> %s", (sql or "")[:60], validation)
     return {"validation_result": validation}
@@ -449,7 +506,6 @@ def _execute(state: SQLAgentState) -> dict:
     sql = state.get("generated_sql", "")
     if not sql:
         return {"sql_result": json.dumps({"error": "无SQL语句"})}
-
     result = execute_sql(sql)
     return {"sql_result": result}
 
@@ -458,48 +514,158 @@ def _execute(state: SQLAgentState) -> dict:
 def _evaluate(state: SQLAgentState) -> dict:
     raw = state.get("sql_result", "")
     if not raw:
-        # SQL was never executed (validation failure or empty)
-        sql_retries = state.get("retry_counters", {}).get("sql_generation", 0)
-        if sql_retries < 3:
-            return {"execution_status": "SQL_SYNTAX_ERROR"}
-        else:
-            return {"execution_status": "NEED_CLARIFICATION",
-                    "error": ErrorDetail(code="SQL_GENERATION_FAILED",
-                                         message="SQL生成失败: 验证不通过", kind="other")}
-    result = json.loads(raw)
-    if "error" in result:
-        retry = state.get("retry_counters", {})
-        sql_retries = retry.get("sql_generation", 0)
-        plan_retries = retry.get("plan", 0)
+        validation = state.get("validation_result") or {}
+        kind = "other"
+        if isinstance(validation, dict) and validation.get("error"):
+            kind = "syntax"
+        return {
+            "evaluate_result": EvaluateResult(status="VALIDATION_FAILED", kind=kind, validation_result=validation).model_dump(),
+            "execution_status": "SQL_SYNTAX_ERROR",
+        }
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        return {
+            "evaluate_result": EvaluateResult(status="FAILED", kind="other", error=ErrorDetail(code="INVALID_RESULT", message=f"Invalid JSON: {raw[:100]}", kind="other")).model_dump(),
+            "execution_status": "FAILED",
+            "error": ErrorDetail(code="INVALID_RESULT", message=f"Invalid JSON: {raw[:100]}", kind="other"),
+        }
+    if "error" in result and result.get("error"):
         kind = result.get("error_kind") or "other"
-
-        # timeout / connection / permission：盲重试没意义，直接失败让用户调整。
+        error_detail = ErrorDetail(code="EXECUTION_ERROR", message=str(result.get("error", "")), kind=kind)
         if kind in ("timeout", "connection", "permission"):
             message = {
                 "timeout": "查询超时，请缩小时间范围或维度后重试",
                 "connection": "数据库连接失败，请稍后重试",
                 "permission": "权限不足，无法执行该查询",
             }[kind]
+            wrapped = ErrorDetail(code="EXECUTION_ERROR", message=f"{message}：{result.get('error', '')}", kind=kind)
             return {
+                "evaluate_result": EvaluateResult(status="FAILED", kind=kind, error=wrapped, validation_result=state.get("validation_result")).model_dump(),
                 "execution_status": "FAILED",
-                "error": ErrorDetail(code="EXECUTION_ERROR",
-                                     message=f"{message}：{result.get('error', '')}",
-                                     kind=kind),
+                "error": wrapped,
             }
+        return {
+            "evaluate_result": EvaluateResult(status="FAILED", kind=kind, error=error_detail, validation_result=state.get("validation_result")).model_dump(),
+            "execution_status": "FAILED",
+            "error": error_detail,
+        }
+    return {
+        "evaluate_result": EvaluateResult(status="SUCCESS", kind=None).model_dump(),
+        "execution_status": "SUCCESS",
+    }
 
-        # syntax / object / other：维持原重试逻辑
-        if sql_retries < 3:
-            return {"execution_status": "SQL_SYNTAX_ERROR"}
-        elif plan_retries < 1:
-            retry["plan"] = plan_retries + 1
-            return {"execution_status": "SCHEMA_ERROR", "retry_counters": retry}
-        else:
-            return {"execution_status": "NEED_CLARIFICATION",
-                    "error": ErrorDetail(code="EXECUTION_ERROR",
-                                         message=f"SQL执行失败: {result['error']}",
-                                         kind=kind)}
 
-    return {"execution_status": "SUCCESS"}
+@traced_node("sql_diagnose")
+def _diagnose(state: SQLAgentState) -> dict:
+    execution_status = state.get("execution_status", "")
+    if execution_status == "SUCCESS":
+        # F3: SUCCESS 是 pass-through，不属于 "fail" 决策；用 action="end" 与
+        # "fail" 区分，P14 Evaluation 按 action 切片不会被污染。
+        decision = DiagnoseDecision(
+            action="end",
+            reason="success: no diagnose needed",
+            error_kind="",
+            recoverable=False,
+            retry_target="end",
+            confidence=1.0,
+        )
+        tracer = current_tracer()
+        if tracer is not None:
+            tracer.add_decision(
+                name="sql_diagnose",
+                action=decision.action,
+                reason=decision.reason,
+                error_kind=decision.error_kind,
+                retry_counters=state.get("retry_counters", {}),
+                execution_status=execution_status,
+            )
+        return {"diagnose_decision": decision.model_dump(), "execution_status": "SUCCESS"}
+    evaluate_result = state.get("evaluate_result") or {}
+    kind = evaluate_result.get("kind") or "other"
+    raw = state.get("sql_result", "")
+    raw_empty = not raw
+    validation = state.get("validation_result") or {}
+    validation_failed = validation.get("valid") is False
+    retry_counters = state.get("retry_counters", {}) or {}
+    # F6: 入口一次性解析 raw，下方 clarify / fail 分支共用，不再重复 json.loads。
+    parsed_raw: Optional[dict] = None
+    if raw:
+        try:
+            _loaded = json.loads(raw)
+            if isinstance(_loaded, dict):
+                parsed_raw = _loaded
+        except json.JSONDecodeError:
+            parsed_raw = None
+    # F12: kind 已被 evaluate_result.get("kind") or "other" 兜底，not kind
+    # 永远 False；保留 kind == "other" 单分支即可。
+    if kind == "other":
+        if validation_failed:
+            kind = "syntax"
+        elif parsed_raw and parsed_raw.get("error_kind"):
+            kind = parsed_raw.get("error_kind") or kind
+    decision = DiagnosePolicy.decide(
+        error_kind=kind,
+        retry_counters=retry_counters,
+        validation_failed=validation_failed,
+        raw_empty=raw_empty,
+    )
+    tracer = current_tracer()
+    if tracer is not None:
+        tracer.add_decision(
+            name="sql_diagnose",
+            action=decision.action,
+            reason=decision.reason,
+            error_kind=decision.error_kind,
+            retry_counters=dict(retry_counters),
+            execution_status=execution_status,
+        )
+    if decision.action == "retry_sql":
+        return {"diagnose_decision": decision.model_dump(), "execution_status": "SQL_SYNTAX_ERROR"}
+    if decision.action == "replan":
+        new_counters = dict(retry_counters)
+        new_counters["plan"] = new_counters.get("plan", 0) + 1
+        return {
+            "diagnose_decision": decision.model_dump(),
+            "execution_status": "SCHEMA_ERROR",
+            "retry_counters": new_counters,
+        }
+    if decision.action == "clarify":
+        err = state.get("error")
+        if not err:
+            raw_err = (parsed_raw or {}).get("error", "") if parsed_raw else raw[:200]
+            err = ErrorDetail(
+                code="EXECUTION_ERROR",
+                message=f"SQL执行失败: {raw_err}",
+                kind=kind,
+            )
+        return {
+            "diagnose_decision": decision.model_dump(),
+            "execution_status": "NEED_CLARIFICATION",
+            "error": err,
+        }
+    # fail
+    err = state.get("error")
+    if not err:
+        if parsed_raw and parsed_raw.get("error"):
+            err = ErrorDetail(
+                code="EXECUTION_ERROR",
+                message=str(parsed_raw.get("error")),
+                kind=kind,
+            )
+        if err is None and validation_failed:
+            err = ErrorDetail(
+                code="SQL_GENERATION_FAILED",
+                message=str(validation.get("error", "验证不通过")),
+                kind=kind,
+            )
+    result: dict[str, Any] = {
+        "diagnose_decision": decision.model_dump(),
+        "execution_status": "FAILED",
+    }
+    if err is not None:
+        result["error"] = err
+    return result
 
 
 @traced_node("sql_build_output")
@@ -516,15 +682,9 @@ def _build_output(state: SQLAgentState) -> dict:
     columns_raw = result_data.get("columns", [])
     columns = [c if isinstance(c, dict) else {"name": c, "type": ""} for c in columns_raw]
     rows = result_data.get("rows", [])
-    # 保留 execute_sql 用 CTE count(*) 算出的「真实总行数」。截断场景下
-    # len(rows) 只是 MAX_RESULT_ROWS 上限，会误导 _plan_analysis 的规模估算，
-    # 也让 query_snapshot.row_count 入库失真。
     total = result_data.get("row_count")
     if not isinstance(total, int):
         total = len(rows)
-    # 三态：FAILED（有 error）/ EMPTY（无 error 但零行，合法结论）/ SUCCESS。
-    # EMPTY 之前永远是死代码——父图被迫从 rows 反推 verdict 绕过去，下游任何
-    # 依赖 query_result.status == 'EMPTY' 的判定都会无声失效。
     if has_error:
         status = "FAILED"
     elif not rows:
@@ -556,13 +716,32 @@ def _route_after_validate(state: SQLAgentState) -> Literal["execute", "evaluate"
     return "evaluate"
 
 
-def _route_after_evaluate(state: SQLAgentState) -> Literal["plan", "generate_sql", "build_output", "__end__"]:
+def _route_after_evaluate(state: SQLAgentState) -> Literal["diagnose"]:
+    return "diagnose"
+
+
+def _route_after_diagnose(state: SQLAgentState) -> Literal["plan", "generate_sql", "build_output", "__end__"]:
+    # F2: 按 DiagnoseDecision.action 路由（plan §D1 字面）。execution_status 由
+    # _diagnose 同步写入父图契约，路由键以 action 为准——单一事实源。
+    decision = state.get("diagnose_decision") or {}
+    action = decision.get("action") if isinstance(decision, dict) else None
+    if action == "retry_sql":
+        return "generate_sql"
+    if action == "replan":
+        return "plan"
+    if action == "end":
+        return "build_output"
+    if action == "fail":
+        return "__end__"
+    if action == "clarify":
+        return "__end__"
+    # 兜底：diagnose_decision 缺失时退化到 execution_status（与 P7 兼容）。
     status = state.get("execution_status", "")
     if status == "SUCCESS":
         return "build_output"
-    elif status == "SCHEMA_ERROR":
+    if status == "SCHEMA_ERROR":
         return "plan"
-    elif status == "SQL_SYNTAX_ERROR":
+    if status == "SQL_SYNTAX_ERROR":
         return "generate_sql"
     return "__end__"
 
@@ -575,6 +754,7 @@ def build_sql_graph():
     workflow.add_node("validate", _validate)
     workflow.add_node("execute", _execute)
     workflow.add_node("evaluate", _evaluate)
+    workflow.add_node("diagnose", _diagnose)
     workflow.add_node("build_output", _build_output)
 
     workflow.set_entry_point("plan")
@@ -584,6 +764,7 @@ def build_sql_graph():
     workflow.add_conditional_edges("validate", _route_after_validate)
     workflow.add_edge("execute", "evaluate")
     workflow.add_conditional_edges("evaluate", _route_after_evaluate)
+    workflow.add_conditional_edges("diagnose", _route_after_diagnose)
     workflow.add_edge("build_output", END)
 
     return workflow.compile()

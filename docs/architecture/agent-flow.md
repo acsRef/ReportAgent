@@ -93,7 +93,7 @@ Failure Category / Error Message / Validation Result / Retry Count
 |---|---|---|
 | Requirement Agent + Workflow | `backend/app/agent/requirement_analysis_graph.py` 在位；只暴露 schema 工具（SQL gate 由 `tests/graphs/test_requirement_analysis_sqlgate.py` 钉住） | 目录迁至 `agents/requirement/` 属 P3 |
 | Confirmed 执行链 | `backend/app/agent/confirmed_execution_graph.py`：security_guard 入口节点 → gate → 锁 draft → schema → sql_agent → report_agent → persist | 同上 |
-| Execution Agent 动态决策环 | 未成形——现 `sql_graph.py` 是带有限重试的固定子图，失败回灌 regeneration prompt 已有雏形 | P8（Execution Agent Loop） |
+| Execution Agent 动态决策环 | 已落地（P8）— `_diagnose` 节点 + `DiagnosePolicy.decide()` 纯确定性策略 + `_route_after_diagnose` 按 `DiagnoseDecision.action` 路由（plan §四 / `docs/plans/2026-08-29-p8-execution-agent-loop.md`） | — |
 | Repair 六要素上下文 | 部分：rejected SQL + error message 已回灌 prompt | P8 结构化 |
 | `MAX_SQL_REPAIR_RETRIES` 预算 | 重试计数散装（retry_counters） | P9 统一预算 |
 | Legacy 链路 | `backend/app/legacy/agents/parent_graph.py`（仅 mode=legacy），import freeze 断言钉住 | P15 删除 |

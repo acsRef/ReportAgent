@@ -183,6 +183,7 @@ def build_sql_plan_prompt(
     confirmed_block: str = "",
     plan_table_hints: str = "",
     plan_fewshot: str = "",
+    repair_ctx: Optional[Any] = None,
 ) -> str:
     sections = [
         SQL_PLAN_V1["system_contract"],
@@ -199,7 +200,11 @@ def build_sql_plan_prompt(
         SQL_PLAN_V1["output_schema"].format(plan_fewshot=plan_fewshot),
         SQL_PLAN_V1["safety_policy"],
     ]
-    return "\n\n".join(s for s in sections if s)
+    base = "\n\n".join(s for s in sections if s)
+    repair_block = _format_repair_ctx(repair_ctx)
+    if repair_block:
+        return f"{base}\n\n{repair_block}"
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +270,54 @@ SQL_GENERATE_META: dict[str, Any] = {
 }
 
 
+def _format_repair_ctx(repair_ctx: Any) -> str:
+    """把 RepairContext（dataclass 或 dict）渲染成 retry feedback 段。
+
+    7 要素（plan §D4）：original_requirement / target_metric / prev_sql /
+    error / error_kind / validation_result / retry_count / hint / fewshot。
+    schema 仅引用（既不在 6 段重复拼接，也不放进 repair 段——F7 拍板）。
+    """
+    if repair_ctx is None:
+        return ""
+
+    def _get(obj: Any, key: str, default: Any = "") -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    original_requirement = _get(repair_ctx, "original_requirement", "")
+    prev_sql = _get(repair_ctx, "prev_sql", "") or _get(repair_ctx, "previous_sql", "")
+    error = _get(repair_ctx, "error", "") or _get(repair_ctx, "error_message", "")
+    error_kind = _get(repair_ctx, "error_kind", "") or _get(repair_ctx, "failure_category", "")
+    validation_result = _get(repair_ctx, "validation_result", None)
+    retry_count = _get(repair_ctx, "retry_count", None) or _get(repair_ctx, "retry_counters", None)
+    hint = _get(repair_ctx, "hint", "")
+    # F8: fewshot 由 6 段 task_contract 的 faq_block 注入；repair 段不再重复截断版本。
+    fewshot = ""
+    target_metric = _get(repair_ctx, "target_metric", "")
+    lines: list[str] = ["【上一次生成失败，必须修正】"]
+    if original_requirement:
+        lines.append(f"原始需求：{original_requirement}")
+    if target_metric:
+        lines.append(f"目标指标：{target_metric}")
+    if prev_sql:
+        lines.append(f"上一次的 SQL：\n{prev_sql}")
+    if error:
+        lines.append(f"错误：{error}")
+    if error_kind:
+        lines.append(f"错误分类：{error_kind}")
+    if validation_result:
+        lines.append(f"验证结果：{validation_result}")
+    if retry_count is not None:
+        lines.append(f"重试计数：{retry_count}")
+    if hint:
+        lines.append(f"修复提示：{hint}")
+    if fewshot:
+        lines.append(f"相似案例：{fewshot}")
+    lines.append("请针对该错误修正 SQL：只使用上面「可用表结构」中真实存在的表名和列名，不要臆造列。")
+    return "\n".join(lines)
+
+
 def build_sql_generate_prompt(
     today: str,
     target_metric: str,
@@ -276,6 +329,7 @@ def build_sql_generate_prompt(
     fk_chain_hints: str = "",
     faq_block: str = "",
     sql_generation_rules: str = "",
+    repair_ctx: Optional[Any] = None,
 ) -> str:
     sections = [
         SQL_GENERATE_V1["system_contract"],
@@ -295,4 +349,8 @@ def build_sql_generate_prompt(
         SQL_GENERATE_V1["output_schema"].format(sql_generation_rules=sql_generation_rules),
         SQL_GENERATE_V1["safety_policy"],
     ]
-    return "\n\n".join(s for s in sections if s)
+    base = "\n\n".join(s for s in sections if s)
+    repair_block = _format_repair_ctx(repair_ctx)
+    if repair_block:
+        return f"{base}\n\n{repair_block}"
+    return base
