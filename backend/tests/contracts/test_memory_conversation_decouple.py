@@ -178,6 +178,42 @@ def test_app_memory_does_not_import_raw_infra_primitives():
     )
 
 
+# --- 7. F9 caller 闭环钉（post-review） --------------------------------------
+#
+# P3 cumulative review post-review：manager.remember_conversation_facts 形参加了
+# `session_id` keyword，但 caller (conversation.py:188) 没传——session-bound candidate
+# 会落 scope='user' / session_id=NULL 而非 scope='session' / session_id='...'。
+# AST 钉住 caller 必须 keyword-form 传 session_id=session_id。
+
+def test_conversation_py_passes_session_id_to_remember_conversation_facts():
+    """F9 闭环：conversation.py 内 remember_conversation_facts(...) 必须以 keyword
+    形式传 session_id=session_id（不是位置参数，不是 None 默认）。"""
+    src = Path(inspect.getfile(
+        __import__("app.memory.conversation", fromlist=["conversation"])
+    )).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    found = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Await):
+            continue
+        call = node.value
+        if not isinstance(call, ast.Call):
+            continue
+        func = call.func
+        # 函数名是 remember_conversation_facts 的调用
+        if isinstance(func, ast.Name) and func.id == "remember_conversation_facts":
+            for kw in call.keywords:
+                if kw.arg == "session_id":
+                    # 进一步：值应是 Name "session_id"（从外层 session_id 变量传）
+                    if isinstance(kw.value, ast.Name) and kw.value.id == "session_id":
+                        found = True
+                        break
+    assert found, (
+        "conversation.py 内 remember_conversation_facts(...) 必须 keyword-form "
+        "传 session_id=session_id（从外层 prepare_conversation_context 参数透传）"
+    )
+
+
 # --- 6. recall API 边界（P4a 保持 string API） -------------------------------
 #
 # P4a 的 `test_recall_structured_not_introduced_in_p4a` 钉子已于 P4b T4 移除：

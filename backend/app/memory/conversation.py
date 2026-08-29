@@ -185,5 +185,9 @@ async def prepare_conversation_context(session_id: str, user_id: int | str) -> s
     )
     if updates:
         await session_manager.save_context_state(session_id, updates)
-        await remember_conversation_facts(user_id, updates, compressed_batch)
+        # F9 闭环：透传 session_id 给 remember_conversation_facts → 落到 DB 行
+        # scope='session' 而非 'user'（post-review fix）
+        await remember_conversation_facts(
+            user_id, updates, compressed_batch, session_id=session_id,
+        )
     return context

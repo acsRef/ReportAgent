@@ -147,7 +147,12 @@ class UserMemory:
     async def search(
         self, user_id: str, query: str = "", top_k: Optional[int] = None
     ) -> list[RankedMemory]:
-        k = top_k or self._top_k
+        # post-review fix：top_k=0 表达「禁止召回」语义（Selective Recall decision 短路）
+        # ——原 `k = top_k or self._top_k` 把 0 当 falsy 兜底为默认 5，会让
+        # semantic=False 的决策仍然走 SQL 查 + record_access 副作用，污染 LRU/LFU 排序。
+        k = self._top_k if top_k is None else top_k
+        if k <= 0:
+            return []
         pool = get_pool()
         embedder = get_embedder()
         embedding = await embedder.embed_or_none(query) if query else None
@@ -245,7 +250,10 @@ class UserMemory:
     async def get_user_preferences(
         self, user_id: str, top_k: Optional[int] = None
     ) -> list[RankedMemory]:
-        k = top_k or self._top_k
+        # post-review fix：同 search()——top_k=0 表达「禁止召回」短路返回 []
+        k = self._top_k if top_k is None else top_k
+        if k <= 0:
+            return []
         pool = get_pool()
         now = datetime.datetime.now()
         async with pool.acquire() as conn:
