@@ -33,18 +33,21 @@ def _noop_memory_recall(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_requirement_agent_entry_has_conversation_context(monkeypatch):
-    """_requirement_parse 入口: ContextRuntime.build() 返回 bundle['conversation_context'] 非空."""
+    """_requirement_parse 入口: ContextRuntime.build() 返回 bundle['conversation_context'] 非空.
+
+    P4c post-review F1 后默认走 SelectiveRecallPolicy; '上月销售' 不含 history_ref
+    关键词 → selective 判 conversation=False → 不调 prepare_conversation_context.
+    用含 history_ref 关键词的 query 才能验证 conversation path.
+    """
     async def fake_prepare(sid, uid):
         return "<L1>history</L1><L2>summary</L2>"
 
     monkeypatch.setattr(
         "app.context.runtime.prepare_conversation_context", fake_prepare
     )
-    # 即便 selective strategy 启动,也要求 conversation 字段被填——selective 仅
-    # 控制 recall items,conversation 来自 conversation engine glue.
     bundle = await ContextRuntime().build(
         session_id="session-A", user_id=1,
-        query="上月销售", agent="requirement_analyze",
+        query="继续刚才那个查询的口径", agent="requirement_analyze",
     )
     assert bundle["conversation_context"]
     assert "history" in bundle["conversation_context"]

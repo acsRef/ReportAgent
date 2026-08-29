@@ -93,10 +93,61 @@ class TestTokenBudget:
             recall_items=items,
             agent_policy=AgentContextPolicy.EXECUTION,
         )
-        # budget=100 tokens ≈ 300 chars; 实际给点 padding 容差
-        assert len(bundle["assembled_context"]) <= 600, (
-            f"Budget 未截断: len={len(bundle['assembled_context'])}"
+        # P4c post-review F3 (test 质量): 100 tokens × 3 chars = 300 chars 硬上限.
+        # 严格 < 300 chars.
+        assert len(bundle["assembled_context"]) <= 300, (
+            f"Budget 未严格按 100 tokens 截断: len={len(bundle['assembled_context'])}"
         )
+
+    def test_remaining_token_budget_clamps_to_min(self, monkeypatch):
+        """P4c post-review F2: remaining_token_budget < configured → effective = remaining.
+        配置 100 tokens, remaining 50 tokens → 实截到 50 × 3 = 150 chars."""
+        monkeypatch.setenv("P4C_ASSEMBLER_TOKEN_BUDGET", "100")
+        asm = ContextAssembler()
+        items = [_item("memory_query", "query", i, "x" * 100, 0.5) for i in range(20)]
+        bundle = asm.assemble(
+            conversation_context="conv",
+            recall_items=items,
+            agent_policy=AgentContextPolicy.EXECUTION,
+            remaining_token_budget=50,
+        )
+        # remaining=50 < configured=100 → effective 50 tokens → 150 chars 硬上限.
+        assert len(bundle["assembled_context"]) <= 150, (
+            f"min(remaining, configured) 未生效: len={len(bundle['assembled_context'])}"
+        )
+
+    def test_remaining_token_budget_can_be_larger(self, monkeypatch):
+        """remaining_token_budget > configured → effective = configured. 设 env 让 configured=100."""
+        monkeypatch.setenv("P4C_ASSEMBLER_TOKEN_BUDGET", "100")
+        asm = ContextAssembler()
+        items = [_item("memory_query", "query", i, "x" * 100, 0.5) for i in range(20)]
+        # 100 tokens configured, 1000 remaining → min = 100 → 300 chars
+        bundle = asm.assemble(
+            conversation_context="conv",
+            recall_items=items,
+            agent_policy=AgentContextPolicy.EXECUTION,
+            remaining_token_budget=1000,
+        )
+        assert len(bundle["assembled_context"]) <= 300, (
+            f"configured 应仍生效: len={len(bundle['assembled_context'])}"
+        )
+
+    def test_remaining_token_budget_none_uses_configured_only(self):
+        """remaining_token_budget=None 时仅走 configured (向后兼容 P3 不裁剪 API)."""
+        import os
+        # 显式 unset env 走默认 4000 tokens
+        os.environ.pop("P4C_ASSEMBLER_TOKEN_BUDGET", None)
+        asm = ContextAssembler()
+        items = [_item("memory_query", "query", i, "x" * 100, 0.5) for i in range(20)]
+        bundle = asm.assemble(
+            conversation_context="conv",
+            recall_items=items,
+            agent_policy=AgentContextPolicy.EXECUTION,
+            remaining_token_budget=None,
+        )
+        # 4000 tokens × 3 = 12000 chars; items + conv ~2100 chars → 不截断
+        assert "x" * 100 in bundle["assembled_context"]
+        assert "conv" in bundle["assembled_context"]
 
     def test_token_budget_keeps_short(self, monkeypatch):
         """Budget 大于实际 → 不截断."""

@@ -79,6 +79,7 @@ async def test_legacy_recall_delegates_to_structured_and_joins(monkeypatch):
 @pytest.mark.asyncio
 async def test_context_runtime_step4_uses_structured(monkeypatch):
     from app.context.runtime import ContextRuntime
+    from app.context.decision import LegacyFallbackPolicy  # P4c post-review F1
     from app.infra.memory import memory_manager as mm
 
     async def fake_prepare(session_id, user_id):
@@ -93,7 +94,7 @@ async def test_context_runtime_step4_uses_structured(monkeypatch):
     monkeypatch.setattr(
         mm.MemoryManager, "recall_structured", fake_recall_structured)
 
-    bundle = await ContextRuntime().build(
+    bundle = await ContextRuntime(policy=LegacyFallbackPolicy()).build(  # P4c post-review F1: 显式 LegacyFallbackPolicy
         session_id="s", user_id=1, query="q", agent="sql_plan")
     assert bundle["recall_items"][0]["kind"] == "query"
     assert bundle["recall_items"][0]["source"] == "memory_query"

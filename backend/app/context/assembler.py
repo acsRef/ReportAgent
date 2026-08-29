@@ -71,13 +71,19 @@ def _filter_and_dedup_and_sort(items: list[RecallItem]) -> list[RecallItem]:
     )
 
 
-def _apply_token_budget(text: str) -> str:
+def _apply_token_budget(text: str, remaining_token_budget: int | None = None) -> str:
     """按 P4C_ASSEMBLER_TOKEN_BUDGET env 截断. P4c Task 4 真实装.
-
+    P4c post-review F2: 真实 effective budget = min(remaining_token_budget, configured).
     Token Budget 控制 assembled_context 总长度 (char count 估算, 1 token ≈ 3 chars).
+    - remaining_token_budget=None: 仅走 configured budget (向后兼容 P3 不裁剪)
+    - remaining_token_budget=<int>: effective = min(remaining, configured)
+      (避免超出 LLM 上下文预算)
+
     默认 4000 tokens (= 12000 chars). Env 不设时等同 P4a 行为.
     """
     budget_tokens = int(os.getenv("P4C_ASSEMBLER_TOKEN_BUDGET", _DEFAULT_TOKEN_BUDGET))
+    if remaining_token_budget is not None:
+        budget_tokens = min(budget_tokens, remaining_token_budget)
     char_cap = budget_tokens * _CHARS_PER_TOKEN
     if len(text) <= char_cap:
         return text
@@ -91,6 +97,7 @@ class ContextAssembler:
         conversation_context: str,
         recall_items: list[RecallItem],
         agent_policy: AgentContextPolicy,
+        remaining_token_budget: int | None = None,  # P4c post-review F2
     ) -> ContextBundle:
         # P4c Task 4: 真实 Filter (dedup + sort)
         kept: list[RecallItem] = _filter_and_dedup_and_sort(recall_items)
@@ -102,8 +109,8 @@ class ContextAssembler:
             assembled = f"{recall_block}\n\n{conversation_context}"
         else:
             assembled = recall_block or conversation_context
-        # P4c Task 4: 真实 Budget 截断
-        assembled = _apply_token_budget(assembled)
+        # P4c Task 4: 真实 Budget 截断 + P4c post-review F2: 接受 remaining_token_budget
+        assembled = _apply_token_budget(assembled, remaining_token_budget)
         return ContextBundle(
             conversation_context=conversation_context,
             recall_items=kept,

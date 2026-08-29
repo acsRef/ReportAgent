@@ -164,7 +164,7 @@ class TestContextRuntimeFiveStepOrchestration:
             "app.infra.memory.memory_manager.MemoryManager.recall_structured",
             new=fake_recall_structured,
         ):
-            runtime = ContextRuntime()
+            runtime = ContextRuntime(policy=LegacyFallbackPolicy())  # P4c post-review F1: 显式传 LegacyFallbackPolicy
             bundle = await runtime.build(
                 session_id="s-1", user_id=42,
                 query="2024 销售", agent="requirement_analyze",

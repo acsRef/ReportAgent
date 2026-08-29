@@ -15,7 +15,11 @@ conversation 召回（plan §F11）。
 from __future__ import annotations
 
 from app.context.assembler import ContextAssembler, ContextBundle, RecallItem
-from app.context.decision import ContextDecisionPolicy, LegacyFallbackPolicy
+from app.context.decision import (
+    ContextDecisionPolicy,
+    LegacyFallbackPolicy,
+    SelectiveRecallPolicy,
+)
 from app.context.policy import AgentContextPolicy, ContextPolicyResolver
 # P4a：conversation 引擎迁入 app.memory（domain 层）；context 经 memory 域调用
 from app.memory.conversation import prepare_conversation_context
@@ -33,7 +37,7 @@ class ContextRuntime:
         resolver: ContextPolicyResolver | None = None,
         assembler: ContextAssembler | None = None,
     ):
-        self._policy: ContextDecisionPolicy = policy or LegacyFallbackPolicy()
+        self._policy: ContextDecisionPolicy = policy or SelectiveRecallPolicy()  # P4c post-review F1: 默认必须 SelectiveRecallPolicy（plan 目标 "主图真触发 selective"）；LegacyFallbackPolicy 仅显式兼容
         self._resolver: ContextPolicyResolver = resolver or ContextPolicyResolver()
         self._assembler: ContextAssembler = assembler or ContextAssembler()
 
@@ -45,6 +49,7 @@ class ContextRuntime:
         query: str,
         agent: str,
         state_dict: dict | None = None,
+        remaining_token_budget: int | None = None,  # P4c post-review F2: 透传给 assembler
     ) -> ContextBundle:
         # Step 1：解析 agent_policy
         agent_policy: AgentContextPolicy = self._resolver.resolve(agent)
@@ -75,11 +80,12 @@ class ContextRuntime:
                 str(user_id),
                 top_k_queries=decision.top_k_queries,
             ))
-        # Step 5：assemble
+        # Step 5：assemble (P4c post-review F2: 透传 remaining_token_budget)
         return self._assembler.assemble(
             conversation_context=conversation_context,
             recall_items=recall_items,
             agent_policy=agent_policy,
+            remaining_token_budget=remaining_token_budget,
         )
 
 
