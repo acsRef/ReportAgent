@@ -153,3 +153,67 @@ def test_chitchat_recalls_nothing():
     assert d.conversation is False
     assert d.semantic is False
     assert d.query is False
+
+
+# --- F5：四触发条件负例（plan §F5 钉子） -----------------------------------
+
+
+def test_no_history_ref_keeps_conversation_off():
+    # 触发1（历史引用）负例：query 无历史引用词 → conversation=False
+    d = SelectiveRecallPolicy().decide(
+        query="2024 销售排名", agent_policy=AgentContextPolicy.REQUIREMENT,
+        session_state={},
+    )
+    assert d.conversation is False
+
+
+def test_pref_keyword_triggers_semantic():
+    # 触发2（长期偏好影响当前任务）正例：query 含 _PREF_TASK 词「图表」 → semantic=True
+    d = SelectiveRecallPolicy().decide(
+        query="帮我做个图表", agent_policy=AgentContextPolicy.REQUIREMENT,
+        session_state={},
+    )
+    assert d.semantic is True
+
+
+def test_no_biz_def_skips_semantic():
+    # 触发3（业务定义）负例：query 无 _BIZ_DEF 词且无 _PREF_TASK 词 → semantic=False
+    d = SelectiveRecallPolicy().decide(
+        query="查看用户列表", agent_policy=AgentContextPolicy.REQUIREMENT,
+        session_state={},
+    )
+    assert d.semantic is False
+
+
+def test_execution_no_data_verb_skips_query():
+    # 触发4（query experience）负例：query 无 _DATA_VERB 词 → query=False
+    d = SelectiveRecallPolicy().decide(
+        query="休息一下", agent_policy=AgentContextPolicy.EXECUTION,
+        session_state={},
+    )
+    assert d.query is False
+
+
+# --- F6：§三 agent 表分流（plan §F6 钉子） -----------------------------------
+
+
+def test_requirement_query_with_history_and_data_recalls_query():
+    # §三 agent 表 REQUIREMENT 分流：query 含 _HISTORY_REF 词 + _DATA_VERB 词
+    # → query=True / top_k_queries=1（少量）
+    d = SelectiveRecallPolicy().decide(
+        query="再按区域统计一下", agent_policy=AgentContextPolicy.REQUIREMENT,
+        session_state={},
+    )
+    assert d.query is True
+    assert d.top_k_queries == 1
+
+
+def test_requirement_query_data_only_skips_query():
+    # §三 agent 表 REQUIREMENT 分流：query 仅 _DATA_VERB（无 _HISTORY_REF）
+    # → query=False / top_k_queries=0（少量策略）
+    d = SelectiveRecallPolicy().decide(
+        query="统计各区域销售", agent_policy=AgentContextPolicy.REQUIREMENT,
+        session_state={},
+    )
+    assert d.query is False
+    assert d.top_k_queries == 0
