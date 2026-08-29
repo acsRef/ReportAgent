@@ -17,6 +17,7 @@ import logging
 
 from app.llm import call_llm
 from app.memory.manager import remember_conversation_facts
+from app.memory.prompts import build_conversation_summarize_prompt
 from app.utils.text import safe_json_parse
 
 logger = logging.getLogger(__name__)
@@ -65,31 +66,7 @@ def compress_and_extract(old_digest: str | None, batch_messages: list[dict]) -> 
     返回 ``{"summary", "extracted_schemas", "extracted_preferences"}``。
     summary 是**替换**旧摘要（不是追加），严格 ≤ L2_MAX_CHARS。
     """
-    batch_text = format_messages(batch_messages)
-    prompt = f"""你在维护一段对话的滚动摘要。把「旧摘要」和「最新对话」融合成一份新摘要，
-并抽取其中稳定的结构化事实。
-
-旧摘要（{len(old_digest or '')} 字）：
-{old_digest or '（无）'}
-
-最新对话（{len(batch_messages)} 条）：
-{batch_text}
-
-只输出 JSON，禁止解释、禁止 markdown：
-{{
-  "summary": "融合新旧信息的叙事摘要，不超过 {L2_MAX_CHARS} 字；只保留话题脉络/用户反馈/决策背景，不含具体字段名和数值",
-  "extracted_schemas": [
-    {{"type": "field_mapping", "user_term": "销售额", "db_field": "total_amount", "table": "fact_sales"}},
-    {{"type": "calculation", "user_term": "环比", "sql_expression": "(v-LAG(v))/LAG(v)*100"}}
-  ],
-  "extracted_preferences": ["用户要求华东华南分开展示", "用户偏好柱状图"]
-}}
-
-要求：
-1. summary 是替换旧摘要，不是追加，严格不超过 {L2_MAX_CHARS} 字。
-2. extracted_schemas 只提取新出现或变更的字段映射/计算口径。
-3. extracted_preferences 只提取明确、稳定的用户偏好指令。"""
-
+    prompt = build_conversation_summarize_prompt(old_digest, batch_messages)
     raw = call_llm(prompt, max_tokens=1000)
     result = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(result, dict):

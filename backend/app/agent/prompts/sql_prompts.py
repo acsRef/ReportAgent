@@ -193,6 +193,7 @@ def build_sql_plan_prompt(
             tool_hint=tool_hint,
             confirmed_block=confirmed_block,
             schema_text=schema_text,
+            plan_table_hints=plan_table_hints,
         ),
         SQL_PLAN_V1["tool_policy"],
         SQL_PLAN_V1["output_schema"].format(plan_fewshot=plan_fewshot),

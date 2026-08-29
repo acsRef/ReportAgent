@@ -26,56 +26,12 @@ from app.models.requirement import (
     RequirementStatus,
 )
 from app.agent import requirement_options as opts
+from app.agent.prompts import build_requirement_parse_prompt
 
 logger = logging.getLogger(__name__)
 
 
 # --- LLM call --------------------------------------------------------------
-
-
-_PARSE_PROMPT = """你是 ReportAgent 需求解析器。给定用户的中文业务问题与可用表结构，
-判断每个维度（time / scope / metric / granularity / comparison）是否明确，
-并输出结构化 JSON。
-
-用户问题: {user_query}
-
-可用表结构:
-{schema_text}
-
-{dictionary_block}
-
-字段释义规则：
-- 「数据字典参考」中给出释义的字段，直接采用其含义，不要再生成对应假设
-- **关键**：data_source_type=stream 的字段（接口/长连接/实时推送）**不在任何 fact_* 事实表里**——严禁生成"该字段可能存在于 fact_sales.total_amount 这类事实表"这种假设！必须生成一个 data_source assumption：
-  key 固定为 "data_source:<接口名>"，text 写「该字段来自实时流接口，未在当前分析数据库中；如需聚合查询需先接入数据通道」，
-  alternatives 给「实时流聚合服务 / 离线 ETL 同步表（需先建）/ 用户提供的其他查询路径」之类。
-  释义本身的 field_meaning 假设仍可生成（用户可采用），但 data_source assumption 与 field_meaning 是两个独立概念。
-- 用户提及的字段在字典中无释义或释义歧义时，输出 assumption：
-  key 固定为 "field_meaning:<字段名>"，text 写你的最佳猜测释义（注明「请确认」），
-  alternatives 给候选释义（可为空数组）。用户确认前该字段含义不得用于 SQL 生成
-
-维度判断规则：
-- time_range: 是否包含明确的时间范围或可推断的相对时间词（本月/上月/今年/最近30天 等）
-- scope: 是否包含明确的区域/产品/客户范围；可缺省（默认 ALL）
-- metric: 是否包含明确指标（销售额/订单数/退货率 等）
-- granularity: 日/周/月/季度；不指定时默认月
-- comparison: 是否要对比（同比/环比/指定基线）；不需要则 none
-
-输出 JSON（禁止解释，禁止 markdown，禁止换行）：
-{{
-  "summary": "一句话业务目标",
-  "target_metrics": ["指标1", "指标2"],
-  "time_range": "今年" | null,
-  "scope": ["华东"] | [],
-  "dimensions": ["时间", "区域"],
-  "analysis_methods": ["trend_analysis", "group_compare"],
-  "confidence": 0.85,
-  "missing_fields": ["time_range", "metric"],
-  "assumptions": [
-    {{"key": "scope_default", "text": "未指定范围，使用全部区域", "alternatives": [...]}}
-  ]
-}}
-"""
 
 
 # C-7: prompt 里的 schema 文本必须有界。表/列描述随业务增长可膨胀到几十 K，
@@ -114,7 +70,7 @@ def _call_llm_for_parse(
     if dictionary_context:
         bounded = dictionary_context[:MAX_DICTIONARY_CHARS]
         dictionary_block = f"【数据字典参考】\n{bounded}"
-    prompt = _PARSE_PROMPT.format(
+    prompt = build_requirement_parse_prompt(
         user_query=user_query,
         schema_text=_schema_text(schema),
         dictionary_block=dictionary_block,

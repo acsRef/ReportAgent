@@ -16,6 +16,11 @@ from app.utils.text import extract_sql, safe_json_parse
 from app.infra.trace.sdk import traced_node
 from app.tools.sql_tools import validate_sql, execute_sql
 from app.state.checkpoint_adapter import migrate_checkpoint
+from app.agent.prompts import (
+    build_sql_intent_analyze_prompt,
+    build_sql_plan_prompt,
+    build_sql_generate_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,51 +169,10 @@ def _intent_analyze(state: SQLAgentState) -> dict:
     user_query = state.get("user_query", "")
 
     tools_block = _format_tools_for_prompt()
-    prompt = f"""你是 ReportAgent 意图分析器。用户的问题要匹配下面的分析工具。
-请选最合适的 3-4 个工具推荐给用户，输出 JSON。
-
-用户问题: {user_query}
-
-可用工具:
-{tools_block}
-
-── 工具选择指南 ──
-
-【chart_advisor vs insight_analyst】
-  chart_advisor → 数据已有，想要一个图来展示（自动判断用饼图还是柱状图）
-  insight_analyst → 数据已有，想要数值摘要（合计、平均、最大、最小）
-  区别：需要的是"图"还是"数"。两者不互斥，但一次只推荐一个。
-
-【group_compare vs trend_analysis】
-  group_compare → 对比不同组的数值高低（哪个区域最高、哪个产品最畅销）
-  trend_analysis → 观察单一维度的变化方向（这个月比上个月涨了还是跌了）
-  区别：横向对比 vs 纵向趋势。想比高低用 group_compare，想看走势用 trend_analysis。
-
-【detect_anomaly】
-  只想看"哪里不正常"（异常高或异常低）时用。数据量小于 3 行时不可用。
-
-── 输出规则 ──
-
-仅输出 JSON，禁止 markdown，禁止解释：
-{{
-  "options": [
-    {{
-      "label": "📊 各区域销售对比",
-      "description": "按区域汇总销售额并排名",
-      "tool": "group_compare",
-      "params_preview": {{"group_col": "region_name", "value_col": "total_amount"}}
-    }}
-  ],
-  "needs_options_group": true/false,
-  "confidence": 0.85,
-  "reasoning": "用户想看不同区域的销售横向对比"
-}}
-
-格式约束:
-- options 数量: 3-4 个
-- 每个 option.tool 必须是上面 5 个之一
-- confidence: 0.7-0.95，越匹配越高
-- needs_options_group: 用户没指定时间/区域范围等细节时 true，完全明确时 false"""
+    prompt = build_sql_intent_analyze_prompt(
+        user_query=user_query,
+        tools_block=tools_block,
+    )
 
     raw = call_llm(prompt, max_tokens=1500)
     parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
@@ -308,46 +272,15 @@ def _plan(state: SQLAgentState) -> dict:
     # v2 修订：注入当前日期——_plan 判断「今年/上月」是否可推断需要知道今天几号。
     today = date.today().isoformat()
 
-    prompt = f"""你是一个SQL规划器。任务：根据用户问题、可用表结构，一次性产出查询计划与澄清决策。
-
-当前日期: {today}
-
-用户问题: {state["user_query"]}
-{tool_hint}
-{confirmed_block}
-可用表结构:
-{schema_text}
-
-{_PLAN_TABLE_HINTS}
-
-决策策略(必须逐项执行，不要遗漏):
-- 第一步:列出用户问题里关于 time / region / metric 三维度的明确程度
-- 第二步:严格按下列规则判断 action:
-  · 三维度全明确 → action="run_direct"，confidence ≥ 0.85，missing_dimensions: []
-  · 1个维度缺但可推断(例:"今年"→当前年、"上月"→上月) → action="run_direct"，confidence ≈ 0.75，missing_dimensions 列出唯一不可推断的维度名
-  · 2个及以上维度缺、无法安全推断 → action="clarify"，confidence ≤ 0.60，missing_dimensions 列出所有缺维度的名字(从 time/region/metric 中选)
-
-必须字段:missing_dimensions 必须是 ["time"] / ["region"] / ["metric"] / 任意组合 / [] 之一,绝不能为空字符串或乱写。
-当 action="clarify" 时,missing_dimensions 至少包含 1 个元素。
-
-只输出JSON，禁止解释，禁止markdown，禁止思考过程。
-输出格式:
-{{
-  "target_metric": "目标指标",
-  "dimensions": ["维度1", "维度2"],
-  "filters": [{{"field": "字段", "operator": "=", "value": "值"}}],
-  "aggregation": "sum/count/avg",
-  "time_range": "时间范围或null",
-  "clarify_decision": {{
-    "action": "clarify" | "run_direct",
-    "missing_dimensions": ["time"|"region"|"metric"],
-    "predicted_table": "fact_sales"|null,
-    "confidence": 0.85,
-    "reasoning": "简短理由"
-  }}
-}}
-
-{_PLAN_FEWSHOT}"""
+    prompt = build_sql_plan_prompt(
+        today=today,
+        user_query=state["user_query"],
+        schema_text=schema_text,
+        tool_hint=tool_hint,
+        confirmed_block=confirmed_block,
+        plan_table_hints=_PLAN_TABLE_HINTS,
+        plan_fewshot=_PLAN_FEWSHOT,
+    )
 
     # 分层对话上下文前置（多轮连贯）：有才加，不打扰单轮场景。
     # P4c: 优先 state["assembled_context"]（含 selective recall 全景），
@@ -439,34 +372,18 @@ def _generate_sql(state: SQLAgentState) -> dict:
     except Exception as exc:
         logger.warning("search_faq failed, generating SQL without FAQ context: %s", exc)
 
-    prompt = f"""你是一个SQL生成专家。根据查询计划生成SQL语句。
-
-当前日期: {today}
-
-查询计划:
-- 目标指标: {plan.target_metric if plan else ''}
-- 维度: {plan.dimensions if plan else []}
-- 过滤条件: {plan.filters if plan else []}
-- 聚合方式: {plan.aggregation if plan else ''}
-- 时间范围: {plan.time_range if plan else '未指定'}
-
-可用表结构:
-{schema_text}
-
-{_FK_CHAIN_HINTS}
-
-{faq_block}
-规则:
-- 数据库是 PostgreSQL，使用标准 PostgreSQL 兼容的 SQL 语法（不用 DuckDB 专属语法）
-- 不要使用 EXTRACT() 类的 DuckDB 函数做日期处理
-- 只生成 SELECT 语句，WHERE 条件必须完整
-- 表名和列名必须严格使用上面列出的名称（注意 dim_date 没有 month 列，只有 year / quarter_num / quarter / week_of_year / day_name / full_date）
-- JOIN 条件使用外键关联（如 fact_sales.region_id = dim_region.region_id）
-- 使用中文别名（例如「销售额」「年份」）
-- 只输出纯 SQL，禁止解释，禁止 markdown 代码块，禁止反斜杠转义
-- 字面量规则（重要）— 见 _SQL_GENERATION_RULES 末尾「字面量与转义规则」段
-
-{_SQL_GENERATION_RULES}"""
+    prompt = build_sql_generate_prompt(
+        today=today,
+        target_metric=plan.target_metric if plan else "",
+        dimensions=list(plan.dimensions) if plan and plan.dimensions else [],
+        filters=list(plan.filters) if plan and plan.filters else [],
+        aggregation=plan.aggregation if plan and plan.aggregation else "",
+        time_range=plan.time_range if plan and plan.time_range else None,
+        schema_text=schema_text,
+        fk_chain_hints=_FK_CHAIN_HINTS,
+        faq_block=faq_block,
+        sql_generation_rules=_SQL_GENERATION_RULES,
+    )
 
     # Retry feedback loop: when regenerating after a failure, feed the failed
     # SQL and its error back to the LLM. Without this the retry loop is blind —

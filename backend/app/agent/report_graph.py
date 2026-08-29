@@ -13,6 +13,7 @@ from app.utils.text import safe_json_parse, strip_markdown_fence
 from app.tools.registry import registry
 from app.infra.trace.sdk import traced_node
 from app.state.checkpoint_adapter import migrate_checkpoint
+from app.agent.prompts import build_report_plan_prompt
 
 
 class ReportAgentState(TypedDict):
@@ -58,17 +59,11 @@ def _plan_analysis(state: ReportAgentState) -> dict:
 
     col_names = [c.get("name", "") if isinstance(c, dict) else str(c) for c in qr.columns]
 
-    prompt = f"""你是一个数据分析规划师。根据以下数据特征，制定分析计划。
-
-列: {', '.join(col_names)}
-行数: {qr.row_count}
-
-可用分析工具（五个工具各管一件事，按描述里的「适用/不要用来」选择，tool 名必须逐字使用）：
-{_format_tools_for_prompt()}
-
-只输出JSON，禁止解释，禁止markdown，禁止思考过程。
-格式：
-{{"steps": [{{"tool": "...", "args": {{}}, "description": "..."}}], "reasoning": "..."}}"""
+    prompt = build_report_plan_prompt(
+        column_names=col_names,
+        row_count=qr.row_count,
+        tools_block=_format_tools_for_prompt(),
+    )
 
     raw = call_llm(prompt, max_tokens=1500)
     plan = safe_json_parse(raw) if isinstance(raw, str) else raw

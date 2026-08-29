@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from app.agent.prompts import build_intent_classify_prompt
 from app.llm import call_llm
 from app.utils.text import safe_json_parse
 
@@ -64,17 +65,7 @@ def classify_intent(user_query: str, dict_hit: bool = False) -> IntentResult:
 
 def _llm_classify(q: str) -> IntentResult:
     """Stage 3：LLM 语义分类。失败降级为 REPORT（保主流程）。"""
-    prompt = f"""你是意图分类器。判断用户查询属于哪类，只输出 JSON，禁止解释。
-
-用户查询: {q}
-
-类别:
-- report: 针对数据库星型模型做报表/数据分析（销售额、趋势、排名、退货、库存、考勤等业务指标）
-- interface: 关于外部接口/实时推送/数据源接入的查询（不是数据库报表），如「订单接口字段」「实时库存推送」
-- chitchat: 闲聊或与数据无关的请求
-- other: 其他
-
-输出: {{"kind": "report|interface|chitchat|other", "confidence": 0.0-1.0, "reason": "简短理由"}}"""
+    prompt = build_intent_classify_prompt(q)
     raw = call_llm(prompt, max_tokens=200)
     parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(parsed, dict):
