@@ -122,3 +122,56 @@ pytest -q                  # 全量 686+ 不回退（persistence 缺模块 2 失
 - [ ] Step2 更新防护钉 + assembler 交互测试
 
 ### T4 Golden before/after 文档 + 全量回归
+
+---
+
+## Post-review Fix（2026-08-29）
+
+用户第二轮 review（对照 commit `63ba7805f65fbff0481f72d2948e5c342b6439f6`）发现 3 个问题（2 P1 + 1 P2），已修：
+
+### P1-1：`generate_structured_safe` 把 schema validation 当 parse failure 重试 LLM
+**根因**：原实现用 `except ValueError` 兜底，无法区分 parse 失败与 schema 校验失败。
+
+**修复**：引入两个继承 `ValueError` 的独立异常类型：
+- `StructuredParseError` —— LLM 输出无法解析为 JSON（可重试/兜底）
+- `SchemaValidationError` —— JSON 解析成功但不满足 schema（不可重试，直接向上抛）
+
+`generate_structured_safe` 的 except 只 catch `StructuredParseError`；schema 校验失败不再触发第二次 LLM 调用。`_validate_against_schema()` 抽作单一校验入口供 `generate_structured` 与 `generate_structured_safe` 共用。
+
+**文件**：[adapter.py](backend/app/llm/adapter.py)（L36-49 定义异常类，L52-64 校验入口，L107-176 generate_*）
+
+**测试**：`test_generate_structured_schema_failure_raises_schema_validation_error`（schema 失败只 1 次 LLM）+ `test_generate_structured_safe_does_not_retry_on_schema_failure`（带/不带 parser 均不重试 schema）+ `test_generate_structured_safe_parser_fallback_on_parse_failure`（反向证明 parse 失败仍兜底）。
+
+### P1-2：`LLMConfig.timeout` 死配置
+**根因**：`LLMConfig.__init__` 读 `LLM_TIMEOUT` 环境变量，但 `to_chat_kwargs()` 未传 `timeout` 字段，配置从未进入 `ChatOpenAI` 构造。
+
+**修复**：`to_chat_kwargs()` 增加 `"timeout": self.timeout`，真正接入执行链。
+
+**文件**：[config.py](backend/app/llm/config.py)（L18-26）
+
+**测试**：`test_to_chat_kwargs_includes_timeout`（`LLM_TIMEOUT=42` 真传）+ `test_to_chat_kwargs_default_timeout`（默认 60）。
+
+### P2：remaining budget 精度（deferred，不阻塞 P6 merge）
+**现状**：4 caller 真传 `remaining_token_budget`，算法为 `context_window - (len(user_query) + 8000) // 4`。
+
+**P6 D4 原文要求**：`len(assembled_context) // 4` 为主、fallback 4000。
+
+**差距**：当前仍使用固定常量 `_TYPICAL_CONTEXT_BUDGET_CHARS = 8000` 占位，不是真实已用 prompt tokens。
+
+**判定**：估算精度问题，不是架构断裂；用户判定 P2，可继续作为 P15 收口项或 P9 Reliability follow-up。后续接 Unified LLM prompt accounting 时统一替换。
+
+### Reviewer 关于 D2/D5 妥协的明示
+用户明确：本次不是"P6 已完成 D2/D5"，而是：
+- ✅ **D2 Adapter migration**：Adapter 基础设施 + 7 处 caller 迁移
+- ⏸️ **D2 Agent zero JSON parsing**：deferred to P15（38 个旧测试 mock 边界限制）
+- ⏸️ **D5 fallback centralization**：deferred to P15（待 caller 全部走 `generate_structured_safe`）
+
+P15 收口路径：
+1. 38 个测试 mock `app.agent.*.call_llm` → `app.llm.adapter.LLMAdapter.generate`
+2. caller：`call_llm + safe_json_parse` → `generate_structured_safe`
+3. 删除 `app.llm.call_llm`
+
+### Commit
+- `59b8f71` fix(p6-review): Adapter 异常语义拆 + LLMConfig.timeout 真接 ChatOpenAI
+
+回归基线：contracts+smoke **406 passed** / graphs **71 passed** / llm_adapter **13 passed**（含 6 新增）。
