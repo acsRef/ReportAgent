@@ -293,7 +293,7 @@ User push 到 `acsRef/ReportAgent` 远端后做实际 diff review：F1-F14 / F15
 | R-test-graph | test-strength | 之前 `_route_after_diagnose` 只调函数本身；缺 wiring 后行为一致验证 | 新增 `test_compiled_graph_routes_by_diagnose_decision`——6 个分支（retry_sql/replan/end/fail/clarify + 兜底 execution_status）全覆盖 |
 | R-test-stale | test-strength | 缺 R1 反向钉——stale sql_result 不会污染 validate fail 路径 | 新增 `test_evaluate_prioritizes_validation_over_stale_sql_result`——同时注入 stale sql_result(timeout) + 本轮 validation_result(valid=False)，断言 evaluate 走 VALIDATION_FAILED + kind="syntax"（不是 timeout），后续 diagnose action="retry_sql" |
 
-**回归**：625 passed / 0 failed / 5 warnings（4:58）。P8 增量 39 例（36 + 3 新增 R-test），零回归。
+**回归**：626 passed / 0 failed / 5 warnings。P8 增量 40 例（37 + 3 新增 R-test：37 = 34 原有 + 2 reverse-nail + 1 polish 拆分净增，3 来自 R-test-budget / R-test-graph / R-test-stale），零回归。
 
 ## Open questions
 

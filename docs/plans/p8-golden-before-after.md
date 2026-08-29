@@ -1,6 +1,6 @@
 # P8 Golden Set Before/After After
 
-> 状态: 已完成（含 Post-review Fix：14 findings 全修 + 2 反向钉新增；Review-2 增：R1 stale-state + R2 dead-code + R3 state-hygiene + 3 测试强度补充；625 passed / 0 failed）
+> 状态: 已完成（含 Post-review Fix：14 findings 全修 + 2 反向钉新增；Review-2 增：R1 stale-state + R2 dead-code + R3 state-hygiene + 3 测试强度补充；Review-2 polish 增：P2 graph test 名副实 + 1 polish 测试拆分净增；626 passed / 0 failed）
 > 上游: [2026-08-29-p8-execution-agent-loop.md](2026-08-29-p8-execution-agent-loop.md) §D6 + [2026-08-25-refactor-master-freeze.md](../2026-08-25-refactor-master-freeze.md) §四/§十一
 
 ## Context
@@ -42,9 +42,9 @@ P8 是「decision 化」不是「重写」：保留 `plan → generate → valid
 | `test_max_sql_repair_retries_env.py` 5 例 | 默认 2/1 + env 真生效 + delenv + 非法回退 |
 | `test_prompt_repair_context.py` 5 例 | `build_sql_*_prompt` 7 要素拼接含全字段 + 无 ctx 时不污染 + schema/fewshot 不泄漏 |
 | `test_tracer_decision.py` 6 例 | `add_decision` 本地记录 + span 关联 + diagnose 节点落迹 + SUCCESS action="end" + fail action="fail" |
-| `test_execution_agent_loop.py` 11 例（含 R-test） | 4 goal + SUCCESS end + validation fail + connection + replan 不重置计数 + **R1 stale-state 反向钉** + **R-budget 真实 `build_sql_graph().invoke()` 全 lifecycle** + **R-graph 6 分支 route 全覆盖** |
+| `test_execution_agent_loop.py` 12 例（含 R-test） | 4 goal + SUCCESS end + validation fail + connection + replan 不重置计数 + **R1 stale-state 反向钉** + **R-budget 真实 `build_sql_graph().invoke()` 全 lifecycle** + **R-graph 6 分支 route 全覆盖（含 action 优先 + compiled graph 真 invoke）** |
 
-合计 **39 例**（34 原有 + 2 F 反向钉 + 3 R-test）。
+合计 **40 例**（34 原有 + 2 F 反向钉 + 3 R-test + 1 polish 拆分净增）。
 
 ## 回归基线
 
@@ -54,10 +54,10 @@ pytest tests/contracts/test_diagnose_policy.py tests/contracts/test_max_sql_repa
 # 39 passed, 2 warnings
 
 pytest tests/smoke tests/contracts tests/graphs --tb=line -q
-# 625 passed, 0 failed, 5 warnings (4:58)
+# 626 passed, 0 failed, 5 warnings
 ```
 
-与 P7 起点 `a6e9246` 对比：`+39` 测试（12+5+5+6+11），零回归失败。`586 → 625` 增量即 P8 新增。
+与 P7 起点 `a6e9246` 对比：`+40` 测试（12+5+5+6+12），零回归失败。`586 → 626` 增量即 P8 新增。
 
 ## Post-review Fix（2026-08-29）
 
