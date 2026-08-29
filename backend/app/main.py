@@ -737,7 +737,7 @@ async def _chat_legacy(
                 "query_result": None,
                 "report_spec": None,
                 "chart_config": {},
-                "insight_text": "",
+                "insight": "",
                 "execution_status": "RUNNING",
                 "error": None,
                 "trace_id": trace_id,
@@ -968,7 +968,7 @@ def _build_response(state: dict) -> dict:
         table = {"columns": cols, "rows": query_result.rows}
 
     chart = state.get("chart_config") or {}
-    insight = state.get("insight_text") or ""
+    insight = state.get("insight") or ""
 
     return {
         "answer": {

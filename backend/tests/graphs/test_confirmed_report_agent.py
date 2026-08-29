@@ -23,7 +23,7 @@ def test_report_agent_with_query_result() -> None:
     def _stub_report_graph():
         class FakeGraph:
             async def ainvoke(self, state, *a, **k):
-                return {"chart_config": None, "insight_text": "销售额增长12%"}
+                return {"chart_config": None, "insight": "销售额增长12%"}
         return FakeGraph()
 
     import app.agent.confirmed_execution_graph as ceg
@@ -71,7 +71,7 @@ def test_report_agent_empty_result() -> None:
     def _stub_report_graph():
         class FakeGraph:
             async def ainvoke(self, state, *a, **k):
-                return {"chart_config": None, "insight_text": ""}
+                return {"chart_config": None, "insight": ""}
         return FakeGraph()
 
     import app.agent.confirmed_execution_graph as ceg
@@ -122,7 +122,7 @@ def test_report_agent_no_result() -> None:
     def _stub_report_graph():
         class FakeGraph:
             async def ainvoke(self, state, *a, **k):
-                return {"chart_config": None, "insight_text": ""}
+                return {"chart_config": None, "insight": ""}
         return FakeGraph()
 
     import app.agent.confirmed_execution_graph as ceg

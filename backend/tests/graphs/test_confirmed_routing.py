@@ -34,7 +34,7 @@ _BASE_STATE = {
 
 class _FakeReportGraph:
     async def ainvoke(self, state, *a, **k):
-        return {"chart_config": None, "insight_text": ""}
+        return {"chart_config": None, "insight": ""}
 
 
 def _patch_upstream(monkeypatch, ceg, query_result):

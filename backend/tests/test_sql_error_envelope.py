@@ -133,7 +133,7 @@ async def test_confirmed_report_agent_empty_rows_yields_empty_status():
     # Patch the inner report_graph to short-circuit (no LLM call).
     fake_report = AsyncMock()
     fake_report.ainvoke = AsyncMock(return_value={
-        "chart_config": {}, "insight_text": "", "report_spec": None,
+        "chart_config": {}, "insight": "", "report_spec": None,
     })
     with patch.object(ceg, "build_report_graph", return_value=fake_report):
         result = await ceg._confirmed_report_agent(state)
@@ -161,7 +161,7 @@ async def test_confirmed_report_agent_error_yields_failed_status():
     }
     fake_report = AsyncMock()
     fake_report.ainvoke = AsyncMock(return_value={
-        "chart_config": {}, "insight_text": "", "report_spec": None,
+        "chart_config": {}, "insight": "", "report_spec": None,
     })
     with patch.object(ceg, "build_report_graph", return_value=fake_report):
         result = await ceg._confirmed_report_agent(state)

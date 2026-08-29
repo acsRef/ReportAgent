@@ -293,7 +293,7 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
         "query_result": state.get("query_result"),
         "user_query": state["user_query"],
         "chart_config": {},
-        "insight_text": "",
+        "insight": "",
         "report_spec": None,
         "assemble_plan": [],
         "assemble_step_idx": 0,
@@ -336,7 +336,7 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
             name = c.get("name") if isinstance(c, dict) else str(c)
             cols.append({"key": name, "title": name})
         table = {"columns": cols, "rows": rows}
-        insight_text = rs.get("insight_text") or None
+        insight_text = rs.get("insight") or None
         chart_cfg = rs.get("chart_config") or None
 
     payload = {

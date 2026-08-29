@@ -19,7 +19,9 @@ class ReportAgentState(TypedDict):
     query_result: Optional[QueryResult]
     user_query: str
     chart_config: dict
-    insight_text: str
+    # P3 §2.4 deterministic rename：v1 insight_text → v2 insight（plan §F10 收口；
+    # checkpoint_adapter / blocks 的 rename map 已就位，本 TypedDict 跟进使用 v2 名）
+    insight: str
     report_spec: Optional[ReportSpec]
     assemble_plan: list[dict]
     assemble_step_idx: int
@@ -159,7 +161,7 @@ def _build_output(state: ReportAgentState) -> dict:
 
     spec = ReportSpec(version="1.0", components=comps, insight=insight_text.strip())
 
-    return {"chart_config": chart_config, "insight_text": insight_text.strip(), "report_spec": spec}
+    return {"chart_config": chart_config, "insight": insight_text.strip(), "report_spec": spec}
 
 
 def _route_step(state: ReportAgentState) -> str:
