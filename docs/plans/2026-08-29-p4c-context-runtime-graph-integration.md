@@ -1,6 +1,6 @@
 # P4c 实施：ContextRuntime 真正接入主图 + assembler 真实装 + golden before/after
 
-> **状态**: 进行中
+> **状态**: 已完成（p4c 分支，5 commit：9fefa44 graph caller 翻转 / 8b16835 主链 smoke / 7d58eb0 selective 收益 / 23331aa assembler real Filter & Budget / 78bd6b7 golden before/after）
 > **上游**: [伞形 plan](../plans/2026-08-25-refactor-master-freeze.md) §六 / [memory-architecture.md](../architecture/memory-architecture.md) §二/§三/§八 / [agent-flow.md](../architecture/agent-flow.md) §四/§五
 > **接续**: P4a ([2026-08-27-p4a-conversation-memory-decouple.md](2026-08-27-p4a-conversation-memory-decouple.md)) + P4b ([2026-08-27-p4b-memory-lifecycle-selective-recall.md](2026-08-27-p4b-memory-lifecycle-selective-recall.md))；p3 分支 HEAD `efaeeb5` 已合 master
 > **优先级骨架**: 用户两轮 review PASS 后给出的 5 步（见 [[p4c-start]]）

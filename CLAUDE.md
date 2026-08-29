@@ -109,7 +109,7 @@ State 五块拆分与字段所有权：RequestState / RequirementState / Executi
 
 全部细则见 [memory-architecture.md](docs/architecture/memory-architecture.md)。
 
-> 现状：P3/P4a/P4b 已落（p3 分支 614 passed / 0 failed）。context.py 四层底座 + infra/memory 在位；Conversation Memory 解耦至 `app/memory/` domain 层（P4a）；lifecycle 列 + active-only 召回过滤 + 固定 confidence 规则 + `recall_structured()` + `SelectiveRecallPolicy`（P4b）。P4c：graph caller 翻转接入 ContextRuntime + assembler Filter/Budget + golden before/after。
+> 现状（2026-08-29 P4c 后）：P3/P4a/P4b 骨架已落（p3 分支 614 passed / 0 failed）；P4c 在 p4c 分支（5 commit: 9fefa44 graph caller 翻转 / 8b16835 主链 smoke / 7d58eb0 selective 收益 / 23331aa assembler real Filter & Budget / 78bd6b7 golden before/after）——4 graph caller（requirement_analysis_graph._requirement_parse + confirmed_execution_graph._confirmed_sql_agent + requirement_parser.parse_requirement + sql_graph._plan/_generate_sql）真接 `ContextRuntime.build()`；assembler 真实装 dedup by `(source, ref_id)` + §七 kind 排序（query > semantic > preference）+ Token Budget 截断（`P4C_ASSEMBLER_TOKEN_BUDGET` env，默认 4000 tokens ≈ 12000 chars）；SelectiveRecallPolicy §二四触发 + §三分流 在主链真触发；facade `build_session_context` 兼容路径保留（外部 import 仍可用）。**离线 proxy**：新增契约层 41/41 PASS + 既有 contract suite 84/84 PASS + `evaluation/tests/test_schema.py` 40/40 PASS。真端到端 baseline runner（`evaluation/runner.py`）留 P12 手动门（CLAUDE.md §15）。对比结论见 [docs/p4c-golden-before-after.md](docs/p4c-golden-before-after.md)。
 
 ## 7. Tool & MCP Contract
 
