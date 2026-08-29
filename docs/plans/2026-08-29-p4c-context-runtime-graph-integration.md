@@ -1,9 +1,17 @@
 # P4c 实施：ContextRuntime 真正接入主图 + assembler 真实装 + golden before/after
 
-> **状态**: 已完成（p4c 分支，5 commit：9fefa44 graph caller 翻转 / 8b16835 主链 smoke / 7d58eb0 selective 收益 / 23331aa assembler real Filter & Budget / 78bd6b7 golden before/after）
+> **状态**: 已完成（p4c 分支 7 commit：5 主 Task + 2 post-review fix）
 > **上游**: [伞形 plan](../plans/2026-08-25-refactor-master-freeze.md) §六 / [memory-architecture.md](../architecture/memory-architecture.md) §二/§三/§八 / [agent-flow.md](../architecture/agent-flow.md) §四/§五
 > **接续**: P4a ([2026-08-27-p4a-conversation-memory-decouple.md](2026-08-27-p4a-conversation-memory-decouple.md)) + P4b ([2026-08-27-p4b-memory-lifecycle-selective-recall.md](2026-08-27-p4b-memory-lifecycle-selective-recall.md))；p3 分支 HEAD `efaeeb5` 已合 master
 > **优先级骨架**: 用户两轮 review PASS 后给出的 5 步（见 [[p4c-start]]）
+> **Commit 列表**:
+>   - 9fefa44 graph caller 翻转
+>   - 8b16835 主链 smoke + ContextPolicyResolver strict prefix 修复
+>   - 7d58eb0 selective 收益 24 钉
+>   - 23331aa assembler real Filter & Budget
+>   - 78bd6b7 docs(p4c-golden-before-after)
+>   - **7675a51** post-review fix #1: 默认 policy=SelectiveRecallPolicy + remaining_token_budget 接口 + budget test 收紧
+>   - **beae759** post-review fix #2: graph caller 不传 fake remaining_token_budget（诚实降级后续 Context Budget）+ monkeypatch.delenv 修
 > **本次落地日期**: 2026-08-29
 
 ## Context（为什么做）
