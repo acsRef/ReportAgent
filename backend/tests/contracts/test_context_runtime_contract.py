@@ -133,7 +133,7 @@ class TestContextRuntimeFiveStepOrchestration:
     @pytest.mark.asyncio
     async def test_build_invokes_full_pipeline_with_legacy_fallback(self):
         # mock 5 步涉及的全部外部依赖
-        captured: dict = {}
+        captured: dict = {"recall_calls": []}
 
         async def fake_prepare_ctx(session_id, user_id):
             captured["conversation"] = (session_id, user_id)
@@ -141,7 +141,12 @@ class TestContextRuntimeFiveStepOrchestration:
 
         async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
                                          top_k_preferences=3):
-            captured["recall"] = (query, user_id, top_k_queries, top_k_preferences)
+            # P4b F3：Runtime 经 app.memory.{semantic,query}.recall_structured 调用，
+            # 每个 view 内部委托 MemoryManager.recall_structured 一次。
+            # LegacyFallbackPolicy 全开 → 调 semantic + query 两个 view → fake 被调两次。
+            captured["recall_calls"].append(
+                (query, user_id, top_k_queries, top_k_preferences)
+            )
             return [{
                 "raw_text": "结构化召回", "kind": "query",
                 "source": "memory_query", "score": 0.9, "ref_id": 3,
@@ -165,9 +170,15 @@ class TestContextRuntimeFiveStepOrchestration:
         # Step 2：fallback 全开 → conversation=True → 调用 _prepare
         assert captured["conversation"] == ("s-1", 42)
         assert bundle["conversation_context"] == "CTX_FROM_ENGINE"
-        # Step 3-4：fallback semantic+query=True → 调 recall_structured
-        # P4b：Step4 用结构化召回（不再 1:1 包 string）；runtime 传 str(user_id)
-        assert captured["recall"] == ("2024 销售", "42", 2, 3)
+        # Step 3-4：fallback semantic+query=True → 调两个 view 各一次：
+        #   - semantic view 内部传 top_k_queries=0 / top_k_preferences=3
+        #   - query view 内部传 top_k_queries=2 / top_k_preferences=0
+        assert len(captured["recall_calls"]) == 2
+        sem_call = next(c for c in captured["recall_calls"] if c[2] == 0)
+        qry_call = next(c for c in captured["recall_calls"] if c[3] == 0)
+        assert sem_call == ("2024 销售", "42", 0, 3)
+        assert qry_call == ("2024 销售", "42", 2, 0)
+        # query view 过滤 source=="memory_query" → bundle 含 query 类 item
         assert bundle["recall_items"][0]["kind"] == "query"
         assert bundle["recall_items"][0]["source"] == "memory_query"
         assert bundle["recall_items"][0]["ref_id"] == 3
