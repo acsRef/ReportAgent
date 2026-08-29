@@ -69,15 +69,20 @@ class UserMemory:
             if existing:
                 # §五 收口：同内容若本次以 active（explicit statement）写入，
                 # 而既存为 candidate（LLM-inferred），promote 之（去重 + 状态提升合一）。
+                # F1 修：promote 同步更新 memory_type——否则 LLM-inferred "insight" 行
+                # 被 explicit stable_preference 重申后仍 memory_type='insight'，永远进不去
+                # get_user_preferences() 过滤的 (stable_preference, temporary_preference) 子集。
+                # 注：asyncpg prepared statement 要求 $N 连续（否则 IndeterminateDatatypeError），
+                # 所以占位符编为 $1..$5，不跳号。
                 promote = (
                     existing["status"] == "candidate" and status == "active"
                 )
                 await conn.execute(
                     "UPDATE memory.semantic_entry SET access_count=access_count+1, "
                     "last_access_time=NOW()"
-                    + (", status=$3, confidence=$4, scope=$5, updated_at=NOW()" if promote else "")
+                    + (", memory_type=$5, status=$2, confidence=$3, scope=$4, updated_at=NOW()" if promote else "")
                     + " WHERE id=$1",
-                    *( (existing["id"], status, confidence, scope) if promote else (existing["id"],) ),
+                    *( (existing["id"], status, confidence, scope, memory_type) if promote else (existing["id"],) ),
                 )
                 entry_id = existing["id"]
             else:
