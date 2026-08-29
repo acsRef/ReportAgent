@@ -172,12 +172,14 @@ def test_dictionary_lookup_degrades_without_ragent(monkeypatch, sql_gate) -> Non
     # `dictionary_context` 不给默认值——强制要求生产代码显式传入；
     # 这样 B5 之前会 TypeError，B5 之后才会进入断言。
     def spy_parse_requirement(*, user_query, schema_context, prior_card=None,
-                              conversation_context=None, dictionary_context):
+                              conversation_context=None, dictionary_context,
+                              assembled_context=None):  # P4c: spy 同步加 kwarg
         captured["user_query"] = user_query
         captured["schema_context"] = schema_context
         captured["prior_card"] = prior_card
         captured["conversation_context"] = conversation_context
         captured["dictionary_context"] = dictionary_context
+        captured["assembled_context"] = assembled_context
         return RequirementCard(
             id="t", status="missing", summary="s",
             missing_fields=[],
@@ -326,8 +328,10 @@ def test_dictionary_lookup_passes_hits_to_parse_requirement(monkeypatch, sql_gat
     captured: dict = {}
 
     def spy_parse_requirement(*, user_query, schema_context, prior_card=None,
-                              conversation_context=None, dictionary_context=None):
+                              conversation_context=None, dictionary_context=None,
+                              assembled_context=None):  # P4c: spy 同步加 kwarg
         captured["dictionary_context"] = dictionary_context
+        captured["assembled_context"] = assembled_context
         return RequirementCard(
             id="t", status="missing", summary="s",
             missing_fields=[],

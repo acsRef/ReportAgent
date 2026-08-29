@@ -108,6 +108,7 @@ def _call_llm_for_parse(
     schema: SchemaContext | None,
     conversation_context: str | None = None,
     dictionary_context: str | None = None,
+    assembled_context: str | None = None,  # P4c: 优先于 conversation_context，含 selective recall
 ) -> dict:
     """Call the LLM and parse the JSON response. Returns {} on parse failure."""
     dictionary_block = ""
@@ -120,8 +121,10 @@ def _call_llm_for_parse(
         dictionary_block=dictionary_block,
     )
     # 分层对话上下文前置：让需求解析感知先前轮次（如「再按产品细分」隐含的范围）。
-    if conversation_context:
-        prompt = f"{format_context_block(conversation_context)}\n\n{prompt}"
+    # P4c 优先用 assembled_context（含 recall + conversation 全景），否则 fallback 到 conversation_context。
+    injected = assembled_context or conversation_context
+    if injected:
+        prompt = f"{format_context_block(injected)}\n\n{prompt}"
     raw = call_llm(prompt, max_tokens=1500)  # reasoning model may write a long <think> block first
     logger.warning("parse_requirement LLM raw for user_query=%r:\n%s", user_query, raw[:2000])
     parsed = safe_json_parse(raw)
@@ -139,6 +142,7 @@ def parse_requirement(
     prior_card: RequirementCard | None = None,
     conversation_context: str | None = None,
     dictionary_context: str | None = None,
+    assembled_context: str | None = None,  # P4c: 由 Requirement Agent 传（ContextBundle.assembled_context）
 ) -> RequirementCard:
     """Parse a user query into a RequirementCard.
 
@@ -155,7 +159,9 @@ def parse_requirement(
        status='complete'; else 'missing'.
     """
     parsed = _call_llm_for_parse(
-        user_query, schema_context, conversation_context, dictionary_context,
+        user_query, schema_context,
+        conversation_context, dictionary_context,
+        assembled_context,
     )
     if not parsed:
         # LLM gave nothing usable; fall back to a 'missing' card with all

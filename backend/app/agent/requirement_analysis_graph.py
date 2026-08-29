@@ -29,7 +29,6 @@ from app.agent.intent import IntentKind, _CHITCHAT_KEYWORDS, classify_intent
 from app.infra.checkpoint.factory import get_checkpointer
 from app.agent.requirement_parser import parse_requirement
 from app.agent.security_guard import SecurityGuard
-from app.context import build_session_context
 from app.models.requirement import RequirementAssumption, RequirementCard
 from app.infra.db import requirement_repository
 from app.infra.db.postgres import get_pool
@@ -210,12 +209,28 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
     "- source: text[:300]" 形式序列化，由 parse_requirement 拼到「数据字典参考」段。
     """
     conversation_context = ""
+    assembled_context = ""
+    # P4c Task 1: 真正接入 ContextRuntime.build() —— 替代 facade build_session_context；
+    # 获取 conversation_context + assembled_context（含 selective recall 的全景 context）。
+    # 失败降级为空，绝不阻塞需求解析（与原 try/except 语义一致）。
     try:
-        conversation_context = await build_session_context(
-            state["session_id"], state.get("user_id", 0) or 0,
+        from app.context.runtime import ContextRuntime  # 局部 import 避免 cycle / 测试 patch
+        _user_id = state.get("user_id")
+        try:
+            _uid = int(_user_id) if _user_id not in (None, "") else 0
+        except (TypeError, ValueError):
+            _uid = 0
+        _bundle = await ContextRuntime().build(
+            session_id=state["session_id"],
+            user_id=_uid,
+            query=state.get("user_query", ""),
+            agent="requirement_analyze",
+            state_dict=dict(state),
         )
+        conversation_context = _bundle["conversation_context"]
+        assembled_context = _bundle["assembled_context"]
     except Exception as exc:
-        logger.warning("build_session_context failed: %s", exc)
+        logger.warning("ContextRuntime.build failed: %s", exc)
 
     dictionary_context = state.get("dict_context") or ""
 
@@ -223,6 +238,7 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
         user_query=state["user_query"],
         schema_context=state.get("schema_context"),
         conversation_context=conversation_context or None,
+        assembled_context=assembled_context or None,  # P4c: 含 recall 的全景 context
         dictionary_context=dictionary_context or None,
     )
     return {"requirement_card": card}

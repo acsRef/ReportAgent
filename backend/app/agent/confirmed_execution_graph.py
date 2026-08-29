@@ -24,7 +24,6 @@ from app.agent.data_graph import build_data_graph
 from app.agent.sql_graph import build_sql_graph
 from app.agent.report_graph import build_report_graph
 from app.agent.security_guard import SecurityGuard
-from app.context import build_session_context
 from app.infra.db import requirement_repository, report_version_repository
 from app.infra.db.postgres import get_pool
 from app.infra.trace.sdk import get_tracer, traced_node
@@ -193,12 +192,30 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
     if not user_query.strip() and confirmed_requirement:
         user_query = f"生成报告：{confirmed_requirement}"
 
-    # 分层对话上下文（多轮连贯）：失败降级为空，不阻塞执行。
+    # P4c Task 1: 真正接入 ContextRuntime.build() —— 替代 facade build_session_context；
+    # 把 conversation_context + assembled_context 一同注入 SQL subgraph
+    # state（_plan / _generate_sql 读 assembled_context 优先）。
+    # 失败降级为空，绝不阻塞执行链（与原 try/except 语义一致）。
+    conversation_context = ""
+    assembled_context = ""
     try:
-        conversation_context = await build_session_context(state["session_id"], state["user_id"])
+        from app.context.runtime import ContextRuntime  # 局部 import 避免 cycle / 测试 patch
+        _uid_raw = state.get("user_id")
+        try:
+            _uid = int(_uid_raw) if _uid_raw not in (None, "") else 0
+        except (TypeError, ValueError):
+            _uid = 0
+        _bundle = await ContextRuntime().build(
+            session_id=state["session_id"],
+            user_id=_uid,
+            query=user_query,
+            agent="confirmed_execution",
+            state_dict=dict(state),
+        )
+        conversation_context = _bundle["conversation_context"]
+        assembled_context = _bundle["assembled_context"]
     except Exception as exc:
-        logger.warning("build_session_context failed: %s", exc)
-        conversation_context = ""
+        logger.warning("ContextRuntime.build failed: %s", exc)
 
     ss = await sql_graph.ainvoke({
         "schema_context": schema_input,
@@ -214,6 +231,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
         "chosen_tool": None,  # legacy field; ignored in new flow
         "confirmed_requirement": confirmed_requirement,
         "conversation_context": conversation_context or None,
+        "assembled_context": assembled_context or None,  # P4c: 含 recall 的全景 context
     })
     qr = ss.get("query_result")
     # Passthrough of error + last-tried SQL so the parent graph can emit

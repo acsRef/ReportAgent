@@ -348,9 +348,11 @@ def _plan(state: SQLAgentState) -> dict:
 {_PLAN_FEWSHOT}"""
 
     # 分层对话上下文前置（多轮连贯）：有才加，不打扰单轮场景。
-    conversation_context = state.get("conversation_context")
-    if conversation_context:
-        prompt = f"{format_context_block(conversation_context)}\n\n{prompt}"
+    # P4c: 优先 state["assembled_context"]（含 selective recall 全景），
+    # fallback state["conversation_context"] 向后兼容。
+    _ctx_injected = state.get("assembled_context") or state.get("conversation_context")
+    if _ctx_injected:
+        prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
 
     plan_text = call_llm(prompt, max_tokens=1500)
 
@@ -495,9 +497,11 @@ def _generate_sql(state: SQLAgentState) -> dict:
 请针对该错误修正 SQL：只使用上面「可用表结构」中真实存在的表名和列名，不要臆造列。"""
 
     # 分层对话上下文前置（与 _plan 一致）。
-    conversation_context = state.get("conversation_context")
-    if conversation_context:
-        prompt = f"{format_context_block(conversation_context)}\n\n{prompt}"
+    # P4c: 优先 state["assembled_context"]（含 selective recall 全景），
+    # fallback state["conversation_context"] 向后兼容。
+    _ctx_injected = state.get("assembled_context") or state.get("conversation_context")
+    if _ctx_injected:
+        prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
 
     sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
 
