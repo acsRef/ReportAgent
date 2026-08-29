@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from app.llm import call_llm, get_llm_adapter
+from app.llm import call_llm
 from app.utils.text import safe_json_parse
 
 
@@ -75,20 +75,20 @@ def _llm_classify(q: str) -> IntentResult:
 - other: 其他
 
 输出: {{"kind": "report|interface|chitchat|other", "confidence": 0.0-1.0, "reason": "简短理由"}}"""
+    raw = call_llm(prompt, max_tokens=200)
+    parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
+    if not isinstance(parsed, dict):
+        parsed = {}
+    kind = str((parsed or {}).get("kind", "")).lower()
     try:
-        parsed = safe_json_parse(call_llm(prompt, max_tokens=200))
-        kind = str((parsed or {}).get("kind", "")).lower()
-        try:
-            conf = float((parsed or {}).get("confidence", 0.5))
-        except (TypeError, ValueError):
-            conf = 0.5
-        reason = str((parsed or {}).get("reason", ""))[:100]
-        mapping = {
-            "report": IntentKind.REPORT,
-            "interface": IntentKind.INTERFACE,
-            "chitchat": IntentKind.CHITCHAT,
-            "other": IntentKind.UNKNOWN,
-        }
-        return IntentResult(mapping.get(kind, IntentKind.REPORT), reason or "LLM 判定", conf)
-    except Exception:
-        return IntentResult(IntentKind.REPORT, "LLM 分类失败，默认报表", 0.4)
+        conf = float((parsed or {}).get("confidence", 0.5))
+    except (TypeError, ValueError):
+        conf = 0.5
+    reason = str((parsed or {}).get("reason", ""))[:100]
+    mapping = {
+        "report": IntentKind.REPORT,
+        "interface": IntentKind.INTERFACE,
+        "chitchat": IntentKind.CHITCHAT,
+        "other": IntentKind.UNKNOWN,
+    }
+    return IntentResult(mapping.get(kind, IntentKind.REPORT), reason or "LLM 判定", conf)

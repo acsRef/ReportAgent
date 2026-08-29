@@ -34,6 +34,8 @@ from app.state.checkpoint_adapter import migrate_checkpoint
 
 logger = logging.getLogger(__name__)
 
+_TYPICAL_CONTEXT_BUDGET_CHARS = 8000  # 预估 conversation+system+context 块占位（≈2000 tokens），用于 remaining_token_budget 估算
+
 
 class ConfirmedExecutionState(TypedDict, total=False):
     user_query: str
@@ -208,7 +210,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
         from app.llm.config import LLMConfig
 
         _cfg = LLMConfig()
-        _est_chars = len(user_query) + 8000
+        _est_chars = len(user_query) + _TYPICAL_CONTEXT_BUDGET_CHARS
         _remaining = max(0, _cfg.context_window - _est_chars // 4)
         _bundle = await ContextRuntime().build(
             session_id=state["session_id"],

@@ -14,7 +14,8 @@ from datetime import datetime
 from typing import Any
 
 from app.context import format_context_block
-from app.llm import get_llm_adapter
+from app.llm import call_llm
+from app.utils.text import safe_json_parse
 from app.models.contracts import SchemaContext
 from app.models.requirement import (
     RequirementAssumption,
@@ -24,8 +25,6 @@ from app.models.requirement import (
     RequirementMissingField,
     RequirementStatus,
 )
-from app.utils.text import safe_json_parse
-
 from app.agent import requirement_options as opts
 
 logger = logging.getLogger(__name__)
@@ -126,15 +125,13 @@ def _call_llm_for_parse(
     if injected:
         prompt = f"{format_context_block(injected)}\n\n{prompt}"
     try:
-        parsed = get_llm_adapter().generate_structured(prompt, max_tokens=1500)
-        logger.warning("parse_requirement parsed: %s", parsed)
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        raw = get_llm_adapter().generate(prompt, max_tokens=1500)
-        logger.warning("parse_requirement LLM raw for user_query=%r:\n%s", user_query, raw[:2000])
-        parsed = safe_json_parse(raw)
-        logger.warning("parse_requirement parsed: %s", parsed)
-        return parsed if isinstance(parsed, dict) else {}
+        raw = call_llm(prompt, max_tokens=1500)
+    except Exception as exc:
+        logger.warning("parse_requirement LLM failed: %s query=%r", exc, user_query)
+        return {}
+    parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
+    logger.warning("parse_requirement parsed: %s", parsed)
+    return parsed if isinstance(parsed, dict) else {}
 
 
 # --- Public entry point ---------------------------------------------------

@@ -5,7 +5,7 @@ import os
 import random
 import threading
 import time
-from typing import Callable
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +76,11 @@ def _classify_retryable(exc: Exception) -> bool:
 
 
 def invoke_with_retry(
-    operation: Callable[[], str],
+    operation: Callable[[], Any],
     *,
     max_total_time: float = _MAX_TOTAL_TIME,
     max_retries: int = _MAX_RETRIES,
-) -> str:
+) -> Any:
     """带限流 + 指数退避重试 + 总超时的同步 LLM 调用。
 
     - 每次实际调用（含重试）前消费一个令牌。

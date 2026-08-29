@@ -9,10 +9,10 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 from app.context import format_context_block
-from app.llm import _format_tools_for_prompt, get_llm_adapter
+from app.llm import _format_tools_for_prompt, call_llm
 from app.tools.registry import registry
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
-from app.utils.text import extract_sql, safe_json_parse, strip_markdown_fence
+from app.utils.text import extract_sql, safe_json_parse
 from app.infra.trace.sdk import traced_node
 from app.tools.sql_tools import validate_sql, execute_sql
 from app.state.checkpoint_adapter import migrate_checkpoint
@@ -210,11 +210,10 @@ def _intent_analyze(state: SQLAgentState) -> dict:
 - confidence: 0.7-0.95，越匹配越高
 - needs_options_group: 用户没指定时间/区域范围等细节时 true，完全明确时 false"""
 
-    try:
-        parsed = get_llm_adapter().generate_structured(prompt, max_tokens=1500)
-    except Exception:
-        raw = get_llm_adapter().generate(prompt, max_tokens=1500)
-        parsed = safe_json_parse(raw)
+    raw = call_llm(prompt, max_tokens=1500)
+    parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
+    if not isinstance(parsed, dict):
+        parsed = {}
 
     fallback_options = [
         IntentOption(label="📊 各区域对比汇总", description="按区域/产品维度对比汇总指标",
@@ -357,11 +356,10 @@ def _plan(state: SQLAgentState) -> dict:
     if _ctx_injected:
         prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
 
-    try:
-        plan_dict = get_llm_adapter().generate_structured(prompt, max_tokens=1500)
-    except Exception:
-        plan_text = get_llm_adapter().generate(prompt, max_tokens=1500)
-        plan_dict = safe_json_parse(plan_text)
+    raw = call_llm(prompt, max_tokens=1500)
+    plan_dict = safe_json_parse(raw) if isinstance(raw, str) else raw
+    if not isinstance(plan_dict, dict):
+        plan_dict = {}
     fallback_decision = ClarifyDecision(
         action="clarify",
         missing_dimensions=["time", "region", "metric"],
@@ -508,7 +506,7 @@ def _generate_sql(state: SQLAgentState) -> dict:
     if _ctx_injected:
         prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
 
-    sql = get_llm_adapter().generate([{"role": "user", "content": prompt}], max_tokens=1500)
+    sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
 
     sql = extract_sql(sql)
 

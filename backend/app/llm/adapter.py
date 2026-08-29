@@ -4,7 +4,7 @@ import json
 import re
 import time
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from langchain_openai import ChatOpenAI
 
@@ -44,7 +44,11 @@ class LLMAdapter:
     def generate(self, prompt: str | list, **kwargs: Any) -> str:
         llm = self._chat(**kwargs)
         start = time.monotonic()
-        resp = invoke_with_retry(lambda: llm.invoke(prompt))
+        resp = invoke_with_retry(
+            lambda: llm.invoke(prompt),
+            max_retries=self.config.max_retries,
+            max_total_time=self.config.max_total_time,
+        )
         elapsed_ms = int((time.monotonic() - start) * 1000)
         raw = (getattr(resp, "content", "") or "").strip()
         text = strip_think_tags(raw)
@@ -65,14 +69,81 @@ class LLMAdapter:
             tracer = current_tracer()
             if tracer is not None:
                 tracer.add_llm_call(model, pt, ct, elapsed_ms)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("llm trace failed: %s", exc)
         return text
 
-    def generate_structured(self, prompt: str | list, **kwargs: Any) -> dict:
+    def generate_structured(
+        self,
+        prompt: str | list,
+        schema: Any | None = None,
+        **kwargs: Any,
+    ) -> dict:
         text = self.generate(prompt, **kwargs)
         try:
-            return _extract_json(text)
-        except Exception as exc:
-            logger.warning("generate_structured json parse failed: %s text=%.500s", exc, text)
-            raise ValueError(f"structured parse failed: {exc}") from exc
+            data = _extract_json(text)
+        except Exception:
+            from app.utils.text import safe_json_parse
+
+            fallback = safe_json_parse(text)
+            if isinstance(fallback, dict):
+                data = fallback
+            else:
+                logger.warning("generate_structured json parse failed text=%.500s", text)
+                raise ValueError("structured parse failed: no JSON object found") from None
+        if schema is not None:
+            try:
+                from pydantic import BaseModel
+
+                if isinstance(schema, type) and issubclass(schema, BaseModel):
+                    return schema.model_validate(data).model_dump(mode="json")
+                if isinstance(schema, BaseModel):
+                    return schema.model_validate(data).model_dump(mode="json")
+            except Exception as exc:
+                logger.warning("generate_structured schema validation failed: %s data=%.500s", exc, str(data))
+                raise ValueError(f"schema validation failed: {exc}") from exc
+        return data
+
+    def generate_structured_safe(
+        self,
+        prompt: str | list,
+        parser: Callable[[str], Any] | None = None,
+        schema: Any | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Adapter 内统一 fallback:caller 一次调用即可。
+
+        顺序:
+          1) generate_structured(prompt, schema=schema) —— 主路径
+          2) 解析失败 (ValueError) → generate(prompt) + parser 兜底
+          3) schema 校验失败 → ValueError (与 generate_structured 一致)
+
+        仅 catch 解析错;网络/retry 错在 generate() 内部已处理,不会进 except。
+        parser 兜底成功仍按需走 schema 校验,行为与主路径一致。
+        """
+        try:
+            return self.generate_structured(prompt, schema=schema, **kwargs)
+        except ValueError:
+            text = self.generate(prompt, **kwargs)
+            if parser is None:
+                raise
+            result = parser(text)
+            if not isinstance(result, dict):
+                raise ValueError(
+                    f"structured parse failed: parser returned {type(result).__name__}"
+                ) from None
+            if schema is not None:
+                from pydantic import BaseModel
+
+                try:
+                    if isinstance(schema, type) and issubclass(schema, BaseModel):
+                        return schema.model_validate(result).model_dump(mode="json")
+                    if isinstance(schema, BaseModel):
+                        return schema.model_validate(result).model_dump(mode="json")
+                except Exception as exc:
+                    logger.warning(
+                        "generate_structured_safe schema validation failed: %s data=%.500s",
+                        exc, str(result),
+                    )
+                    raise ValueError(f"schema validation failed: {exc}") from exc
+            return result

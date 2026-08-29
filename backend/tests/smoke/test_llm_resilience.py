@@ -159,9 +159,11 @@ def test_call_llm_uses_retry_and_returns_text():
             calls.append(1)
             if len(calls) < 3:
                 raise _status_error(RateLimitError, 429)
-            return SimpleNamespace(content="  final answer  ")
+            return SimpleNamespace(content="  final answer  ", usage_metadata={})
 
-    with patch.object(llm_module, "get_chat_llm", return_value=_FakeLLM()), \
+    fake_llm = _FakeLLM()
+    with patch("app.llm.adapter.ChatOpenAI", lambda **kw: fake_llm), \
+         patch("app.infra.trace.sdk.current_tracer", lambda: None), \
          patch("app.llm_resilience.time.sleep"):
         result = llm_module.call_llm("some prompt")
     assert result == "final answer"
