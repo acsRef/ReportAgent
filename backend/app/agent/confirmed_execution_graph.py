@@ -209,7 +209,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
             session_id=state["session_id"],
             user_id=_uid,
             query=user_query,
-            agent="confirmed_execution",
+            agent="confirmed_execution_sql_agent",  # P4c: 符合 ContextPolicyResolver prefix 规则
             state_dict=dict(state),
         )
         conversation_context = _bundle["conversation_context"]

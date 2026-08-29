@@ -86,17 +86,22 @@ class TestContextAssembler:
         assert bundle["agent_policy"] == "requirement"
         assert bundle["schema_version"] == "v2"
 
-    def test_assemble_preserves_recall_items(self):
+    def test_assemble_preserves_items_with_unique_keys(self):
+        """P4c 修订: P3 'preserves' 假设在 dedup 真实装后过期; 不同 (source, ref_id) keys
+        的 item 必须各自保留. 同 source + 同 ref_id 的 item 在 dedup 步骤合并
+        (保留 score 最高)."""
         asm = ContextAssembler()
         items = [
-            RecallItem(raw_text="q1", source="legacy_memory_manager"),
-            RecallItem(raw_text="p1", source="legacy_memory_manager"),
+            RecallItem(raw_text="q1", source="legacy_memory_manager", ref_id=1),
+            RecallItem(raw_text="p1", source="legacy_memory_manager", ref_id=2),
         ]
         bundle = asm.assemble(
             conversation_context="ctx", recall_items=items,
             agent_policy=AgentContextPolicy.EXECUTION,
         )
-        assert bundle["recall_items"] == items
+        # ref_id 不同 (1 vs 2) → dedup key 不同 → 都保留
+        raw_texts = sorted(it["raw_text"] for it in bundle["recall_items"])
+        assert raw_texts == ["p1", "q1"]
 
     def test_assemble_filters_empty_recall_items(self):
         asm = ContextAssembler()
