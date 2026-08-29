@@ -4,11 +4,12 @@ from __future__ import annotations
 
 源：原 `app/memory/conversation.py:69` 裸 f-string。P7 重构为 6 段 + META +
 build 函数，文案等价不动。
+
+注意：build 函数内 late-import `app.memory.conversation` 的常量与 `format_messages`，
+避免 `app.memory.prompts → app.memory.conversation` 与反向 import 形成循环。
 """
 
 from typing import Any, Optional
-
-from app.memory.conversation import L2_MAX_CHARS, format_messages
 
 CONVERSATION_SUMMARIZE_V1: dict[str, str] = {
     "system_contract": (
@@ -68,9 +69,15 @@ CONVERSATION_SUMMARIZE_META: dict[str, Any] = {
 def build_conversation_summarize_prompt(
     old_digest: Optional[str],
     batch_messages: list,
-    max_chars: int = L2_MAX_CHARS,
+    max_chars: int | None = None,
 ) -> str:
-    """组装 6 段 + 注入 old_digest + batch_text。max_chars 默认 L2_MAX_CHARS=800。"""
+    """组装 6 段 + 注入 old_digest + batch_text。max_chars 默认走 L2_MAX_CHARS=800。"""
+    # Late import 避免循环: app.memory.prompts ↔ app.memory.conversation
+    from app.memory.conversation import L2_MAX_CHARS, format_messages
+
+    if max_chars is None:
+        max_chars = L2_MAX_CHARS
+
     sections = [
         CONVERSATION_SUMMARIZE_V1["system_contract"],
         CONVERSATION_SUMMARIZE_V1["role"],
