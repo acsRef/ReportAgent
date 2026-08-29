@@ -196,9 +196,9 @@ def test_full_retry_lifecycle_respects_budget(monkeypatch):
     assert result.get("execution_status") == "NEED_CLARIFICATION"
 
 
-def test_compiled_graph_routes_by_diagnose_decision():
-    """R-graph: 真实 compiled graph 上 _route_after_diagnose 行为正确。
-    之前测试只调 _route_after_diagnose() 函数本身，没确认 wiring 后行为一致。
+def test_route_after_diagnose_prefers_action_over_execution_status():
+    """F2 unit test：`_route_after_diagnose()` 函数本身按 action 路由，
+    execution_status 仅作兼容兜底。属于函数级契约测试，不走 compiled graph。
     """
     # SUCCESS path
     s1 = {"execution_status": "SUCCESS", "diagnose_decision": {"action": "end"}}
@@ -220,3 +220,94 @@ def test_compiled_graph_routes_by_diagnose_decision():
     assert _route_after_diagnose(s6) == "build_output"
     s7 = {"execution_status": "SCHEMA_ERROR"}
     assert _route_after_diagnose(s7) == "plan"
+
+
+def test_compiled_graph_routes_by_diagnose_action(monkeypatch):
+    """R-graph-2：真 compiled graph `build_sql_graph().invoke()` 验证 4 种
+    DiagnoseDecision.action 走 LangGraph conditional_edges 真的到正确 node。
+    上一版 `test_compiled_graph_routes_by_diagnose_decision` 只调函数本身，
+    名字与覆盖不符——本测试用 budget=0 + mock execute_sql 让单轮直接到
+    terminal，覆盖 SUCCESS / FAIL_TIMEOUT / CLARIFY_BUDGET 三条路径。
+    """
+    from app.agent import sql_graph as sql_graph_module
+    from app.agent.sql_graph import build_sql_graph
+
+    monkeypatch.setenv("MAX_SQL_REPAIR_RETRIES", "0")
+    monkeypatch.setenv("MAX_PLAN_RETRIES", "0")
+
+    def fake_call_llm(*args, **kwargs):
+        prompt = ""
+        if args:
+            if isinstance(args[0], str):
+                prompt = args[0]
+            elif isinstance(args[0], list) and args[0]:
+                prompt = str(args[0][0].get("content", "")) if isinstance(args[0][0], dict) else ""
+        if "SQL规划器" in prompt:
+            return json.dumps({
+                "target_metric": "x",
+                "dimensions": ["a"],
+                "filters": [],
+                "aggregation": "sum",
+                "time_range": None,
+                "clarify_decision": {
+                    "action": "run_direct",
+                    "missing_dimensions": [],
+                    "predicted_table": "fact_sales",
+                    "confidence": 0.9,
+                    "reasoning": "ok",
+                },
+            })
+        return "SELECT 1"
+
+    def fake_validate_sql(sql):
+        return json.dumps({"valid": True, "error": ""})
+
+    def make_fake_execute(result_payload: dict):
+        def fake_execute_sql(sql):
+            return json.dumps(result_payload)
+        return fake_execute_sql
+
+    monkeypatch.setattr(sql_graph_module, "call_llm", fake_call_llm)
+    monkeypatch.setattr(sql_graph_module, "validate_sql", fake_validate_sql)
+
+    initial_state = {
+        "schema_context": None,
+        "user_query": "test",
+        "query_plan": None,
+        "generated_sql": "",
+        "validation_result": {},
+        "sql_result": "",
+        "execution_status": "",
+        "error": None,
+        "retry_counters": {"plan": 0, "sql_generation": 0},
+        "trace_id": "test-graph-route",
+    }
+
+    graph = build_sql_graph()
+
+    # Case A: SUCCESS rows → diagnose action="end" → build_output → END
+    monkeypatch.setattr(
+        sql_graph_module, "execute_sql",
+        make_fake_execute({"columns": [], "rows": [{"a": 1}]}),
+    )
+    r_a = graph.invoke({**initial_state, "trace_id": "test-graph-success"})
+    assert r_a["diagnose_decision"]["action"] == "end", f"expected end, got {r_a.get('diagnose_decision')}"
+    assert r_a["execution_status"] == "SUCCESS", f"expected SUCCESS, got {r_a.get('execution_status')}"
+
+    # Case B: TIMEOUT error → diagnose action="fail" → __end__
+    monkeypatch.setattr(
+        sql_graph_module, "execute_sql",
+        make_fake_execute({"error": "canceling statement due to statement timeout", "error_kind": "timeout"}),
+    )
+    r_b = graph.invoke({**initial_state, "trace_id": "test-graph-timeout"})
+    assert r_b["diagnose_decision"]["action"] == "fail", f"expected fail, got {r_b.get('diagnose_decision')}"
+    assert r_b["execution_status"] == "FAILED", f"expected FAILED, got {r_b.get('execution_status')}"
+
+    # Case C: budget=0 + syntax error → diagnose action="clarify" → __end__
+    monkeypatch.setattr(
+        sql_graph_module, "execute_sql",
+        make_fake_execute({"error": "syntax error", "error_kind": "syntax"}),
+    )
+    r_c = graph.invoke({**initial_state, "trace_id": "test-graph-clarify"})
+    assert r_c["diagnose_decision"]["action"] == "clarify", f"expected clarify, got {r_c.get('diagnose_decision')}"
+    assert r_c["execution_status"] == "NEED_CLARIFICATION", f"expected NEED_CLARIFICATION, got {r_c.get('execution_status')}"

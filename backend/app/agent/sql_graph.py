@@ -530,11 +530,8 @@ def _evaluate(state: SQLAgentState) -> dict:
     # VALIDATION_FAILED 路径，不读 sql_result。
     validation = state.get("validation_result") or {}
     if validation.get("valid") is False:
-        kind = "syntax"
-        if isinstance(validation, dict) and validation.get("error"):
-            kind = "syntax"
         return {
-            "evaluate_result": EvaluateResult(status="VALIDATION_FAILED", kind=kind, validation_result=validation).model_dump(),
+            "evaluate_result": EvaluateResult(status="VALIDATION_FAILED", kind="syntax", validation_result=validation).model_dump(),
             "execution_status": "SQL_SYNTAX_ERROR",
         }
     raw = state.get("sql_result", "")
