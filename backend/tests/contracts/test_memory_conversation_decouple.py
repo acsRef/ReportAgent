@@ -143,6 +143,41 @@ def test_infra_memory_does_not_import_app_memory_or_context():
     )
 
 
+# --- 5. domain 层 app/memory/** import 边界扩展（plan §F13） ---------------
+#
+# 宪法 §6「读写一律经 Memory Manager」+ review #9：domain 层（app/memory/**）
+# 只允许经 infra.memory 三处入口：memory_manager.MemoryManager / policy.MemoryPolicy /
+# mem0_extractor。禁止 raw 原语（user_memory / query_memory）——同源扩展到 memory 域。
+
+_DOMAIN_FORBIDDEN_INFRA = (
+    "app.infra.memory.user_memory",
+    "app.infra.memory.query_memory",
+)
+
+
+def test_app_memory_does_not_import_raw_infra_primitives():
+    """app/memory/** 不得直连 infra.memory.{user_memory, query_memory}——raw 原语只能
+    经 memory_manager.MemoryManager / policy.MemoryPolicy / mem0_extractor 三处入口
+    间接访问（plan §F13，宪法 §6 边界扩展）。"""
+    offenders = []
+    for name, src in _module_srcs(_APP / "memory"):
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            mods: list[str] = []
+            if isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                mods = [node.module]
+            for m in mods:
+                if m in _DOMAIN_FORBIDDEN_INFRA:
+                    offenders.append(
+                        f"app/memory/{name}.py → {m}（raw 原语，应经 memory_manager）"
+                    )
+    assert not offenders, (
+        f"domain 层不得直连 infra raw 原语 user_memory / query_memory：{offenders}"
+    )
+
+
 # --- 6. recall API 边界（P4a 保持 string API） -------------------------------
 #
 # P4a 的 `test_recall_structured_not_introduced_in_p4a` 钉子已于 P4b T4 移除：
@@ -150,17 +185,15 @@ def test_infra_memory_does_not_import_app_memory_or_context():
 # recall() -> str 兼容面由下方 + test_structured_recall_contract 双重保证。
 
 
-def test_recall_still_returns_str():
-    import asyncio
+@pytest.mark.asyncio
+async def test_recall_still_returns_str():
     from unittest.mock import AsyncMock, patch
     from app.infra.memory import MemoryManager
 
-    async def _go():
-        with patch("app.infra.memory.memory_manager.QueryMemory.search_similar",
-                   new=AsyncMock(return_value=[])), \
-             patch("app.infra.memory.memory_manager.UserMemory.search",
-                   new=AsyncMock(return_value=[])):
-            return await MemoryManager().recall("q", "1")
+    with patch("app.infra.memory.memory_manager.QueryMemory.search_similar",
+               new=AsyncMock(return_value=[])), \
+         patch("app.infra.memory.memory_manager.UserMemory.search",
+               new=AsyncMock(return_value=[])):
+        result = await MemoryManager().recall("q", "1")
 
-    result = asyncio.run(_go())
     assert isinstance(result, str)
