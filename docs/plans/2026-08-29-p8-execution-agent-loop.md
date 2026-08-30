@@ -1,6 +1,6 @@
 # P8 实施：Execution Agent Loop——从硬编码 Retry 升级为 Agent 决策闭环
 
-> 状态: 已完成（含 Post-review Fix：1 真 bug + 5 spec-deviation/correctness + 3 dead-code/重复 + 4 文档对齐；**Review-2 增：1 stale-state correctness + 2 测试强度**）
+> 状态: 已完成（含 Post-review Fix：1 真 bug + 5 spec-deviation/correctness + 3 dead-code/重复 + 4 文档对齐；**Review-2 增：1 stale-state correctness + 2 测试强度**；**Review-3 增：1 RepairContext error_kind 漂移 + 1 反向钉**）
 > 上游: [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) §三 Canonical Flow + §四 Agent Responsibilities (Execution Agent: Plan/Generate/Validate/Execute/Evaluate + Diagnose/Repair, 预算 MAX_SQL_REPAIR_RETRIES) + §十一 Timeout & Failure Policy + CLAUDE.md §14 Planning Discipline + [[memory:p4c-landed]] / [[memory:p6-review-landed]]
 > 协作: B 顺序第三 plan；P5/P6/P7 已落地后开 P8，本 plan 仅 P8
 
@@ -294,6 +294,17 @@ User push 到 `acsRef/ReportAgent` 远端后做实际 diff review：F1-F14 / F15
 | R-test-stale | test-strength | 缺 R1 反向钉——stale sql_result 不会污染 validate fail 路径 | 新增 `test_evaluate_prioritizes_validation_over_stale_sql_result`——同时注入 stale sql_result(timeout) + 本轮 validation_result(valid=False)，断言 evaluate 走 VALIDATION_FAILED + kind="syntax"（不是 timeout），后续 diagnose action="retry_sql" |
 
 **回归**：626 passed / 0 failed / 5 warnings。P8 增量 40 例（37 + 3 新增 R-test：37 = 34 原有 + 2 reverse-nail + 1 polish 拆分净增，3 来自 R-test-budget / R-test-graph / R-test-stale），零回归。
+
+## Review-3（2026-08-30 user-side review）
+
+User 按 GitHub `57dcf2e` 实际代码再核：Review-2 三修 + compiled graph 测试全部 PASS，但**新发现 1 correctness gap**——
+
+| 编号 | 类别 | 标题 | 修法 |
+|---|---|---|---|
+| RV3-1 | correctness | `_generate_sql()` 构造 `RepairContext` 时 `_error_kind` 只从 `sql_result` JSON 推导；validation failure 路径（execute 未跑 / R3 已清 → `sql_result=""`）恒落 `"other"`，而同一状态里 `_evaluate` 判 `kind="syntax"`、`DiagnosePolicy` 写 `error_kind="syntax"`——repair prompt「错误分类：other」与错误文本（syntax error）自相矛盾，Evaluate→Diagnose→RepairContext 数据契约在一跳漂移 | `_generate_sql()` 里 `prev_validation.valid is False` 时显式置 `_error_kind="syntax"`，且优先于 `sql_result` 推导（elif 结构，与 R1「validation 优先」同款语义；副作用顺带收口：validation failure 路径不再消费 stale `sql_result` 的 `_exec_err`） |
+| RV3-test | test-strength | 缺 RV3-1 反向钉：`test_validation_failure_retries_sql` 只断言 evaluate+diagnose 两跳，`test_prompt_repair_context.py` 用手工 `RepairContext` 直接测渲染——都没覆盖 `_generate_sql` 的推导逻辑 | 新增 `test_repair_ctx_error_kind_is_syntax_for_validation_failure`——monkeypatch `call_llm` 捕获 prompt，注入 validation failure + 空 `sql_result`，断言 prompt 含「错误分类：syntax」且不含「错误分类：other」。TDD 先红（失败输出即 bug 本尊）后绿 |
+
+**回归**：627 passed / 0 failed。P8 增量 41 例（40 + 1 RV3-test），零回归。
 
 ## Open questions
 

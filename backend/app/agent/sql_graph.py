@@ -440,7 +440,14 @@ def _generate_sql(state: SQLAgentState) -> dict:
     prev_sql_result = state.get("sql_result") or ""
     _exec_err = ""
     _error_kind = "other"
-    if prev_sql_result:
+    # Review-3: validation failure → syntax，且优先于 sql_result（与
+    # _evaluate VALIDATION_FAILED 分类及 R1「validation 优先」一致）。
+    # 修复前 _error_kind 只从 sql_result 推导，validation failure 路径
+    # （sql_result 空）恒落 "other"，repair prompt「错误分类」与
+    # Evaluate/Diagnose 链漂移。
+    if prev_validation.get("valid") is False:
+        _error_kind = "syntax"
+    elif prev_sql_result:
         try:
             _parsed_result = json.loads(prev_sql_result)
             if isinstance(_parsed_result, dict):

@@ -1,6 +1,6 @@
 # P8 Golden Set Before/After After
 
-> 状态: 已完成（含 Post-review Fix：14 findings 全修 + 2 反向钉新增；Review-2 增：R1 stale-state + R2 dead-code + R3 state-hygiene + 3 测试强度补充；Review-2 polish 增：P2 graph test 名副实 + 1 polish 测试拆分净增；626 passed / 0 failed）
+> 状态: 已完成（含 Post-review Fix：14 findings 全修 + 2 反向钉新增；Review-2 增：R1 stale-state + R2 dead-code + R3 state-hygiene + 3 测试强度补充；Review-2 polish 增：P2 graph test 名副实 + 1 polish 测试拆分净增；Review-3 增：RepairContext error_kind 漂移修复 + 1 反向钉；627 passed / 0 failed）
 > 上游: [2026-08-29-p8-execution-agent-loop.md](2026-08-29-p8-execution-agent-loop.md) §D6 + [2026-08-25-refactor-master-freeze.md](../2026-08-25-refactor-master-freeze.md) §四/§十一
 
 ## Context
@@ -42,22 +42,22 @@ P8 是「decision 化」不是「重写」：保留 `plan → generate → valid
 | `test_max_sql_repair_retries_env.py` 5 例 | 默认 2/1 + env 真生效 + delenv + 非法回退 |
 | `test_prompt_repair_context.py` 5 例 | `build_sql_*_prompt` 7 要素拼接含全字段 + 无 ctx 时不污染 + schema/fewshot 不泄漏 |
 | `test_tracer_decision.py` 6 例 | `add_decision` 本地记录 + span 关联 + diagnose 节点落迹 + SUCCESS action="end" + fail action="fail" |
-| `test_execution_agent_loop.py` 12 例（含 R-test） | 4 goal + SUCCESS end + validation fail + connection + replan 不重置计数 + **R1 stale-state 反向钉** + **R-budget 真实 `build_sql_graph().invoke()` 全 lifecycle** + **R-graph 6 分支 route 全覆盖（含 action 优先 + compiled graph 真 invoke）** |
+| `test_execution_agent_loop.py` 13 例（含 R-test） | 4 goal + SUCCESS end + validation fail + connection + replan 不重置计数 + **R1 stale-state 反向钉** + **R-budget 真实 `build_sql_graph().invoke()` 全 lifecycle** + **R-graph 6 分支 route 全覆盖（含 action 优先 + compiled graph 真 invoke）** + **RV3 repair_ctx error_kind=syntax 反向钉（捕获 prompt 断言）** |
 
-合计 **40 例**（34 原有 + 2 F 反向钉 + 3 R-test + 1 polish 拆分净增）。
+合计 **41 例**（34 原有 + 2 F 反向钉 + 3 R-test + 1 polish 拆分净增 + 1 RV3 反向钉）。
 
 ## 回归基线
 
 ```bash
 cd backend
 pytest tests/contracts/test_diagnose_policy.py tests/contracts/test_max_sql_repair_retries_env.py tests/contracts/test_prompt_repair_context.py tests/contracts/test_tracer_decision.py tests/graphs/test_execution_agent_loop.py --tb=short -q
-# 39 passed, 2 warnings
+# 41 passed, 2 warnings
 
 pytest tests/smoke tests/contracts tests/graphs --tb=line -q
-# 626 passed, 0 failed, 5 warnings
+# 627 passed, 0 failed, 5 warnings
 ```
 
-与 P7 起点 `a6e9246` 对比：`+40` 测试（12+5+5+6+12），零回归失败。`586 → 626` 增量即 P8 新增。
+与 P7 起点 `a6e9246` 对比：`+41` 测试（12+5+5+6+13），零回归失败。`586 → 627` 增量即 P8 新增。
 
 ## Post-review Fix（2026-08-29）
 
@@ -67,11 +67,16 @@ pytest tests/smoke tests/contracts tests/graphs --tb=line -q
 
 push 后 user 实际 diff review 确认 F1-F15 PASS，新发现 R1-R3（1 stale-state correctness + 1 dead-code + 1 state-hygiene）+ 3 测试强度补充（R-test-budget 用真实 `build_sql_graph().invoke()` / R-test-graph 6 分支 route / R-test-stale 反向钉）。**全部修**；详情见 plan Review-2 章节。
 
+## Review-3（2026-08-30 user-side review）
+
+user 按 GitHub `57dcf2e` 实际代码再核，新发现 1 correctness gap：`_generate_sql()` 构造 `RepairContext` 时 `_error_kind` 只从 `sql_result` 推导，validation failure 路径（`sql_result=""`）恒落 `"other"`，与 `_evaluate`（`kind="syntax"`）/ `DiagnosePolicy`（`error_kind="syntax"`）漂移，repair prompt「错误分类」自相矛盾。修法：`prev_validation.valid is False → _error_kind="syntax"` 优先于 `sql_result` 推导（elif，与 R1「validation 优先」同语义）+ 反向钉 `test_repair_ctx_error_kind_is_syntax_for_validation_failure`（TDD 先红后绿）。**全部修**；详情见 plan Review-3 章节。
+
 ## Commit 序列
 
 - `p8-execution-agent-loop` 分支：`sql_graph.py` 扩 Evaluate→Diagnose→Route + `RepairContext` + `DiagnosePolicy` + env 预算 + `sdk.py` add_decision + `sql_prompts.py` repair_ctx
 - `fix/p8-execution-agent-loop-review-fixes` 分支：Post-review Fix（14 findings + 2 反向钉）→ commit `9d5fd98`
-- `fix/p8-execution-agent-loop-review-fixes` 分支续：Review-2（R1/R2/R3 + 3 R-test）→ commit（待补 hash）
+- `fix/p8-execution-agent-loop-review-fixes` 分支续：Review-2（R1/R2/R3 + 3 R-test）→ commit `0a047c9` + polish `43555cf` + 文档同步 `d6fd095` / `57dcf2e`
+- `fix/p8-execution-agent-loop-review-fixes` 分支续：Review-3（RV3-1 error_kind 漂移 + 1 反向钉）→ commit（待补 hash）
 - 真端到端 Golden Set：留 P12 手动门（`REPORTAGENT_E2E=1 pytest tests/e2e/test_full_flow.py -s` + `evaluation/runner.py`）
 
 ## 后续 Phase 衔接

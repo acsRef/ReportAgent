@@ -92,6 +92,46 @@ def test_validation_failure_retries_sql():
     assert state["diagnose_decision"]["action"] == "retry_sql"
 
 
+def test_repair_ctx_error_kind_is_syntax_for_validation_failure(monkeypatch):
+    """Review-3: validation failure 时 RepairContext.error_kind 必须与
+    _evaluate / DiagnosePolicy 一致（syntax），不能落 "other"。
+
+    修复前 _error_kind 只从 sql_result JSON 推导；validation failure 路径
+    sql_result 为空（execute 未跑 / R3 已清），error_kind 恒为 "other"，
+    repair prompt 里「错误分类：other」与错误文本（syntax error）自相矛盾。
+    """
+    from app.agent import sql_graph as sql_graph_module
+    from app.agent.sql_graph import _generate_sql
+
+    captured: dict = {}
+
+    def fake_call_llm(messages, **kwargs):
+        captured["prompt"] = messages[0]["content"] if isinstance(messages, list) else str(messages)
+        return "SELECT 1"
+
+    monkeypatch.setattr(sql_graph_module, "call_llm", fake_call_llm)
+
+    state: dict = {
+        "user_query": "2024年各区域销售额",
+        "query_plan": None,
+        "schema_context": None,
+        "generated_sql": "SELEC region FRM fact_sales",
+        "validation_result": {"valid": False, "error": 'syntax error at or near "SELEC"'},
+        "sql_result": "",
+        "retry_counters": {"sql_generation": 1, "plan": 0},
+        "diagnose_decision": {"action": "retry_sql", "error_kind": "syntax", "reason": "syntax: retry sql 1/2 (validation)"},
+        "trace_id": "test-trace-repair-kind",
+    }
+    out = _generate_sql(state)
+    assert out["generated_sql"] == "SELECT 1"
+    prompt = captured["prompt"]
+    # 错误文本来自 validation_result
+    assert 'syntax error at or near "SELEC"' in prompt
+    # 关键：错误分类必须与 _evaluate (kind="syntax") / DiagnosePolicy 一致
+    assert "错误分类：syntax" in prompt
+    assert "错误分类：other" not in prompt
+
+
 def test_connection_failure_no_retry():
     state = _eval_and_diagnose({"error": "connection refused", "error_kind": "connection"}, {"sql_generation": 0, "plan": 0})
     assert state["execution_status"] == "FAILED"
