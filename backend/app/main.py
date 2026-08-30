@@ -272,6 +272,7 @@ async def _run_confirmed_graph(
                 },
                 query_snapshot=None,
                 trace_id=initial.get("trace_id"),
+                failed_action=failed_action,
             )
         except Exception:  # noqa: BLE001 - 落库失败不拦 SSE error 事件
             logger.exception("task timeout persist failed: session=%s", session_id)

@@ -126,6 +126,9 @@ async def persist_error_run(
     error_detail: dict,
     query_snapshot: dict | None,
     trace_id: str | None,
+    # P9-1：error 落库把 session 终态定为 error 并保留 failed_action——
+    # 不复用「默认 report_ready」的成功落库语义。
+    failed_action: str | None = None,
 ) -> dict:
     """SQL execution failed (timeout / connection / permission / etc.).
 
@@ -160,6 +163,8 @@ async def persist_error_run(
         report_payload=payload,
         query_snapshot=query_snapshot,
         trace_id=trace_id,
+        session_phase="error",
+        last_failed_action=failed_action,
     )
 
 
@@ -175,6 +180,10 @@ async def _persist(
     report_payload: dict,
     query_snapshot: dict | None,
     trace_id: str | None,
+    # P9 Review-1：session 终态由调用方显式声明——error 落库不得复用
+    # 「默认 report_ready + 清 failed_action」的成功语义（P9-1 修复）。
+    session_phase: str = "report_ready",
+    last_failed_action: str | None = None,
 ) -> dict:
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -216,15 +225,15 @@ async def _persist(
                 ),
             )
 
-            # Session pointer + phase
+            # Session pointer + phase（current_phase / last_failed_action 由调用方语义决定）
             await conn.execute(
                 """UPDATE agent.session
                        SET latest_report_version = $2,
-                           current_phase = 'report_ready',
-                           last_failed_action = NULL,
+                           current_phase = $3,
+                           last_failed_action = $4,
                            updated_at = NOW()
                      WHERE thread_id = $1""",
-                session_id, new_version,
+                session_id, new_version, session_phase, last_failed_action,
             )
 
     return row
