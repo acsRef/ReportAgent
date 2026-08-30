@@ -105,6 +105,37 @@ def test_structure_chart_without_fields_rejected():
     assert any(v.layer == "structure" and v.block == "components[0]" for v in result.violations)
 
 
+def test_structure_row_keys_outside_declared_fields_rejected():
+    """P10-1：row 键超出 data_binding.fields 声明 → 结构违规（provenance 闭合）。
+
+    值即使在 QueryResult 中存在，未声明的字段也不得进渲染数据。
+    """
+    spec = _spec(components=[ComponentSpec(
+        id="c1", type="bar", title="x",
+        data_binding=DataBinding(
+            fields=["region", "amount"],
+            rows=[{"region": "华东", "amount": 100, "secret_flag": True}],
+        ),
+    )])
+    result = validate_report_spec(spec, QR)
+    assert result.ok is False
+    assert any(
+        v.layer == "structure" and v.block == "components[0]" and v.field == "secret_flag"
+        for v in result.violations
+    )
+
+
+def test_structure_empty_row_rejected():
+    """空行 {} 未携带任何锚定字段 → 无效投影，拒绝（all() 恒真不能穿透 fabrication）。"""
+    spec = _spec(components=[ComponentSpec(
+        id="c1", type="bar", title="x",
+        data_binding=DataBinding(fields=["region", "amount"], rows=[{}]),
+    )])
+    result = validate_report_spec(spec, QR)
+    assert result.ok is False
+    assert any(v.layer == "structure" and v.block == "components[0]" for v in result.violations)
+
+
 # --- 数值层 -----------------------------------------------------------------
 
 

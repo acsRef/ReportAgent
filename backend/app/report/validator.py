@@ -107,6 +107,22 @@ def validate_report_spec(spec, query_result) -> SpecValidationResult:
                     layer="structure", block=f"components[{i}]", field=f,
                     detail=f"组件字段 {f} 不在 QueryResult 列中",
                 ))
+        # P10-1：行键必须 ⊆ 声明字段——provenance 才闭合（值再真实，未声明的
+        # 字段也不得进渲染数据；空行未携带锚定字段，同样是无效投影）。
+        allowed = set(comp.data_binding.fields)
+        for row in comp.data_binding.rows:
+            extra = set(row.keys()) - allowed
+            if extra:
+                violations.append(SpecViolation(
+                    layer="structure", block=f"components[{i}]",
+                    field=",".join(sorted(extra)),
+                    detail=f"行携带未声明字段（provenance 不闭合）: {sorted(extra)}",
+                ))
+            elif not row:
+                violations.append(SpecViolation(
+                    layer="structure", block=f"components[{i}]",
+                    detail="空行未携带任何锚定字段",
+                ))
 
     # --- 2. numeric：KPI 数值必须等于聚合重算 --------------------------------
     for i, kpi in enumerate(spec.kpi):
