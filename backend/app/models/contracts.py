@@ -65,21 +65,10 @@ class QueryResult(BaseModel):
     error_kind: Optional[str] = None
 
 
-class ComponentSpec(BaseModel):
-    id: str = ""
-    type: str = ""
-    title: str = ""
-    layout: dict = {}
-    data_binding: dict = {}
-    visual_config: dict = {}
-
-
-class ReportSpec(BaseModel):
-    version: str = "1.0"
-    components: list[ComponentSpec] = []
-    insight: str = ""
-
-
+# P10：ReportSpec 域契约迁 app/report/spec.py（报告 Domain Object 归 report/ 域，
+# report-runtime.md §四边界）；本处保留 re-export shim，兼容既有 import 面
+# （P9 llm_resilience shim 先例）。
+from app.report.spec import ComponentSpec, ReportSpec  # noqa: E402, F401
 class ClarificationRequest(BaseModel):
     question: str
     resume_point: str = "sql"
