@@ -284,6 +284,14 @@ cd backend && pytest --tb=short -q
 
 新增测试约 28–32 例（errors ~12 / retry 迁移 9+1 钉 / backoff ~4 / timeout ~5 / budget ~4 / 背景超时 2）；删除 `tests/smoke/test_llm_resilience.py` 原 9 例（迁移非新增）。基线 627 → 预计 ~650。
 
+## Review-1（2026-08-30 用户实际代码 review，与 P10 合并审）
+
+2 correctness 修复 + 3 项记录不修（详细表格见 [p10 plan Review-1 段](2026-08-30-p10-report-validator.md)）：
+
+- **P9-1（P1，已修 `43a0516`）**：`_persist()` 无条件写 `current_phase='report_ready'+清 failed_action`——timeout 路径 update_phase(error) 先于 persist_error_run 被覆盖。修：session 终态参数化（`session_phase`/`last_failed_action`），error 落库显式声明 error 语义。正常 FAILED 路径靠调用顺序碰巧正确的问题同时消除。
+- **P9-2（P2，已修 `ea8b291`）**：超时/异常提前退出后 trace 滞留 RUNNING（`flush()` 不写 status，只有 `end()` 写）——`graph_completed` 标志 + finally 统一 `tracer.end("FAILED")`。
+- **P9-3/P9-4/P9-5（记录不修）**：RETRY_BUDGETS 是 documented contract 非 executable source；`classify_sql_kind/kind_to_error_code` 无生产调用点（SQL producer 仍发 `EXECUTION_ERROR`）；generic exception 出口原始异常文本直达用户。
+
 ## Open questions
 
 无。SSE 用户码与 runtime 码双轨制（D2）若用户 review 有异议再拍板；其余按宪法 + 伞形既定。

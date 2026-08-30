@@ -5,6 +5,9 @@
 Query Result——provenance 由 ``DataBinding``/``KpiSpec.field`` 显式锚定，
 由 ``report.validator`` 三层校验钉住。
 
+命名约定（P10-2 澄清）：「v2」指 **schema 契约版本**（P10 扩展 kpi/table/data_binding）；
+payload 的 ``version`` 字段是**域版本**、保持 ``"1.0"`` 不动——两回事，勿混。
+
 向后兼容：v2 新增 kpi/table/data_binding 结构化字段均有缺省值，旧落库
 payload 形状仍可 parse；``app.models.contracts`` 为 re-export shim。
 """

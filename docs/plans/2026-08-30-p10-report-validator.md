@@ -12,6 +12,26 @@
 - **落地偏差 3（T5+）**：错误码用 `ErrorCode.REPORT_VALIDATION_ERROR.value` 引用而非字面量（单一来源）；violations 决策进 `Tracer.add_decision`（P8 D5 语义复用）
 - 验收对照：ReportSpec schema 固化 ✓ / Chart/Table 字段存在于 QueryResult ✓ / KPI 来源可追溯（聚合重算机制）✓ / 不生成不存在的数据（行存在性 + 膨胀检测）✓ / ReportVersion 三态回归 ✓（真 e2e 留 P12 手动门）
 
+## Review-1（2026-08-30 用户实际代码 review，P9+P10 合并审）
+
+**修（3 硬项）**：
+
+| 编号 | 类别 | 修法 | commit |
+|---|---|---|---|
+| P9-1 | correctness P1 | `_persist()` session 终态参数化（`session_phase` / `last_failed_action`）——原先无条件写 `current_phase='report_ready' + 清 failed_action`，timeout 路径「先 update_phase(error) 后 persist」被覆盖回 report_ready；现 `persist_error_run(session_phase="error", last_failed_action=failed_action)` + fake-pool 契约钉 + timeout 集成断言 | `43a0516` |
+| P9-2 | correctness P2 | `_run_confirmed_graph` 加 `graph_completed` 标志，finally 统一 `tracer.end("FAILED")`——原先超时/异常提前退出后 flush 落库的 trace 永远 RUNNING；跑完的 trace 仍由 `_persist_report` end("DONE") 不重复 | `ea8b291` |
+| P10-1 | correctness P1 | validator structure 层加行键边界：`set(row.keys()) ⊆ set(data_binding.fields)` + 拒绝空行（`all()` 恒真穿透）——provenance 真正闭合 | （本 commit） |
+
+**记录不修（用户 scope 决定）**：
+
+| 编号 | 内容 | 去向 |
+|---|---|---|
+| P9-3 | `RETRY_BUDGETS` 是 documented contract 非 executable single source（三处实现各自读配置，测试钉一致）——面试话术：「跨组件一致性契约，测试钉住不能漂移」，不说「由表驱动」 | [[memory:p9-review-findings]] |
+| P9-4 | ErrorCode canonicalization incomplete：`classify_sql_kind/kind_to_error_code` 已定义无生产调用点；SQL producer 仍发 legacy `code="EXECUTION_ERROR"`（sql_graph.py:563/570/666） | 同上 |
+| P9-5 | generic exception 出口 `message=str(exc)[:300]` 原始异常文本直达用户——码/recoverable 已走 envelope 但文案未走 user_message | 同上 |
+| P10-2 | 「ReportSpec v2」指 schema 契约版本，payload `version="1.0"` 是域版本——spec.py docstring 已澄清，勿混 | 同上 |
+| P10-3 | KPI 校验当前是全表 aggregate 语义；P11 若支持 filter/subset KPI 必须升级为 subset aggregate，否则合法 KPI 会误判 | 同上 |
+
 ## Context
 
 ### 伞形 §392 P10 验收清单
