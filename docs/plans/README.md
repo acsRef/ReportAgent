@@ -26,6 +26,7 @@
 | Plan | 主题 | 备注 |
 |---|---|---|
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
+| [2026-08-30-p10-report-validator.md](2026-08-30-p10-report-validator.md) | P10 实施：Report Runtime——`app/report/` 域包三件套（spec/validator/versioning）+ ReportSpec v2（KpiSpec/TableSpec/DataBinding provenance，旧 payload 兼容 + contracts shim）+ 三层 Validator（结构/数值/禁止自由生成，校验 ReportSpec→QueryResult 映射，insight 文本不入正则审计）+ 父图接线 violations→FAILED + REPORT_VALIDATION_ERROR（P9 码挂接生产者）+ 前端 answer 契约零改动 | Open questions 2 项待用户确认：violations→FAILED vs 降级渲染；KPI 只落机制不生产 |
 
 ## 已完成
 
