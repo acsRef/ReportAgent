@@ -8,10 +8,15 @@ from app.infra.execution.registry import (
     ConfirmedTask,
     complete,
     get_confirmed_task,
+    publish,
     start_confirmed_task,
 )
 
 DONE = {"event": "done", "data": "{}"}
+
+# P11：publish/live 语义——执行中事件在线推给订阅者，complete 后整体留档重放。
+E1 = {"event": "trace", "data": '{"step":"规划查询"}'}
+E2 = {"event": "trace", "data": '{"step":"执行查询"}'}
 
 
 async def _noop_runner(task: ConfirmedTask) -> None:
@@ -21,7 +26,8 @@ async def _noop_runner(task: ConfirmedTask) -> None:
 async def test_start_and_complete():
     task = start_confirmed_task("s1", 1, "confirm", _noop_runner)
     assert get_confirmed_task("s1") is task
-    # 完成信号到达队列
+    # P11：final 事件先经队列推给在线订阅者，然后是完成哨兵
+    assert await asyncio.wait_for(task.events.get(), timeout=1) == DONE
     assert await asyncio.wait_for(task.events.get(), timeout=1) is None
     assert task.finished
     assert task.result == [DONE]
@@ -79,3 +85,54 @@ async def test_runner_cancellation_wakes_subscriber():
     # 取消后订阅者仍被唤醒（不静默挂死）
     assert await asyncio.wait_for(task.events.get(), timeout=1) is None
     assert task.finished
+
+
+async def test_publish_streams_to_online_subscriber_before_complete():
+    """P11：complete 前 publish 的事件立即可被订阅者消费，无需等任务结束。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow(task: ConfirmedTask) -> None:
+        started.set()
+        publish(task, E1)
+        publish(task, E2)
+        await release.wait()
+        complete(task, [DONE])
+
+    task = start_confirmed_task("p1", 1, "confirm", slow)
+    await started.wait()
+    # 在线订阅者在 complete 前就能逐条拿到 live 事件
+    assert await asyncio.wait_for(task.events.get(), timeout=1) == E1
+    assert await asyncio.wait_for(task.events.get(), timeout=1) == E2
+    release.set()
+    assert await asyncio.wait_for(task.events.get(), timeout=1) == DONE
+    assert await asyncio.wait_for(task.events.get(), timeout=1) is None
+
+
+async def test_complete_replays_live_plus_final():
+    """P11：迟到订阅者重放 = live 快照 + final 事件，顺序保持。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow(task: ConfirmedTask) -> None:
+        started.set()
+        publish(task, E1)
+        await release.wait()
+        complete(task, [DONE])
+
+    task = start_confirmed_task("p2", 1, "confirm", slow)
+    await started.wait()
+    release.set()
+    await asyncio.wait_for(task.events.get(), timeout=1)
+    assert task.result == [E1, DONE]
+
+
+async def test_publish_after_complete_is_ignored():
+    """complete 后 publish 不再入队/入档（防 finally 竞态污染重放）。"""
+    task = start_confirmed_task("p3", 1, "confirm", _noop_runner)
+    assert await asyncio.wait_for(task.events.get(), timeout=1) == DONE
+    publish(task, E1)
+    assert task.result == [DONE]
+    # 队列里只剩完成哨兵，E1 未被入队
+    assert await asyncio.wait_for(task.events.get(), timeout=1) is None
+    assert task.events.empty()

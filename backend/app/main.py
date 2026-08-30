@@ -51,6 +51,7 @@ from app.tools.mcp_faq_client import close_mcp_faq_client
 from app.infra.checkpoint.factory import init_checkpointer, close_checkpointer
 from app.infra.checkpoint.session import session_manager
 from app.infra.execution import registry
+from app.infra.execution.progress import ProgressTraceHandler
 from app.infra.trace.sdk import get_tracer
 from app.infra.auth.repository import ensure_default_user, verify_user
 from app.infra.auth.startup_guard import validate_auth_security_config
@@ -204,7 +205,16 @@ async def _run_confirmed_graph(
     events: list[dict] = []
     graph_completed = False
     try:
-        config = {"configurable": {"thread_id": session_id}}
+        # P11：config 挂 ProgressTraceHandler——图节点生命周期实时 publish 成
+        # trace progress 帧（kind×status），订阅者在线可收，complete 后随
+        # result 重放。run_with_timeout 语义不变。
+        handler = ProgressTraceHandler(
+            on_frame=lambda frame, _task=task: registry.publish(_task, frame),
+        )
+        config = {
+            "configurable": {"thread_id": session_id},
+            "callbacks": [handler],
+        }
         # P9：背景任务总预算（伞形 §200）——超时 → Persist FAILED → ReportVersion(error)
         # → 前端 error，不允许永远停在 generating。runner 有界 ⇒ registry 不会挂死。
         result = await run_with_timeout(graph.ainvoke(initial, config), MAX_TASK_DURATION)
@@ -297,7 +307,9 @@ async def _run_confirmed_graph(
             "event": "error",
             "data": json.dumps({
                 "code": envelope.code,
-                "message": str(exc)[:300],
+                # P9-5：泛化异常原文（原生 SDK/provider trace）不得直达用户——
+                # 一律走 user_message 稳定文案；原始异常只落 trace。
+                "message": user_message(envelope.kind),
                 "recoverable": envelope.recoverable,
                 "failed_action": failed_action,
             }, ensure_ascii=False),
@@ -321,10 +333,13 @@ async def _subscribe_events(
     task: registry.ConfirmedTask,
     phase_label: str,
 ) -> AsyncGenerator[dict, None]:
-    """SSE 订阅后台任务：已完成 → 重放 result；未完成 → phase + 等完成信号。
+    """SSE 订阅后台任务：已完成 → 重放 result；未完成 → phase + 实时 drain 队列。
 
-    客户端断连 → CancelledError 在此自然传播，无需清理：session phase 由
-    后台任务在完成时写入，任务不因连接断开而中断。
+    P11：队列在执行期间持续有 publish 的 live progress 事件——订阅者
+    drain 到哨兵 None（complete 时入队）为止，final 事件也经 complete
+    入队，在线/迟到订阅者看到同一顺序。客户端断连 → CancelledError 在
+    此自然传播，无需清理：session phase 由后台任务在完成时写入，任务不
+    因连接断开而中断。
     """
     if task.finished:
         for evt in task.result or _DEFAULT_ERROR_EVENTS:
@@ -334,8 +349,10 @@ async def _subscribe_events(
         "event": "phase",
         "data": json.dumps({"phase": phase_label}, ensure_ascii=False),
     }
-    await task.events.get()
-    for evt in task.result or _DEFAULT_ERROR_EVENTS:
+    while True:
+        evt = await task.events.get()
+        if evt is None:
+            break
         yield evt
 
 
@@ -628,6 +645,13 @@ async def _chat_requirement_analysis(
             # 闲聊意图：直接返回文本回复，不建需求卡、不进确认流程。
             if result.get("intent") == "chitchat":
                 casual = result.get("casual_reply") or "你好！有什么可以帮你的？"
+                # P11 F4：先复位 phase 再发闲聊回复——此前 final_phase 落
+                # 'error'（phase 变量未赋值），且 casual 文本无从渲染。
+                phase = "idle"
+                yield {
+                    "event": "phase",
+                    "data": json.dumps({"phase": "idle"}, ensure_ascii=False),
+                }
                 yield {
                     "event": "report",
                     "data": json.dumps({"answer": {"text": casual}}, ensure_ascii=False),
@@ -663,7 +687,7 @@ async def _chat_requirement_analysis(
                 "event": "error",
                 "data": json.dumps({
                     "code": envelope.code,
-                    "message": str(exc)[:300],
+                    "message": user_message(envelope.kind),
                     "recoverable": envelope.recoverable,
                     "failed_action": request.mode,
                 }, ensure_ascii=False),

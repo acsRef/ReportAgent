@@ -34,6 +34,8 @@ class ConfirmedTask:
     events: asyncio.Queue = field(default_factory=asyncio.Queue)
     finished: bool = False
     result: list[dict] | None = None
+    # P11：已 publish 的实时事件留档，complete 时并入 result 供迟到订阅者重放。
+    live: list[dict] = field(default_factory=list)
     started_at: datetime.datetime = field(default_factory=datetime.datetime.now)
     task: asyncio.Task | None = None
 
@@ -61,10 +63,28 @@ def get_confirmed_task(session_id: str) -> ConfirmedTask | None:
     return _tasks.get(session_id)
 
 
-def complete(entry: ConfirmedTask, result: list[dict]) -> None:
-    """任务正常结束：写入最终事件序列并唤醒订阅者。"""
-    entry.result = result
+def publish(entry: ConfirmedTask, evt: dict) -> None:
+    """P11：执行中发布实时事件——推给在线订阅者并留档进 live。
+
+    complete 后调用是 no-op：防 finally 竞态污染已冻结的重放快照。
+    """
+    if entry.finished:
+        return
+    entry.live.append(evt)
+    entry.events.put_nowait(evt)
+
+
+def complete(entry: ConfirmedTask, result: list[dict] | None) -> None:
+    """任务正常结束：final 事件推入队列供在线订阅者收尾，唤醒订阅者。
+
+    重放源 `result` = live 快照 + final 事件——迟到订阅者拿到
+    progress 全量 + 终态，顺序与在线订阅者一致。
+    """
+    final = list(result or [])
+    entry.result = [*entry.live, *final]
     entry.finished = True
+    for evt in final:
+        entry.events.put_nowait(evt)
     entry.events.put_nowait(None)
 
 

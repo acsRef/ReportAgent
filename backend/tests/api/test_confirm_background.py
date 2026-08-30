@@ -276,3 +276,21 @@ async def test_start_confirmed_stream_busy_409():
     release.set()
     await asyncio.wait_for(t1.events.get(), timeout=1)
     assert t1.finished
+
+# --- P9-5：泛化异常 SSE 文案走 user_message，不再把 provider 原始异常直达用户 ---------
+
+
+async def test_generic_exception_message_uses_user_copy(monkeypatch):
+    calls: list = []
+    _patch_deps(monkeypatch, calls)
+    task = registry.ConfirmedTask(session_id="s1", user_id=1, kind="confirm")
+    graph = FakeGraph(error=RuntimeError("minimax sdk internal trace: cfg dict at 0x..."))
+    await _run_confirmed_graph(
+        task, graph, {"trace_id": "t1"}, "s1", "confirm"
+    )
+    err = json.loads(task.result[0]["data"])
+    assert err["code"] == "INTERNAL_ERROR"
+    from app.reliability.errors import user_message
+
+    assert err["message"] == user_message("other")
+    assert "minimax" not in err["message"]

@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 _TYPICAL_CONTEXT_BUDGET_CHARS = 8000  # 预估 conversation+system+context 块占位（≈2000 tokens），用于 remaining_token_budget 估算
 
 
+def _callbacks_only(config: Optional[dict]) -> Optional[dict]:
+    """P11：向子图 ainvoke 只透传 callbacks——thread_id 等 configurable 不进
+    无 checkpointer 子图（避免 checkpoint 命名空间污染），progress handler 仍
+    能在嵌套 sql/data/report 子图内收到节点生命周期事件。"""
+    cbs = (config or {}).get("callbacks")
+    return {"callbacks": cbs} if cbs else None
+
+
 class ConfirmedExecutionState(TypedDict, total=False):
     user_query: str
     user_id: int
@@ -157,7 +165,7 @@ async def _sql_gate(state: ConfirmedExecutionState) -> dict:
 
 
 @traced_node("confirmed_data_agent")
-async def _confirmed_data_agent(state: ConfirmedExecutionState) -> dict:
+async def _confirmed_data_agent(state: ConfirmedExecutionState, config: Optional[dict] = None) -> dict:
     """Refresh schema (do NOT re-analyze requirements)."""
     data_graph = build_data_graph()
     ds = await data_graph.ainvoke({
@@ -166,12 +174,12 @@ async def _confirmed_data_agent(state: ConfirmedExecutionState) -> dict:
         "mcp_tool_calls": [],
         "raw_schema": "",
         "trace_id": state.get("trace_id", ""),
-    })
+    }, _callbacks_only(config))
     return {"schema_context": ds.get("schema_context")}
 
 
 @traced_node("confirmed_sql_agent")
-async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
+async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[dict] = None) -> dict:
     """Run the SQL subgraph. Note: we deliberately reuse `build_sql_graph`
     WITHOUT its `_intent_analyze` entry node — the requirement is already
     confirmed, so we just plan → generate → execute.
@@ -242,7 +250,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState) -> dict:
         "confirmed_requirement": confirmed_requirement,
         "conversation_context": conversation_context or None,
         "assembled_context": assembled_context or None,  # P4c: 含 recall 的全景 context
-    })
+    }, _callbacks_only(config))
     qr = ss.get("query_result")
     # Passthrough of error + last-tried SQL so the parent graph can emit
     # a structured SSE error event and persist a status='error' version
@@ -300,7 +308,7 @@ def _format_confirmed_requirement(card) -> str | None:
 
 
 @traced_node("confirmed_report_agent")
-async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
+async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Optional[dict] = None) -> dict:
     """Build the report payload from the query result.
 
     Three-state verdict drives `execution_status`:
@@ -327,7 +335,7 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
         "assemble_step_idx": 0,
         "assemble_results": [],
         "trace_id": state.get("trace_id", ""),
-    })
+    }, _callbacks_only(config))
 
     qr = state.get("query_result")
     err: ErrorDetail | None = None
@@ -505,7 +513,12 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
     # lock_for_execution 的恢复逻辑兜底。
     await _release_draft_lock(state)
 
-    merged = {**state["report_payload"], "version": row["version"]}
+    merged = {
+        **state["report_payload"],
+        "version": row["version"],
+        "parent_version": row.get("parent_version"),
+        "title": row.get("title") or "报告",
+    }
     return {
         "report_payload": merged,
         "execution_status": "DONE",

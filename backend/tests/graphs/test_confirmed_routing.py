@@ -144,3 +144,63 @@ async def test_success_report_persists(monkeypatch) -> None:
     assert result["report_payload"]["answer"]["table"]["rows"] == [
         {"region": "华东", "total": 100}
     ]
+
+
+# --- P11：子图 callbacks 窄转发 + report 事件 wire 形态 ------------------------------
+
+
+def test_callbacks_only_forwards_narrow_config() -> None:
+    """只透传 callbacks——thread_id 等 configurable 不进无 checkpointer 子图。"""
+    import app.agent.confirmed_execution_graph as ceg
+
+    class _H:
+        pass
+
+    h = _H()
+    assert ceg._callbacks_only(None) is None
+    assert ceg._callbacks_only({}) is None
+    assert ceg._callbacks_only({"configurable": {"thread_id": "t"}}) is None
+    assert ceg._callbacks_only({"callbacks": [h]}) == {"callbacks": [h]}
+
+
+async def test_persist_report_merges_wire_fields(monkeypatch) -> None:
+    """P11 F3：merged report_payload 带 version/parent_version/title（sse-v2 wire 形态）。"""
+    import app.agent.confirmed_execution_graph as ceg
+
+    captured: dict = {}
+
+    async def fake_persist_confirmed_run(**kwargs):
+        captured.update(kwargs)
+        return {"version": 3, "parent_version": None, "title": "报告"}
+
+    async def fake_draft_id(state):
+        return 7
+
+    async def fake_release(state):
+        return None
+
+    class _FakeTracer:
+        def end(self, status: str) -> None:
+            pass
+
+    monkeypatch.setattr(
+        ceg.report_version_service, "persist_confirmed_run", fake_persist_confirmed_run
+    )
+    monkeypatch.setattr(ceg, "_draft_id_from_state", fake_draft_id)
+    monkeypatch.setattr(ceg, "_release_draft_lock", fake_release)
+    monkeypatch.setattr(ceg, "get_tracer", lambda *a, **kw: _FakeTracer())
+
+    state = {
+        **_BASE_STATE,
+        "report_payload": {"answer": {"text": "ok"}},
+        "execution_status": "SUCCESS",
+        "draft_id": 7,
+    }
+    out = await ceg._persist_report(state)
+
+    assert out["execution_status"] == "DONE"
+    merged = out["report_payload"]
+    assert merged["version"] == 3
+    assert merged["parent_version"] is None
+    assert merged["title"] == "报告"
+    assert captured["requirement_draft_id"] == 7
