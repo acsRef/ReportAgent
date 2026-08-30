@@ -8,9 +8,9 @@
 | --- | --- | --- | --- |
 | `phase` | 服务端主动推送阶段变化 | `phase`, `reason?` | 权威，UI 必须以 phase 为准 |
 | `requirement` | requirement-analysis 流程产出 | `requirement: RequirementCard` | 权威 |
-| `trace` | 各节点/工具 start/end | `step, status, detail?` | 进度展示 |
+| `trace` | 各节点/工具 start/end | `step, status, detail?, kind?` | 进度展示 |
 | `thinking` | 关键 LLM 调用前 | `phase, text?` | 提示 |
-| `report` | confirmed-execution 完成 | `version, parent_version, title, answer, trace?` | 权威 |
+| `report` | confirmed-execution 完成 | `version, parent_version, title, answer` | 权威 |
 | `error` | 任意错误 | `code, message, recoverable, failed_action?` | 终态 |
 | `done` | 流结束 | `final_phase` | 终态 |
 
@@ -43,6 +43,21 @@
 
 完整 RequirementCard payload；前端用 `isRequirementReadyForConfirmation` 重新计算 status。
 
+### trace（P11 progress 族）
+
+confirmed-execution 期间实时推流（后台任务执行中即逐帧送达，不再等跑完全量重放）：
+
+```json
+{ "step": "生成 SQL", "status": "running", "detail": "", "kind": "sql" }
+```
+
+- `step`：用户可读的节点文案；`status ∈ running | success | error`；`detail` 可缺省。
+- `kind ∈ agent | tool | sql | repair | report`——**progress 事件族的投影**：
+  `running → *.started`、`success → *.completed`、`error → *.failed`；
+  `agent.thinking ≈ thinking` 事件；`report.generated/updated` 由 report 节点
+  trace + 既有 `report` 事件覆盖。前端不新增 SSE 顶层事件类型。
+- 映射表（`backend/app/infra/execution/progress.py`）是确定性契约：节点名 → (kind, 文案)。
+
 ### report
 
 ```json
@@ -55,10 +70,14 @@
     "table": null,
     "chart": { "type": "bar", "config": {...}, "data": [...] },
     "insight": "..."
-  },
-  "trace": [...]
+  }
 }
 ```
+
+- **报告形态**：confirm / retry / adjust 流的 `report` 都带 `version`（落库行号），
+  `parent_version` 与 `title` 同样来自落库行——以本 wire 形态为准（不是 persist 域对象）。
+- **闲聊回复形态**：requirement-analysis 流 chitchat 分支发 `{ "answer": { "text": "你好！" } }`
+  （无 `version`）。前端以 `version` 是否为 number 分流：有号走版本刷新，无号渲染闲聊泡。
 
 ### error
 
@@ -107,13 +126,24 @@ phase(parsing) → thinking → trace(nodes...) → requirement → phase(awaiti
 confirmed-execution 流程：
 
 ```text
-phase(generating) → thinking → trace(nodes...) → report → phase(report_ready) → done
+phase(generating) → trace(plan, running) → trace(plan, success) → trace(generate_sql, running)
+  → ... → trace(execute, running/success)* → trace(run_step, running)*
+  → report → phase(report_ready) → done
 ```
+
+- 后台任务执行中逐帧推 `trace`（P11 live），停止显示/断连后仍由 5s 轮询通知完成。
+- top-level `trace` 由 `backend/app/infra/execution/progress.py` 映射（消息见该文件映射表）。
 
 adjust 流程：
 
 ```text
-phase(adjusting) → thinking → trace(nodes...) → report → phase(report_ready) → done
+phase(adjusting) → trace* → report → phase(report_ready) → done
+```
+
+闲聊（requirement-analysis chitchat）流程：
+
+```text
+phase(parsing) → phase(idle) → report{answer:{text}} → done{final_phase:idle}
 ```
 
 错误流程：

@@ -133,7 +133,7 @@ AnalysisPhase 状态机 + `analysisReducer` 单一 phase 写者 + discriminated-
 
 详见 [frontend-contract.md](docs/architecture/frontend-contract.md)。
 
-> 现状：七事件基线与 reducer 已合规；progress 族 P11。
+> 现状（2026-08-30 P11 后）：事件面统一为 transport→schema→dispatch 三层——`api/sse.ts parseSSEFrameRaw`（拆帧）→ `api/analysisEvents.ts parseAnalysisSSEEvent`（七事件 + trace/thinking + report wire 形态，唯一 schema 层，两流共用）→ `stores/sessionEvents.ts handleSSEEvent`（单一写者 dispatch）；confirm/adjust 后台流执行中实时推 `trace` progress 帧（`infra/execution/progress.py` 节点→kind×status 映射，progress 族不新增顶层事件类型）；泛化异常 SSE 文案走 `user_message()`（P9-5 接线）；chitchat 终态 idle + 前端闲聊泡；session resume 恢复真实 phase + busy 会话接后台轮询；ProgressCard 由真 trace 信号驱动（移除 650ms 假定时器）。Report 渲染 / EMPTY / FAILED 保持 P10 验收零改动（KPI block 无生产者，P10-3 subset 前置）。
 
 ## 10. Report Contract
 

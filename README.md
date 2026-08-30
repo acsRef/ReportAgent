@@ -171,7 +171,9 @@ curl -N -X POST http://localhost:8100/api/v1/chat \
 |---|---|
 | `phase` | `{phase, reason?}` |
 | `requirement` | 完整 `RequirementCard` |
-| `report` | `{version, parent_version, title, answer, trace}` |
+| `trace` | `{step, status, detail?, kind?}` —— 执行进度；`kind ∈ agent/tool/sql/repair/report`（P11 progress 族，见 `docs/sse-v2.md`） |
+| `thinking` | `{phase?, text?}` |
+| `report` | `{version, parent_version, title, answer}`；闲聊回复为 `{answer:{text}}`（无 version） |
 | `error` | `{code, message, recoverable, failed_action}` |
 | `done` | `{final_phase}` |
 
