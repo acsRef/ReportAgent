@@ -347,7 +347,7 @@ cd frontend && npx vitest --run src/api/__tests__/analysisEvents.test.ts src/com
 
 ### 数字 / 验证
 
-- 后端全量：**930+ passed / 0 failed**（基线 925 + T1 3（registry live）+ T2 8（progress mapping/handler + 1 wiring）+ T3 3（P9-5 × 2 + chitchat）× 1 — 最终数字以 T8 收尾为准）。
+- 后端全量：**941 passed / 0 failed / 1 skipped / 5 warnings**（基线 925 + T1-T3 新增 16；warnings 全为既有 legacy 未引入新）。
 - 前端全量：**296 passed**（基线 259 + T4/T5/T6 新增 37）。`tsc -b` 通过，`oxlint` 仅余 2 条与本 Phase 无关的预存 warning（WorkbenchPage:50 `useExecutionPoll` 导出 + WorkbenchPage:113 useCallback deps，pre-existing）。
 - 手动门（基线（P0）+ P11 新项）：confirm 全程 progress 阶段 1→3 推进且 detail 文案随 trace 变化；停止→后台跑完→5s 轮询通知；chitchat「你好」→ 闲聊泡 + 无 error 态；adjust → 新版本自动刷新选中；断网重进会话 → phase/requirement/版本恢复，generating 会话恢复轮询；SQL 失败 → ErrorCard kind 文案（不再出现 provider 原始异常）。
 
