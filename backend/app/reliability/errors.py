@@ -96,8 +96,8 @@ def classify_sql_kind(
 
 
 def classify_llm_exception(exc: BaseException, failed_action: str = "llm") -> ErrorEnvelope:
-    """LLM 家族异常 → envelope。openai 惰性 import（与 llm_resilience 同模式）。"""
-    from app.llm_resilience import LLMRateLimitExceeded, LLMTimeoutError
+    """LLM 家族异常 → envelope。openai 惰性 import（与 retry._classify_retryable 同模式）。"""
+    from app.reliability.retry import LLMRateLimitExceeded, LLMTimeoutError
 
     if isinstance(exc, (LLMTimeoutError, LLMRateLimitExceeded)):
         return ErrorEnvelope(code=ErrorCode.LLM_TIMEOUT.value, kind="timeout", recoverable=True, failed_action=failed_action)
@@ -151,7 +151,7 @@ def classify_exception(exc: BaseException, failed_action: str = "internal") -> E
         llm_family = (APIError,)
     except ImportError:  # pragma: no cover
         llm_family = ()
-    from app.llm_resilience import LLMRateLimitExceeded, LLMTimeoutError
+    from app.reliability.retry import LLMRateLimitExceeded, LLMTimeoutError
 
     if isinstance(exc, (LLMTimeoutError, LLMRateLimitExceeded)) or (
         llm_family and isinstance(exc, llm_family)

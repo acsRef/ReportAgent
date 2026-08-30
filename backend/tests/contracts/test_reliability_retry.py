@@ -1,4 +1,4 @@
-"""LLM 韧性测试：令牌桶限流、错误分类重试、指数退避、90s 总超时。
+"""reliability/retry.py 契约（P9 自 llm_resilience 收编）：令牌桶限流、错误分类重试、指数退避、90s 总超时。
 
 全部离线——假 operation / 假 llm，不打真实 MiniMax API。
 """
@@ -18,8 +18,8 @@ from openai import (
     RateLimitError,
 )
 
-import app.llm_resilience as resilience
-from app.llm_resilience import (
+import app.reliability.retry as resilience
+from app.reliability.retry import (
     LLMRateLimitExceeded,
     LLMTimeoutError,
     _TokenBucket,
@@ -27,7 +27,7 @@ from app.llm_resilience import (
 )
 import app.llm as llm_module
 
-pytestmark = pytest.mark.smoke
+pytestmark = pytest.mark.contracts
 
 
 def _req() -> httpx.Request:
@@ -83,7 +83,7 @@ def test_classify_non_retryable_errors():
 # --- 重试 ---
 
 
-@patch("app.llm_resilience.time.sleep")
+@patch("app.reliability.retry.time.sleep")
 def test_retry_then_success(mock_sleep):
     calls: list[int] = []
 
@@ -113,7 +113,7 @@ def test_non_retryable_raises_immediately():
     assert len(calls) == 1
 
 
-@patch("app.llm_resilience.time.sleep")
+@patch("app.reliability.retry.time.sleep")
 def test_retries_exhausted_raises_last_original(mock_sleep):
     def op():
         raise _status_error(RateLimitError, 429)
@@ -130,7 +130,7 @@ def test_total_budget_exhausted_raises_timeout():
 
     # deadline = 100 + 90 = 190；第二次读 monotonic 返回 200 → remaining = -10 → 超预算
     with patch.object(resilience, "_rate_limiter", _AlwaysBucket()), \
-         patch("app.llm_resilience.time.monotonic", side_effect=[100.0, 200.0]):
+         patch("app.reliability.retry.time.monotonic", side_effect=[100.0, 200.0]):
         def op():
             raise _status_error(RateLimitError, 429)
 
@@ -164,7 +164,22 @@ def test_call_llm_uses_retry_and_returns_text():
     fake_llm = _FakeLLM()
     with patch("app.llm.adapter.ChatOpenAI", lambda **kw: fake_llm), \
          patch("app.infra.trace.sdk.current_tracer", lambda: None), \
-         patch("app.llm_resilience.time.sleep"):
+         patch("app.reliability.retry.time.sleep"):
         result = llm_module.call_llm("some prompt")
     assert result == "final answer"
     assert len(calls) == 3
+
+
+# --- 兼容 shim（app/llm_resilience.py）---
+
+
+def test_llm_resilience_shim_reexports_same_objects():
+    """shim 只 re-export 不复制：限流单例与算法对象必须同源。"""
+    import app.llm_resilience as shim
+
+    assert shim.invoke_with_retry is resilience.invoke_with_retry
+    assert shim._TokenBucket is resilience._TokenBucket
+    assert shim.LLMTimeoutError is resilience.LLMTimeoutError
+    assert shim.LLMRateLimitExceeded is resilience.LLMRateLimitExceeded
+    assert shim._classify_retryable is resilience._classify_retryable
+    assert shim._rate_limiter is resilience._rate_limiter

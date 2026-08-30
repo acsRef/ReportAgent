@@ -9,7 +9,7 @@ from typing import Any, Callable
 from langchain_openai import ChatOpenAI
 
 from app.llm.config import LLMConfig
-from app.llm_resilience import invoke_with_retry
+from app.reliability.retry import invoke_with_retry
 
 logger = logging.getLogger(__name__)
 
