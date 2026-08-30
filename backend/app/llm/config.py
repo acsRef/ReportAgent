@@ -10,7 +10,8 @@ class LLMConfig:
         self.base_url: str = os.getenv("LLM_BASE_URL") or os.getenv("MINIMAX_BASE_URL") or "https://api.minimax.chat/v1"
         self.provider: str = os.getenv("LLM_PROVIDER", "minimax")
         self.timeout: float = float(os.getenv("LLM_TIMEOUT", "60"))
-        self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "5"))
+        # 宪法 §11 契约值：LLM transient retry 预算 2（P9 自 P6 遗留默认 5 收敛）。
+        self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
         self.max_total_time: float = float(os.getenv("LLM_MAX_TOTAL_TIME", "90"))
         self.context_window: int = int(os.getenv("LLM_CONTEXT_WINDOW", "131072"))
         self.temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))

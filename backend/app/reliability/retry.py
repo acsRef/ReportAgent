@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _RATE_LIMIT = float(os.getenv("LLM_RATE_LIMIT", "10"))
 _RATE_BURST = float(os.getenv("LLM_RATE_BURST", "10"))
 _MAX_TOTAL_TIME = float(os.getenv("LLM_MAX_TOTAL_TIME", "90"))
-_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "5"))
+_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 _BASE_BACKOFF = float(os.getenv("LLM_BASE_BACKOFF", "1"))
 _MAX_BACKOFF = float(os.getenv("LLM_MAX_BACKOFF", "30"))
 _JITTER = float(os.getenv("LLM_JITTER", "1"))
@@ -137,13 +137,16 @@ def invoke_with_retry(
 
 # --- RetryPolicy：固定预算单一来源（宪法 §11 / 伞形 §194） --------------------
 #
-# sql_repair / mcp 两值与既有实现同一契约（P9 只钉一致，不改实现）；
-# llm_transient 收敛 LLMConfig.max_retries 默认为宪法契约值 2（P6 遗留默认 5）。
+# 静态契约声明（非 import 时 env 读取）：三处实现必须与表同值，
+# 一致性由 tests/contracts/test_retry_budget_consistency.py 钉住。
+# - sql_repair：sql_graph._get_max_sql_retries 同 env（MAX_SQL_REPAIR_RETRIES）同默认
+# - mcp：mcp_client._call_with_retry `for attempt in (1, 2)`
+# - llm_transient：LLMConfig.max_retries / invoke_with_retry 默认（P9 自 5 收敛，宪法契约值）
 
 RETRY_BUDGETS: dict[str, int] = {
-    "sql_repair": int(os.getenv("MAX_SQL_REPAIR_RETRIES", "2")),
+    "sql_repair": 2,
     "mcp": 2,
-    "llm_transient": int(os.getenv("LLM_MAX_RETRIES", "2")),
+    "llm_transient": 2,
 }
 
 
