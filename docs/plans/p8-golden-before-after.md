@@ -76,7 +76,7 @@ user 按 GitHub `57dcf2e` 实际代码再核，新发现 1 correctness gap：`_g
 - `p8-execution-agent-loop` 分支：`sql_graph.py` 扩 Evaluate→Diagnose→Route + `RepairContext` + `DiagnosePolicy` + env 预算 + `sdk.py` add_decision + `sql_prompts.py` repair_ctx
 - `fix/p8-execution-agent-loop-review-fixes` 分支：Post-review Fix（14 findings + 2 反向钉）→ commit `9d5fd98`
 - `fix/p8-execution-agent-loop-review-fixes` 分支续：Review-2（R1/R2/R3 + 3 R-test）→ commit `0a047c9` + polish `43555cf` + 文档同步 `d6fd095` / `57dcf2e`
-- `fix/p8-execution-agent-loop-review-fixes` 分支续：Review-3（RV3-1 error_kind 漂移 + 1 反向钉）→ commit（待补 hash）
+- `fix/p8-execution-agent-loop-review-fixes` 分支续：Review-3（RV3-1 error_kind 漂移 + 1 反向钉）→ commit `cba81a4`
 - 真端到端 Golden Set：留 P12 手动门（`REPORTAGENT_E2E=1 pytest tests/e2e/test_full_flow.py -s` + `evaluation/runner.py`）
 
 ## 后续 Phase 衔接
