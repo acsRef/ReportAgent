@@ -141,7 +141,7 @@ Report Agent 输出结构化 ReportSpec（非自由 Markdown）；三层 Validat
 
 详见 [report-runtime.md](docs/architecture/report-runtime.md)。
 
-> 现状：三态落库在位；三层 Validator P10。
+> 现状（2026-08-30 P10 后）：`app/report/` 域包（spec / validator / versioning）已落——ReportSpec v2（KpiSpec / TableSpec / DataBinding provenance，旧 payload 兼容 + `models/contracts.py` shim）+ 三层 Validator（结构字段存在性 / KPI 聚合重算 / 行存在性 fabrication；insight 文本不入正则审计）+ 父图接线 violations→FAILED + `REPORT_VALIDATION_ERROR`（SSE 用户码 QUERY_FAILED 兜底，前端 answer 契约零改动）。九类 block 按 P11 渲染需求扩展；`agents/report/` 目录迁移未做；真端到端回归留 P12 手动门。
 
 ## 11. Timeout & Failure Policy
 

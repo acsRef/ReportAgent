@@ -1,8 +1,16 @@
 # P10 实施：Report Runtime——ReportSpec schema 固化 + 三层 Validator + versioning 语义收编
 
-> 状态: 进行中
+> 状态: 已完成（2026-08-30，p9-reliability 分支续作；T1–T6 全绿，用户拍板 FAILED 语义 + KPI 只落机制）
 > 上游: [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) §二·二目标目录（report/ 三件套）+ §十二 Report Runtime 与 Fact Checker 分层 + §392 P10 验收清单 + §451/§465 迁移映射 + [docs/architecture/report-runtime.md](../architecture/report-runtime.md)（P1 冻结契约）+ CLAUDE.md 宪法 §10 + [[memory:p9-landed]]（REPORT_VALIDATION_ERROR 码已就位）
 > 协作: P9 已落 p9-reliability 分支（891 passed）；本 plan 仅 P10
+
+## 落地记录（2026-08-30）
+
+- commit 链：plan `8249322` → T1 spec `a3afb0e` → T2 validator `6b9530a` → T3 versioning `e5839fb` → T4/T5 接线 `163efc2` → 收尾（含 ErrorCode 引用修正）
+- **落地偏差 1（T3）**：`resolve_verdict` 砍掉——无真实消费点，不写无消费代码；versioning.py 只落 `resolve_report_status`（fail-closed 未知→error）
+- **落地偏差 2（T2）**：「维度编造 vs 数值变形」在 DataBinding（无字段语义）下不可区分——行存在性统一归 fabrication 层，numeric 层专司 KPI 聚合重算（伞形三层映射更干净）
+- **落地偏差 3（T5+）**：错误码用 `ErrorCode.REPORT_VALIDATION_ERROR.value` 引用而非字面量（单一来源）；violations 决策进 `Tracer.add_decision`（P8 D5 语义复用）
+- 验收对照：ReportSpec schema 固化 ✓ / Chart/Table 字段存在于 QueryResult ✓ / KPI 来源可追溯（聚合重算机制）✓ / 不生成不存在的数据（行存在性 + 膨胀检测）✓ / ReportVersion 三态回归 ✓（真 e2e 留 P12 手动门）
 
 ## Context
 

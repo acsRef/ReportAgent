@@ -29,6 +29,7 @@ from app.infra.db.postgres import get_pool
 from app.infra.trace.sdk import current_tracer, get_tracer, traced_node
 from app.models.contracts import ErrorDetail, SchemaContext
 from app.models.requirement import RequirementCard
+from app.reliability.errors import ErrorCode
 from app.report.validator import validate_report_spec
 from app.services import requirement_service, report_version_service
 from app.state.checkpoint_adapter import migrate_checkpoint
@@ -381,7 +382,7 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
                 )
                 status = "FAILED"
                 err = ErrorDetail(
-                    code="REPORT_VALIDATION_ERROR",
+                    code=ErrorCode.REPORT_VALIDATION_ERROR.value,
                     message=f"报告数据校验失败: {summary}",
                     kind="other",
                 )

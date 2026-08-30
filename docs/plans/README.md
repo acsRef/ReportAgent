@@ -26,7 +26,12 @@
 | Plan | 主题 | 备注 |
 |---|---|---|
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
-| [2026-08-30-p10-report-validator.md](2026-08-30-p10-report-validator.md) | P10 实施：Report Runtime——`app/report/` 域包三件套（spec/validator/versioning）+ ReportSpec v2（KpiSpec/TableSpec/DataBinding provenance，旧 payload 兼容 + contracts shim）+ 三层 Validator（结构/数值/禁止自由生成，校验 ReportSpec→QueryResult 映射，insight 文本不入正则审计）+ 父图接线 violations→FAILED + REPORT_VALIDATION_ERROR（P9 码挂接生产者）+ 前端 answer 契约零改动 | Open questions 2 项待用户确认：violations→FAILED vs 降级渲染；KPI 只落机制不生产 |
+
+## 已完成
+
+| Plan | 主题 | 落地 |
+|---|---|---|
+| [2026-08-30-p10-report-validator.md](2026-08-30-p10-report-validator.md) | P10 实施：Report Runtime——`app/report/` 域包三件套（spec/validator/versioning）+ ReportSpec v2（KpiSpec/TableSpec/DataBinding provenance，旧 payload 兼容 + contracts shim）+ 三层 Validator（structure 字段存在性 / numeric KPI 聚合重算 / fabrication 行存在性+膨胀检测；insight 文本不入正则审计）+ 父图接线 violations→FAILED + `ErrorCode.REPORT_VALIDATION_ERROR`（P9 码挂接生产者）+ decision trace；数据真实性从确定性工具的实现巧合变成被钉住的契约；前端 answer 契约零改动（vitest 259 持平） | p9-reliability 分支续作：`8249322`(plan) → `a3afb0e`(T1) → `6b9530a`(T2) → `e5839fb`(T3) → `163efc2`(T4/T5) → 收尾；全量 **920 passed / 0 failed / 1 skipped**；落地偏差 3 项见 plan 落地记录（resolve_verdict 砍除 / 行存在性归 fabrication / ErrorCode 单一来源引用） |
 
 ## 已完成
 
