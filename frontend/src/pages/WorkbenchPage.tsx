@@ -19,17 +19,23 @@ import {
   chatModeForPhase,
   composerPlaceholder,
 } from '../components/workbench/phaseText'
+import { fetchSessions, fetchSession, patchRequirement, SESSIONS_PAGE_SIZE } from '../api/sessionsClient'
+import type { SessionSummary as ApiSessionSummary } from '../api/sessionsClient'
+import { openChat } from '../api/analysisClient'
+import { postConfirmStream } from '../api/confirmStream'
+import { stageFromTrace, liveDetailFromEntry } from '../components/workbench/progressModel'
+import {
+  handleSSEEvent,
+  loadSessionSnapshot,
+  refreshVersionsAndSelectLatest,
+} from '../stores/sessionEvents'
 import { useAnalysisStore } from '../stores/analysisStore'
 import { canRetryFailedAction, isBusyPhase } from '../stores/analysisReducer'
 import { useAuthStore } from '../stores/authStore'
-import { fetchSessions, fetchSession, patchRequirement, SESSIONS_PAGE_SIZE } from '../api/sessionsClient'
-import { openChat } from '../api/analysisClient'
-import { postConfirmStream, type ToastApi, type Dispatcher } from '../api/confirmStream'
+import type { TimelineEntry } from '../types/report'
+import type { RequirementCard as RC } from '../types/requirement'
 import RequirementCardView from '../components/workbench/RequirementCardView'
 import ReportPaper from '../components/workbench/ReportPaper'
-import type { AnalysisPhase, ReportVersionStatus } from '../types/analysis'
-import type { SessionSummary as ApiSessionSummary } from '../api/sessionsClient'
-import type { RequirementCard as RC } from '../types/requirement'
 import '../styles/global.css'
 import '../styles/workbench.css'
 
@@ -101,7 +107,7 @@ export default function WorkbenchPage() {
     execPolling,
     useCallback(() => {
       if (!activeSessionId) return
-      void refreshVersionsAndSelectLatest(activeSessionId, dispatch)
+      void refreshVersionsAndSelectLatest(activeSessionId)
       toast.success('报告已在后台生成，可查看')
       setExecPolling(false)
     }, [activeSessionId, dispatch, toast]),
@@ -147,22 +153,17 @@ export default function WorkbenchPage() {
   }, [phase, reportVersions.length])
 
   const [stageIndex, setStageIndex] = useState(0)
+  // P11：progress 由真实 trace 事件驱动——liveDetail 显示当前步骤文案。
+  const [liveDetail, setLiveDetail] = useState<string | undefined>(undefined)
+  const [casualReply, setCasualReply] = useState<string | null>(null)
   const confirmAbortRef = useRef<AbortController | null>(null)
 
-  // Prototype pacing: stage 0 (需求已确认) completes the moment the confirm
-  // stream opens — the requirement lock is its entry condition. Stages 1-3
-  // advance on a 650ms timer; the real report/error event ends the run.
-  useEffect(() => {
-    if (phase !== 'generating' && phase !== 'adjusting') return
-    setStageIndex(1)
-    let index = 1
-    const timer = setInterval(() => {
-      index = Math.min(3, index + 1)
-      setStageIndex(index)
-      if (index >= 3) clearInterval(timer)
-    }, 650)
-    return () => clearInterval(timer)
-  }, [phase])
+  // P11 D5：trace progress 帧 → stage（单调不减）+ live 文案。两个流
+  // （/confirm 的 postConfirmStream 与 /chat 的 openChat）共用。
+  function handleProgress(entry: TimelineEntry) {
+    setStageIndex((cur) => stageFromTrace(entry.kind, entry.status, cur))
+    setLiveDetail(liveDetailFromEntry(entry))
+  }
 
   function handleStop() {
     // 「后台跑完」语义：停止只断开本连接的渲染，后端任务继续跑到落库。
@@ -222,6 +223,8 @@ export default function WorkbenchPage() {
     dispatch({ type: 'analysis/reset' })
     setComposer('')
     setLastQuestion(null)
+    setCasualReply(null)
+    setLiveDetail(undefined)
   }
 
   function handleSend(textOverride?: string) {
@@ -230,6 +233,9 @@ export default function WorkbenchPage() {
     setSending(true)
     setComposer('')
     setLastQuestion(text)
+    setCasualReply(null)
+    setStageIndex(1)
+    setLiveDetail(undefined)
     const sid = activeSessionId ?? crypto.randomUUID()
     if (!activeSessionId) {
       dispatch({ type: 'session/selected', sessionId: sid })
@@ -242,7 +248,13 @@ export default function WorkbenchPage() {
         session_id: sid,
         base_report_version: mode === 'adjust' ? selectedReportVersion : undefined,
       },
-      (evt) => handleSSEEvent(evt, toast, setSending),
+      (evt) => handleSSEEvent(evt, {
+        msgApi: toast,
+        sessionId: sid,
+        setSending,
+        setCasualReply,
+        onTrace: handleProgress,
+      }),
     )
     setTimeout(() => {
       setSending((cur) => {
@@ -257,11 +269,16 @@ export default function WorkbenchPage() {
 
   function handleSelectSession(sessionId: string) {
     dispatch({ type: 'session/selected', sessionId })
+    setCasualReply(null)
     setLastQuestion(
       (sessions.find((s) => s.session_id === sessionId) as { first_message?: string } | undefined)
         ?.first_message ?? null,
     )
-    void loadSessionSnapshot(sessionId, toast)
+    // P11 F6：恢复快照（requirement/版本/phase）；busy 会话（generating/adjusting）
+    // 恢复后台轮询——停止后重进会话仍能收到「后台跑完」通知。
+    void loadSessionSnapshot(sessionId, toast).then((busy) => {
+      if (busy) setExecPolling(true)
+    })
   }
 
   async function handlePatchAndConfirm(card: RC) {
@@ -276,6 +293,8 @@ export default function WorkbenchPage() {
       dispatch({ type: 'requirement/received', requirement: saved })
       if (saved.status === 'complete') {
         setConfirming(true)
+        setStageIndex(1)
+        setLiveDetail(undefined)
         const controller = new AbortController()
         confirmAbortRef.current = controller
         await postConfirmStream(
@@ -284,8 +303,9 @@ export default function WorkbenchPage() {
             toast,
             dispatch,
             setConfirming,
+            onTrace: handleProgress,
             onReport: (version) => {
-              void refreshVersionsAndSelectLatest(activeSessionId, dispatch)
+              void refreshVersionsAndSelectLatest(activeSessionId)
               toast.success(`报告 v${version ?? ''} 已生成并保留在当前会话`)
             },
           },
@@ -309,6 +329,8 @@ export default function WorkbenchPage() {
       return
     }
     setConfirming(true)
+    setStageIndex(1)
+    setLiveDetail(undefined)
     const controller = new AbortController()
     confirmAbortRef.current = controller
     try {
@@ -318,8 +340,9 @@ export default function WorkbenchPage() {
           toast,
           dispatch,
           setConfirming,
+          onTrace: handleProgress,
           onReport: (version) => {
-            void refreshVersionsAndSelectLatest(activeSessionId, dispatch)
+            void refreshVersionsAndSelectLatest(activeSessionId)
             toast.success(`报告 v${version ?? ''} 已生成并保留在当前会话`)
           },
         },
@@ -421,6 +444,7 @@ export default function WorkbenchPage() {
             <div className="wb-content-inner">
           {lastQuestion && phase !== 'idle' && <UserBubble text={lastQuestion} />}
           {phase !== 'idle' && agentCopy(phase) && <AgentBubble markdown={agentCopy(phase)} />}
+          {casualReply && <AgentBubble markdown={casualReply} />}
           {phase === 'parsing' && <ParsingCard />}
 
           {phase === 'error' && canRetryFailedAction({ phase, error }) && (
@@ -436,6 +460,7 @@ export default function WorkbenchPage() {
             <ProgressCard
               adjusting={phase === 'adjusting'}
               stageIndex={stageIndex}
+              liveDetail={liveDetail}
               onStop={handleStop}
             />
           )}
@@ -462,7 +487,7 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {!requirement && reportVersions.length === 0 && phase === 'idle' && (
+          {!requirement && reportVersions.length === 0 && phase === 'idle' && !casualReply && (
             <WorkbenchEmpty onPick={(text) => handleSend(text)} />
           )}
             </div>
@@ -489,108 +514,5 @@ export default function WorkbenchPage() {
       </div>
     </div>
   )
-}
-
-function handleSSEEvent(
-  evt: { type: string; data: any },
-  msgApi: ToastApi,
-  setSending: (v: boolean | ((cur: boolean) => boolean)) => void,
-) {
-  const dispatch = useAnalysisStore.getState().dispatch
-  if (evt.type === 'phase') {
-    dispatch({ type: 'phase/received', phase: evt.data.phase as AnalysisPhase })
-  } else if (evt.type === 'requirement') {
-    dispatch({ type: 'requirement/received', requirement: evt.data })
-  } else if (evt.type === 'error') {
-    msgApi.error(evt.data?.message ?? '处理失败')
-    dispatch({ type: 'analysis/failed', error: evt.data })
-  } else if (evt.type === 'done') {
-    if (evt.data?.final_phase) {
-      dispatch({ type: 'phase/received', phase: evt.data.final_phase as AnalysisPhase })
-    }
-  }
-  if (evt.type === 'requirement' || evt.type === 'done' || evt.type === 'error') {
-    setSending(false)
-  }
-}
-
-async function loadSessionSnapshot(
-  sessionId: string,
-  msgApi: ToastApi,
-) {
-  try {
-    const { fetchSession } = await import('../api/sessionsClient')
-    const snap = await fetchSession(sessionId)
-    if (!snap) return
-    const dispatch = useAnalysisStore.getState().dispatch
-    if (snap.current_requirement) {
-      dispatch({
-        type: 'requirement/received',
-        requirement: snap.current_requirement.payload,
-      })
-    }
-    if (snap.session?.report_versions) {
-      for (const v of snap.session.report_versions) {
-        const status = (['generating', 'done', 'error'] as ReportVersionStatus[]).includes(
-          v.status as any,
-        )
-          ? (v.status as ReportVersionStatus)
-          : 'done'
-        dispatch({
-          type: 'report/received',
-          report: {
-            id: `r-${v.version}`,
-            session_id: sessionId,
-            version: v.version,
-            parent_version: v.version > 1 ? v.version - 1 : null,
-            title: v.title,
-            status,
-            report: { answer: { text: '' } } as any,
-            created_at: v.created_at,
-          },
-        })
-      }
-    }
-  } catch (err) {
-    msgApi.error(`加载会话失败：${String(err).slice(0, 100)}`)
-  }
-}
-
-async function refreshVersionsAndSelectLatest(
-  sessionId: string,
-  _dispatch: Dispatcher,
-) {
-  try {
-    const { fetchSession } = await import('../api/sessionsClient')
-    const snap = await fetchSession(sessionId)
-    if (!snap) return
-    const dispatch = useAnalysisStore.getState().dispatch
-    for (const v of snap.session.report_versions) {
-      const status = (['generating', 'done', 'error'] as ReportVersionStatus[]).includes(
-        v.status as any,
-      )
-        ? (v.status as ReportVersionStatus)
-        : 'done'
-      dispatch({
-        type: 'report/received',
-        report: {
-          id: `r-${v.version}`,
-          session_id: sessionId,
-          version: v.version,
-          parent_version: v.version > 1 ? v.version - 1 : null,
-          title: v.title,
-          status,
-          report: { answer: { text: '' } } as any,
-          created_at: v.created_at,
-        },
-      })
-    }
-    if (snap.session.report_versions.length > 0) {
-      const last = snap.session.report_versions[snap.session.report_versions.length - 1]
-      dispatch({ type: 'report/selected', version: last.version })
-    }
-  } catch {
-    /* ignore */
-  }
 }
 

@@ -7,14 +7,19 @@
  * them into a `legacy` channel payload so the reducer can ignore them
  * while the legacy components can still render.
  *
- * It is also used as the default fallback when the parser can't classify
- * an incoming event (defensive).
+ * 注意：该形状独立于 api/analysisEvents 的 canonical union——新客户端按
+ * frontend-contract 只消费公开事件契约，legacy 事件被 parser 丢弃，此处
+ * 仅服务仍存续的旧组件（P15 随 legacy 一并删除）。
  */
-import type { AnalysisStreamEvent } from '../../api/analysisClient'
+
+export interface LegacyEvent {
+  type: 'legacy'
+  data: { event: string; payload: any }
+}
 
 export function adaptLegacyEvent(
   eventName: string,
   data: any,
-): AnalysisStreamEvent {
+): LegacyEvent {
   return { type: 'legacy', data: { event: eventName, payload: data } }
 }

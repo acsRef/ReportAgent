@@ -5,17 +5,23 @@
  * Buffers partial chunks and dispatches each fully-parsed event to the
  * provided `onEvent` callback.
  *
- * Event types emitted (per docs/sse-v2.md):
+ * Event types emitted (per docs/sse-v2.md) — all parsed by the single
+ * contract layer `parseAnalysisSSEEvent`:
  *   - phase { phase, reason? }
  *   - requirement (full RequirementCard)
- *   - report { version, parent_version, title, answer, trace }
- *   - error { code, message, recoverable, failed_action }
+ *   - trace { step, status, detail?, kind? }  (P11 progress family)
+ *   - thinking { phase?, text? }
+ *   - report { version, parent_version, title, answer } | { answer:{text} } (chitchat)
+ *   - error { code, message, recoverable, failed_action, kind?, sql? }
  *   - done { final_phase }
  *
  * Legacy events (card / clarify / token) are NOT emitted by the new
  * backend flow; if we ever re-enable /api/v1/chat?mode=legacy those will
- * appear here too. The reducer ignores them for now.
+ * appear here too. The parser drops unknown event names.
  */
+import type { AnalysisStreamEvent } from './analysisEvents'
+import { parseAnalysisSSEEvent } from './analysisEvents'
+import { parseSSEFrameRaw } from './sse'
 import { handleUnauthorized } from './unauthorized'
 
 export interface ChatRequest {
@@ -23,11 +29,6 @@ export interface ChatRequest {
   session_id?: string | null
   mode?: 'new' | 'supplement' | 'adjust' | 'legacy'
   base_report_version?: number | null
-}
-
-export interface AnalysisStreamEvent {
-  type: 'phase' | 'requirement' | 'trace' | 'thinking' | 'report' | 'error' | 'done' | 'legacy'
-  data: any
 }
 
 function getAuthToken(): string | null {
@@ -84,11 +85,11 @@ export function openChat(
       if (!res.ok || !res.body) {
         onEvent({
           type: 'error',
-          data: {
+          error: {
             code: 'HTTP_ERROR',
             message: `chat request failed: ${res.status}`,
             recoverable: false,
-            failed_action: request.mode ?? 'new',
+            failed_action: request.mode && request.mode !== 'legacy' ? request.mode : 'new',
           },
         })
         return
@@ -108,7 +109,10 @@ export function openChat(
           const match = buffer.match(/\r\n\r\n|\n\n/)!
           const frame = buffer.slice(0, sepIndex)
           buffer = buffer.slice(sepIndex + match[0].length)
-          const evt = parseSSEFrame(frame)
+          // P11：transport（parseSSEFrameRaw）→ schema（parseAnalysisSSEEvent）。
+          const raw = parseSSEFrameRaw(frame)
+          if (!raw) continue
+          const evt = parseAnalysisSSEEvent({ event: raw.eventName as any, data: raw.data })
           if (evt) onEvent(evt)
         }
       }
@@ -116,39 +120,15 @@ export function openChat(
       if ((err as any)?.name === 'AbortError') return
       onEvent({
         type: 'error',
-        data: {
+        error: {
           code: 'NETWORK_ERROR',
           message: String(err).slice(0, 300),
           recoverable: false,
-          failed_action: request.mode ?? 'new',
+          failed_action: request.mode && request.mode !== 'legacy' ? request.mode : 'new',
         },
       })
     }
   })()
 
   return controller
-}
-
-function parseSSEFrame(frame: string): AnalysisStreamEvent | null {
-  let eventName: string | null = null
-  const dataLines: string[] = []
-  for (const rawLine of frame.split('\n')) {
-    const line = rawLine.replace(/\r$/, '')
-    if (!line || line.startsWith(':')) continue
-    if (line.startsWith('event:')) {
-      eventName = line.slice(6).trim()
-    } else if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trim())
-    }
-  }
-  if (!eventName) return null
-  const dataStr = dataLines.join('\n')
-  if (!dataStr) return null
-  let data: any = dataStr
-  try {
-    data = JSON.parse(dataStr)
-  } catch {
-    /* keep raw string */
-  }
-  return { type: eventName as AnalysisStreamEvent['type'], data }
 }

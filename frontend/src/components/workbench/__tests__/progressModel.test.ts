@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { ADJUST_STAGES, CONFIRM_STAGES, progressPercent, stagePrefix } from '../progressModel'
+import {
+  ADJUST_STAGES,
+  CONFIRM_STAGES,
+  liveDetailFromEntry,
+  progressPercent,
+  stageFromTrace,
+  stagePrefix,
+} from '../progressModel'
 
 describe('progressPercent', () => {
   it('follows the prototype pacing', () => {
@@ -39,5 +46,29 @@ describe('stagePrefix', () => {
     expect(stagePrefix(1, 2)).toBe('✓ ')
     expect(stagePrefix(2, 2)).toBe('◌ ')
     expect(stagePrefix(3, 2)).toBe('○ ')
+  })
+})
+
+describe('stageFromTrace (P11 真信号)', () => {
+  it('maps kind to confirm stage', () => {
+    expect(stageFromTrace('tool', 'running', 1)).toBe(1)
+    expect(stageFromTrace('sql', 'running', 1)).toBe(2)
+    expect(stageFromTrace('repair', 'success', 2)).toBe(2)
+    expect(stageFromTrace('report', 'running', 2)).toBe(3)
+  })
+  it('monotonic — 永不回退；error 不打断进度', () => {
+    expect(stageFromTrace('report', 'success', 3)).toBe(3)
+    expect(stageFromTrace('sql', 'error', 2)).toBe(2)
+  })
+  it('未知 kind 保持当前 stage', () => {
+    expect(stageFromTrace(undefined, 'running', 1)).toBe(1)
+  })
+})
+
+describe('liveDetailFromEntry', () => {
+  it('running → 正在…；success → 完成；error → 无文案', () => {
+    expect(liveDetailFromEntry({ nodeName: '生成 SQL', status: 'running' } as any)).toBe('正在生成 SQL…')
+    expect(liveDetailFromEntry({ nodeName: '执行查询', status: 'success' } as any)).toBe('执行查询 完成')
+    expect(liveDetailFromEntry({ nodeName: 'x', status: 'error' } as any)).toBeUndefined()
   })
 })

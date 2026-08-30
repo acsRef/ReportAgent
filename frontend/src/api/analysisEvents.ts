@@ -1,6 +1,6 @@
-import type { AnalysisError, AnalysisPhase, ReportVersion } from '../types/analysis'
+import type { AnalysisError, AnalysisPhase } from '../types/analysis'
 import type { RequirementCard } from '../types/requirement'
-import type { SSEEvent, TimelineEntry } from '../types/report'
+import type { SSEEvent, TimelineEntry, TraceProgressKind } from '../types/report'
 
 const ANALYSIS_PHASES: ReadonlySet<string> = new Set<AnalysisPhase>([
   'idle',
@@ -26,11 +26,30 @@ const FAILED_ACTIONS: ReadonlySet<string> = new Set([
   'sql',
 ])
 
+const TRACE_KINDS: ReadonlySet<string> = new Set<TraceProgressKind>([
+  'agent',
+  'tool',
+  'sql',
+  'repair',
+  'report',
+])
+
+/** P11：report 事件 wire 形态（docs/sse-v2.md）—— `version` 可缺表示
+ * 闲聊回复（`{answer:{text}}`），完整报告必有 version/title/answer。 */
+export interface ReportEventPayload {
+  version?: number
+  parent_version?: number | null
+  title?: string
+  answer: { text?: string; table?: unknown; chart?: unknown; insight?: string | null }
+  trace?: unknown[]
+}
+
 export type AnalysisStreamEvent =
   | { type: 'phase'; phase: AnalysisPhase; reason?: string }
   | { type: 'requirement'; requirement: RequirementCard }
   | { type: 'trace'; entry: TimelineEntry }
-  | { type: 'report'; report: ReportVersion }
+  | { type: 'thinking'; phase?: string; text?: string }
+  | { type: 'report'; report: ReportEventPayload }
   | { type: 'error'; error: AnalysisError }
   | { type: 'done'; finalPhase: AnalysisPhase }
 
@@ -54,10 +73,18 @@ export function parseAnalysisSSEEvent(event: SSEEvent): AnalysisStreamEvent | nu
         ? { type: 'requirement', requirement: payload as RequirementCard }
         : null
 
-    case 'report':
-      return isReportVersion(payload)
-        ? { type: 'report', report: payload as ReportVersion }
-        : null
+    case 'trace': {
+      const entry = readTimelineEntry(payload)
+      return entry ? { type: 'trace', entry } : null
+    }
+
+    case 'thinking':
+      return { type: 'thinking', ...(readOptionalString(payload, 'phase', {})), ...(readOptionalString(payload, 'text', {})) }
+
+    case 'report': {
+      const report = readReportPayload(payload)
+      return report ? { type: 'report', report } : null
+    }
 
     case 'error': {
       const error = readAnalysisError(payload)
@@ -72,6 +99,10 @@ export function parseAnalysisSSEEvent(event: SSEEvent): AnalysisStreamEvent | nu
     default:
       return null
   }
+}
+
+export function isAnalysisPhase(value: unknown): value is AnalysisPhase {
+  return typeof value === 'string' && ANALYSIS_PHASES.has(value)
 }
 
 function parseObject(data: string): Record<string, unknown> | null {
@@ -89,6 +120,47 @@ function readPhase(value: unknown): AnalysisPhase | null {
   return typeof value === 'string' && ANALYSIS_PHASES.has(value)
     ? value as AnalysisPhase
     : null
+}
+
+function readOptionalString(payload: Record<string, unknown>, key: string, fallback: Record<string, string>): Partial<Record<string, string>> {
+  return typeof payload[key] === 'string' ? { [key]: payload[key] as string } : fallback
+}
+
+function readTimelineEntry(payload: Record<string, unknown>): TimelineEntry | null {
+  if (typeof payload.step !== 'string') return null
+  const status = payload.status
+  if (status !== 'running' && status !== 'success' && status !== 'error' && status !== 'pending') {
+    return null
+  }
+  const rawKind = payload.kind
+  const kind: TraceProgressKind | undefined =
+    typeof rawKind === 'string' && TRACE_KINDS.has(rawKind)
+      ? rawKind as TraceProgressKind
+      : undefined
+  return {
+    id: `${Date.now()}-${payload.step}`,
+    nodeName: payload.step,
+    status,
+    ...(typeof payload.detail === 'string' ? { detail: payload.detail } : {}),
+    ...(kind ? { kind } : {}),
+    timestamp: Date.now(),
+  }
+}
+
+function readReportPayload(payload: Record<string, unknown>): ReportEventPayload | null {
+  if (typeof payload.answer !== 'object' || payload.answer === null) return null
+  const answer = payload.answer as ReportEventPayload['answer']
+  const version = payload.version
+  if (version !== undefined && typeof version !== 'number') return null
+  const parentVersion = payload.parent_version
+  if (parentVersion !== undefined && parentVersion !== null && typeof parentVersion !== 'number') return null
+  return {
+    version: version as number | undefined,
+    parent_version: parentVersion as number | null | undefined,
+    ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
+    answer,
+    ...(Array.isArray(payload.trace) ? { trace: payload.trace } : {}),
+  }
 }
 
 const ERROR_KINDS: ReadonlySet<string> = new Set([
@@ -151,18 +223,5 @@ function isRequirementCard(payload: unknown): payload is RequirementCard {
     typeof value.status === 'string' &&
     typeof value.summary === 'string' &&
     Array.isArray(value.missing_fields)
-  )
-}
-
-function isReportVersion(payload: unknown): payload is ReportVersion {
-  if (typeof payload !== 'object' || payload === null) return false
-  const value = payload as Record<string, unknown>
-  return (
-    typeof value.id === 'string' &&
-    typeof value.session_id === 'string' &&
-    typeof value.version === 'number' &&
-    typeof value.title === 'string' &&
-    typeof value.report === 'object' &&
-    value.report !== null
   )
 }

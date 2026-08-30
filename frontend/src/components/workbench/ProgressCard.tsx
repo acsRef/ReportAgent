@@ -5,11 +5,13 @@ interface Props {
   /** 0-based index of the active stage; >= stages.length means all done. */
   stageIndex: number
   failed?: boolean
+  /** P11：live 当前步骤文案（trace 驱动），覆盖默认 detail 行。 */
+  liveDetail?: string
   onStop?: () => void
 }
 
 /** generating/adjusting progress card — prototype .progress-card. */
-export default function ProgressCard({ adjusting, stageIndex, failed, onStop }: Props) {
+export default function ProgressCard({ adjusting, stageIndex, failed, liveDetail, onStop }: Props) {
   const stages = adjusting ? ADJUST_STAGES : CONFIRM_STAGES
   const percent = stageIndex >= stages.length ? 100 : progressPercent(stageIndex)
   const activeLabel = stages[Math.min(stageIndex, stages.length - 1)]
@@ -41,11 +43,13 @@ export default function ProgressCard({ adjusting, stageIndex, failed, onStop }: 
       </div>
 
       <div className="wb-progress-detail">
-        {failed
-          ? '可以重试当前任务，已确认需求保持不变。'
-          : adjusting
-            ? '原报告仍可回看'
-            : `${activeLabel} · 确认后才开始正式查询`}
+        {liveDetail
+          ? liveDetail
+          : failed
+            ? '可以重试当前任务，已确认需求保持不变。'
+            : adjusting
+              ? '原报告仍可回看'
+              : `${activeLabel} · 确认后才开始正式查询`}
       </div>
 
       {!failed && onStop && (

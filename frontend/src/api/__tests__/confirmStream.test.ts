@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { postConfirmStream, type ConfirmStreamCtx } from '../confirmStream'
+import type { TimelineEntry } from '../../types/report'
 
 function sseResponse(frames: string, status = 200): Response {
   return new Response(frames, { status, headers: { 'Content-Type': 'text/event-stream' } })
@@ -9,10 +10,14 @@ function makeCtx(): ConfirmStreamCtx & {
   toasts: Array<[string, string]>
   actions: Array<Record<string, unknown>>
   reports: number
+  reportVersions: number[]
+  traces: Array<TimelineEntry>
 } {
   const toasts: Array<[string, string]> = []
   const actions: Array<Record<string, unknown>> = []
   let reports = 0
+  const reportVersions: number[] = []
+  const traces: Array<TimelineEntry> = []
   const toast = {
     error: (m: string) => toasts.push(['error', m]),
     success: (m: string) => toasts.push(['success', m]),
@@ -23,9 +28,12 @@ function makeCtx(): ConfirmStreamCtx & {
     toast,
     dispatch: (a: Record<string, unknown>) => { actions.push(a) },
     setConfirming: vi.fn(),
-    onReport: async () => { reports += 1 },
+    onReport: async (v?: number) => { reports += 1; reportVersions.push(v ?? -1) },
+    onTrace: (e: TimelineEntry) => { traces.push(e) },
     toasts,
     actions,
+    reportVersions,
+    traces,
     get reports() { return reports },
   } as any
 }
@@ -44,7 +52,7 @@ describe('postConfirmStream', () => {
   it('happy path: phase/report/done → onReport called, phase report_ready dispatched', async () => {
     const frames =
       'event: phase\ndata: {"phase":"generating"}\n\n' +
-      'event: report\ndata: {"version":1}\n\n' +
+      'event: report\ndata: {"version":1,"title":"报告","answer":{"text":"ok"}}\n\n' +
       'event: done\ndata: {"final_phase":"report_ready"}\n\n'
     const fetchMock = vi.fn(async (_input: any) => sseResponse(frames))
     vi.stubGlobal('fetch', fetchMock)
@@ -55,9 +63,42 @@ describe('postConfirmStream', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/sessions/sid-1/confirm')
     expect(ctx.reports).toBe(1)
+    expect(ctx.reportVersions).toEqual([1])
     expect(ctx.actions).toContainEqual({ type: 'phase/received', phase: 'generating' })
     expect(ctx.actions).toContainEqual({ type: 'phase/received', phase: 'report_ready' })
     expect(ctx.toasts).toEqual([])
+  })
+
+  it('P11: live trace frames → onTrace callback (progress 由真信号驱动)', async () => {
+    const frames =
+      'event: phase\ndata: {"phase":"generating"}\n\n' +
+      'event: trace\ndata: {"step":"生成 SQL","status":"running","detail":"","kind":"sql"}\n\n' +
+      'event: trace\ndata: {"step":"生成 SQL","status":"success","detail":"","kind":"sql"}\n\n' +
+      'event: report\ndata: {"version":1,"title":"报告","answer":{"text":"ok"}}\n\n'
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse(frames)))
+
+    const ctx = makeCtx()
+    await postConfirmStream('sid-1', ctx)
+
+    expect(ctx.traces.map((t) => [t.nodeName, t.status, t.kind])).toEqual([
+      ['生成 SQL', 'running', 'sql'],
+      ['生成 SQL', 'success', 'sql'],
+    ])
+    expect(ctx.reports).toBe(1)
+  })
+
+  it('P11: report without version (wire-shape 闲聊) still counts as report on confirm stream', async () => {
+    const frames =
+      'event: report\ndata: {"answer":{"text":"你好"}}\n\n' +
+      'event: done\ndata: {"final_phase":"idle"}\n\n'
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse(frames)))
+
+    const ctx = makeCtx()
+    await postConfirmStream('sid-1', ctx)
+
+    expect(ctx.reportVersions).toEqual([-1])
+    expect(ctx.reports).toBe(1)
+    expect(ctx.actions).toContainEqual({ type: 'phase/received', phase: 'report_ready' })
   })
 
   it('server error event → analysis/failed dispatched + toast', async () => {

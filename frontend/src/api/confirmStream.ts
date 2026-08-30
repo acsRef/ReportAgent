@@ -5,7 +5,9 @@
  * The caller owns busy-state resets (see WorkbenchPage `finally` blocks):
  * this function resolves on every exit path and never throws.
  */
-import type { AnalysisPhase } from '../types/analysis'
+import type { TimelineEntry } from '../types/report'
+import { parseAnalysisSSEEvent } from './analysisEvents'
+import { parseSSEFrameRaw } from './sse'
 import { handleUnauthorized } from './unauthorized'
 
 export type ToastApi = {
@@ -22,6 +24,8 @@ export interface ConfirmStreamCtx {
   dispatch: Dispatcher
   setConfirming: (v: boolean) => void
   onReport: (version?: number) => void | Promise<void>
+  /** P11：trace progress 帧实时回调——ProgressCard 由真信号驱动。 */
+  onTrace?: (entry: TimelineEntry) => void
 }
 
 export async function postConfirmStream(
@@ -79,21 +83,42 @@ export async function postConfirmStream(
         const match = buffer.match(/\r\n\r\n|\n\n/)!
         const frame = buffer.slice(0, sepIndex)
         buffer = buffer.slice(sepIndex + match[0].length)
-        const evt = parseSSEFrame(frame)
+        // P11：transport 拆帧（parseSSEFrameRaw）→ schema 校验
+        // （parseAnalysisSSEEvent，单一契约）→ dispatch。事件面与
+        // /chat 流同源，不再各自维护内联 parser。
+        const raw = parseSSEFrameRaw(frame)
+        if (!raw) continue
+        const evt = parseAnalysisSSEEvent({
+          event: raw.eventName as any,
+          data: raw.data,
+        })
         if (!evt) continue
-        if (evt.eventName === 'phase') {
-          ctx.dispatch({ type: 'phase/received', phase: evt.data.phase as AnalysisPhase })
-        } else if (evt.eventName === 'report') {
-          sawReport = true
-          await ctx.onReport(
-            typeof evt.data?.version === 'number' ? evt.data.version : undefined,
-          )
-          ctx.dispatch({ type: 'phase/received', phase: 'report_ready' })
-        } else if (evt.eventName === 'error') {
-          ctx.toast.error(evt.data?.message ?? '执行失败')
-          ctx.dispatch({ type: 'analysis/failed', error: evt.data })
-        } else if (evt.eventName === 'done' && evt.data?.final_phase) {
-          ctx.dispatch({ type: 'phase/received', phase: evt.data.final_phase as AnalysisPhase })
+        switch (evt.type) {
+          case 'phase':
+            ctx.dispatch({ type: 'phase/received', phase: evt.phase })
+            break
+          case 'report':
+            sawReport = true
+            await ctx.onReport(
+              typeof evt.report.version === 'number'
+                ? evt.report.version
+                : undefined,
+            )
+            ctx.dispatch({ type: 'phase/received', phase: 'report_ready' })
+            break
+          case 'error':
+            ctx.toast.error(evt.error.message ?? '执行失败')
+            ctx.dispatch({ type: 'analysis/failed', error: evt.error })
+            break
+          case 'trace':
+            ctx.onTrace?.(evt.entry)
+            break
+          case 'done':
+            ctx.dispatch({ type: 'phase/received', phase: evt.finalPhase })
+            break
+          default:
+            // requirement / thinking：confirm 流不产出，忽略。
+            break
         }
       }
     }
@@ -105,22 +130,5 @@ export async function postConfirmStream(
   }
   if (!sawReport) {
     ctx.toast.warning('确认完成，但未收到报告事件')
-  }
-}
-
-export function parseSSEFrame(frame: string): { eventName: string; data: any } | null {
-  let eventName: string | null = null
-  const dataLines: string[] = []
-  for (const line of frame.split('\n')) {
-    if (line.startsWith('event:')) eventName = line.slice(6).trim()
-    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
-  }
-  if (!eventName) return null
-  const dataStr = dataLines.join('\n')
-  if (!dataStr) return null
-  try {
-    return { eventName, data: JSON.parse(dataStr) }
-  } catch {
-    return { eventName, data: dataStr }
   }
 }

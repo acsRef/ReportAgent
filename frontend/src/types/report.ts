@@ -53,11 +53,15 @@ export interface AgentStep {
   detail?: string
 }
 
+/** P11 progress 族（trace 载荷细化）：kind × status 推导 started/completed/failed。 */
+export type TraceProgressKind = 'agent' | 'tool' | 'sql' | 'repair' | 'report'
+
 export interface TimelineEntry {
   id: string
   nodeName: string
   status: 'pending' | 'running' | 'success' | 'error'
   detail?: string
+  kind?: TraceProgressKind
   duration?: string
   timestamp: number
 }
