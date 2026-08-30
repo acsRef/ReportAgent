@@ -202,11 +202,13 @@ async def _run_confirmed_graph(
     """
     final_phase = "report_ready"
     events: list[dict] = []
+    graph_completed = False
     try:
         config = {"configurable": {"thread_id": session_id}}
         # P9：背景任务总预算（伞形 §200）——超时 → Persist FAILED → ReportVersion(error)
         # → 前端 error，不允许永远停在 generating。runner 有界 ⇒ registry 不会挂死。
         result = await run_with_timeout(graph.ainvoke(initial, config), MAX_TASK_DURATION)
+        graph_completed = True
         status = result.get("execution_status", "FAILED")
         if status == "FAILED":
             final_phase = "error"
@@ -307,6 +309,11 @@ async def _run_confirmed_graph(
         })
         registry.complete(task, events)
         tracer = get_tracer(initial.get("trace_id", ""))
+        # P9-2：graph 未跑完（超时/异常提前退出）→ trace 终态必须 FAILED，
+        # 否则 flush 落库的 trace 永远停在 RUNNING（end 才写 status/end_time）。
+        # 跑完的 trace 由 _persist_report end("DONE") 负责，此处不重复。
+        if not graph_completed:
+            tracer.end("FAILED")
         await tracer.flush()
 
 

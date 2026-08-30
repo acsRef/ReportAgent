@@ -20,8 +20,14 @@ pytestmark = pytest.mark.api
 
 
 class FakeTracer:
+    def __init__(self) -> None:
+        self.end_calls: list[str] = []
+
     async def flush(self) -> None:
         pass
+
+    def end(self, status: str) -> None:
+        self.end_calls.append(status)
 
 
 class FakeGraph:
@@ -50,17 +56,21 @@ FAILED_RESULT = {
 }
 
 
-def _patch_deps(monkeypatch, calls: list):
-    monkeypatch.setattr("app.main.get_tracer", lambda *a, **kw: FakeTracer())
+def _patch_deps(monkeypatch, calls: list) -> list[FakeTracer]:
+    tracers: list[FakeTracer] = []
+
+    def fake_get_tracer(*a, **kw):
+        t = FakeTracer()
+        tracers.append(t)
+        return t
+
+    monkeypatch.setattr("app.main.get_tracer", fake_get_tracer)
 
     async def fake_update(session_id, phase, failed_action=None):
         calls.append((session_id, phase, failed_action))
 
     monkeypatch.setattr("app.main.session_manager.update_phase", fake_update)
-    return fake_update
-
-
-# --- _run_confirmed_graph：后台任务事件 + phase 写入 ---------------------------------
+    return tracers# --- _run_confirmed_graph：后台任务事件 + phase 写入 ---------------------------------
 
 
 async def test_success_emits_report_and_phase(monkeypatch):
@@ -115,7 +125,7 @@ class HangingGraph:
 
 async def test_task_timeout_emits_task_timeout_and_persists_error(monkeypatch):
     calls: list = []
-    _patch_deps(monkeypatch, calls)
+    tracers = _patch_deps(monkeypatch, calls)
     persist_calls: list = []
 
     async def fake_persist_error_run(**kwargs):
@@ -149,11 +159,13 @@ async def test_task_timeout_emits_task_timeout_and_persists_error(monkeypatch):
     assert kwargs["error_detail"]["code"] == "TASK_TIMEOUT"
     assert kwargs["error_detail"]["kind"] == "timeout"
     assert kwargs["trace_id"] == "t1"
+    # P9-2：graph 未跑完 → trace 终态必须 FAILED（flush 不改状态，end 才改）
+    assert tracers and tracers[0].end_calls == ["FAILED"]
 
 
 async def test_fast_graph_unaffected_by_timeout_budget(monkeypatch):
     calls: list = []
-    _patch_deps(monkeypatch, calls)
+    tracers = _patch_deps(monkeypatch, calls)
     monkeypatch.setattr("app.main.MAX_TASK_DURATION", 5)
     task = registry.ConfirmedTask(session_id="s1", user_id=1, kind="confirm")
     await _run_confirmed_graph(
@@ -162,12 +174,14 @@ async def test_fast_graph_unaffected_by_timeout_budget(monkeypatch):
     # 未超时路径行为不变：report + done、report_ready
     assert [e["event"] for e in task.result] == ["report", "done"]
     assert ("s1", "report_ready", None) in calls
+    # graph 跑完 → trace 终态由 _persist_report end("DONE") 负责，runner 不重复 end
+    assert all(t.end_calls == [] for t in tracers)
 
 
 async def test_generic_exception_classified_via_envelope(monkeypatch):
     """P9：泛化异常出口走 classify_exception——LLM 预算耗尽不再是笼统 INTERNAL。"""
     calls: list = []
-    _patch_deps(monkeypatch, calls)
+    tracers = _patch_deps(monkeypatch, calls)
     from app.reliability.retry import LLMTimeoutError
 
     task = registry.ConfirmedTask(session_id="s1", user_id=1, kind="confirm")
@@ -180,6 +194,8 @@ async def test_generic_exception_classified_via_envelope(monkeypatch):
     assert err["code"] == "LLM_TIMEOUT"
     assert err["recoverable"] is True
     assert ("s1", "error", "confirm") in calls
+    # P9-2：异常提前退出 → trace 终态 FAILED
+    assert tracers and tracers[0].end_calls == ["FAILED"]
 
 
 async def test_unknown_exception_falls_to_internal_error(monkeypatch):
