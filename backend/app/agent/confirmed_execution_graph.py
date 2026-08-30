@@ -26,9 +26,10 @@ from app.agent.report_graph import build_report_graph
 from app.agent.security_guard import SecurityGuard
 from app.infra.db import requirement_repository, report_version_repository
 from app.infra.db.postgres import get_pool
-from app.infra.trace.sdk import get_tracer, traced_node
+from app.infra.trace.sdk import current_tracer, get_tracer, traced_node
 from app.models.contracts import ErrorDetail, SchemaContext
 from app.models.requirement import RequirementCard
+from app.report.validator import validate_report_spec
 from app.services import requirement_service, report_version_service
 from app.state.checkpoint_adapter import migrate_checkpoint
 
@@ -364,6 +365,39 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState) -> dict:
         table = {"columns": cols, "rows": rows}
         insight_text = rs.get("insight") or None
         chart_cfg = rs.get("chart_config") or None
+        # P10 三层 Validator：校验 ReportSpec → QueryResult 映射（结构/数值/禁止
+        # 自由生成）。violations → FAILED（宪法 §10 永不伪造成功），走既有 FAILED
+        # 全链：persist_error_run + SSE error（用户码 QUERY_FAILED 兜底，前端零改动）。
+        spec = rs.get("report_spec")
+        if spec is not None:
+            vres = validate_report_spec(spec, qr)
+            if not vres.ok:
+                summary = "; ".join(
+                    f"[{v.layer}] {v.block}: {v.detail}" for v in vres.violations[:5]
+                )
+                logger.warning(
+                    "report spec validation failed (%d violations): %s",
+                    len(vres.violations), summary,
+                )
+                status = "FAILED"
+                err = ErrorDetail(
+                    code="REPORT_VALIDATION_ERROR",
+                    message=f"报告数据校验失败: {summary}",
+                    kind="other",
+                )
+                table = None
+                insight_text = None
+                chart_cfg = None
+                # P8 D5 语义复用：决策进 trace（P13 Langfuse 落库）
+                tracer = current_tracer()
+                if tracer is not None:
+                    tracer.add_decision(
+                        name="report_validate",
+                        action="fail",
+                        reason=summary,
+                        error_kind="other",
+                        violation_count=len(vres.violations),
+                    )
 
     payload = {
         "answer": {

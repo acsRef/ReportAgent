@@ -7,7 +7,8 @@ from typing import Optional, TypedDict
 from langgraph.graph import END, StateGraph
 
 from app.llm import _format_tools_for_prompt, call_llm
-from app.models.contracts import ComponentSpec, QueryResult, ReportSpec
+from app.models.contracts import QueryResult
+from app.report.spec import ComponentSpec, DataBinding, ReportSpec, TableSpec
 from app.tools.sql_tools import chart_advisor, insight_analyst
 from app.utils.text import safe_json_parse, strip_markdown_fence
 from app.tools.registry import registry
@@ -138,24 +139,37 @@ def _build_output(state: ReportAgentState) -> dict:
         else:
             insight_text += r["result"] + "\n"
 
+    qr = _validate_qr(state.get("query_result"))
     if not chart_config:
-        qr = _validate_qr(state.get("query_result"))
         data_json = json.dumps({
             "columns": qr.columns if qr else [],
             "rows": qr.rows if qr else [],
         }, ensure_ascii=False, default=str)
         chart_config = safe_json_parse(chart_advisor(data_json)) or {}
 
+    # P10：v2 spec 带 provenance——chart 行/字段锚定 QueryResult（validator 钉），
+    # table 列直通 QueryResult 列名，kpi 不生产（无业务诉求，schema+校验机制就位）。
+    config = chart_config.get("config", {}) or {}
+    dims = config.get("dimensions") or {}
+    fields = [v for v in dims.values() if isinstance(v, str)]
     comps = []
     if chart_config.get("type") and chart_config["type"] != "table":
         comps.append(ComponentSpec(
             id="c1",
             type=chart_config["type"],
             title="数据分析",
-            visual_config=chart_config.get("config", {}),
+            data_binding=DataBinding(fields=fields, rows=config.get("data", []) or []),
+            visual_config=config,
         ))
 
-    spec = ReportSpec(version="1.0", components=comps, insight=insight_text.strip())
+    table = None
+    if qr and qr.rows:
+        col_names = [c.get("name", "") if isinstance(c, dict) else str(c) for c in qr.columns]
+        table = TableSpec(columns=col_names)
+
+    spec = ReportSpec(
+        version="1.0", components=comps, insight=insight_text.strip(), table=table,
+    )
 
     return {"chart_config": chart_config, "insight": insight_text.strip(), "report_spec": spec}
 
