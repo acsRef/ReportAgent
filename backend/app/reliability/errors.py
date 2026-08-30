@@ -17,8 +17,6 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from app.tools.mcp_errors import MCPBoundaryError, MCPErrorCode
-
 # SQL 6 kind —— app/tools/sql_tools.py:_classify_psycopg2_error 的输出域。
 SQL_ERROR_KINDS = ("syntax", "object", "timeout", "connection", "permission", "other")
 
@@ -119,31 +117,48 @@ def classify_llm_exception(exc: BaseException, failed_action: str = "llm") -> Er
     return ErrorEnvelope(code=ErrorCode.INTERNAL_ERROR.value, kind="other", recoverable=False, failed_action=failed_action)
 
 
-_MCP_ENVELOPES: dict = {
-    MCPErrorCode.MCP_TIMEOUT: ErrorEnvelope(
+# MCP 码表以值字符串 keyed——**不 import app.tools.mcp_errors**（P2 边界 freeze：
+# boundary 自身只能被 tools/ 包引用，tests/contracts/test_mcp_boundary_freeze.py 钉住）。
+# 鸭子类型读 exc.code（MCPBoundaryError.code 为 MCPErrorCode(str, Enum)，.value 即码值）。
+_MCP_ENVELOPES: dict[str, ErrorEnvelope] = {
+    "MCP_TIMEOUT": ErrorEnvelope(
         code=ErrorCode.MCP_TIMEOUT.value, kind="timeout", recoverable=True, failed_action="mcp"
     ),
-    MCPErrorCode.MCP_UNAVAILABLE: ErrorEnvelope(
+    "MCP_UNAVAILABLE": ErrorEnvelope(
         code=ErrorCode.MCP_UNAVAILABLE.value, kind="connection", recoverable=False, failed_action="mcp"
     ),
-    MCPErrorCode.MCP_INVALID_RESPONSE: ErrorEnvelope(
+    "MCP_INVALID_RESPONSE": ErrorEnvelope(
         code=ErrorCode.MCP_INVALID_RESPONSE.value, kind="other", recoverable=False, failed_action="mcp"
     ),
 }
 
 
-def classify_mcp_error(exc: MCPBoundaryError, failed_action: str = "mcp") -> ErrorEnvelope:
-    """消费 P2 MCPBoundaryError 显式分类，映射为 envelope（不重写边界语义）。"""
-    env = _MCP_ENVELOPES[exc.code].model_copy()
+def _mcp_code_value(exc: BaseException) -> Optional[str]:
+    """鸭子类型提取 MCP 码值；非 MCP 形状（无 .code 或码值不在表内）返回 None。"""
+    code = getattr(exc, "code", None)
+    value = getattr(code, "value", code)
+    return value if isinstance(value, str) and value in _MCP_ENVELOPES else None
+
+
+def classify_mcp_error(exc: BaseException, failed_action: str = "mcp") -> ErrorEnvelope:
+    """MCP 边界错误 → envelope（期望 mcp_errors.MCPBoundaryError 形状，鸭子类型）。
+
+    映射消费 P2 的显式分类，不重写边界语义；非 MCP 形状抛 ValueError。
+    """
+    value = _mcp_code_value(exc)
+    if value is None:
+        raise ValueError(f"not an MCP boundary error: {exc!r}")
+    env = _MCP_ENVELOPES[value].model_copy()
     env.failed_action = failed_action
-    if exc.detail:
-        env.message = exc.detail
+    detail = getattr(exc, "detail", "")
+    if detail:
+        env.message = detail
     return env
 
 
 def classify_exception(exc: BaseException, failed_action: str = "internal") -> ErrorEnvelope:
     """泛化分类入口：MCP / LLM 家族各归各位，其余 INTERNAL_ERROR 兜底。"""
-    if isinstance(exc, MCPBoundaryError):
+    if _mcp_code_value(exc) is not None:
         return classify_mcp_error(exc, failed_action=failed_action)
     try:
         from openai import APIError  # noqa: F401 - 仅探测 openai 家族

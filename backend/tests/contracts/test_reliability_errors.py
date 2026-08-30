@@ -176,6 +176,12 @@ def test_classify_mcp_error_three_codes():
     assert all(e.failed_action == "mcp" for e in (env,))
 
 
+def test_classify_mcp_error_rejects_non_mcp_shape():
+    # 鸭子类型契约：无 .code 或码值不在 MCP 三码内 → ValueError（不静默兜底）
+    with pytest.raises(ValueError):
+        classify_mcp_error(ValueError("plain"))
+
+
 # --- 泛化分类入口（dispatcher） ----------------------------------------------
 
 
