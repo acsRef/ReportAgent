@@ -1,8 +1,15 @@
 # P9 实施：Reliability Layer——ErrorEnvelope 统一分类 + Retry/Timeout 收编 + Background Task Timeout
 
-> 状态: 进行中
+> 状态: 已完成（2026-08-30，p9-reliability 分支；T1–T8 全绿 + 1 边界 freeze 修复）
 > 上游: [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) §二·二目标结构（reliability/ 顶层四模块）+ §七 Reliability Layer + §391 P9 验收清单 + §450/§464/§466 迁移映射 + CLAUDE.md 宪法 §11 + [[memory:p8-landed]]（P8 衔接：DiagnosePolicy 收编 reliability/errors.py；收编 llm_resilience 语义不重写算法）
 > 协作: P8 已合 master（`e4e0c42`，627 passed）；本 plan 仅 P9；完成后同对话接 P10 实施 plan
+
+## 落地记录（2026-08-30）
+
+- 分支 `p9-reliability`，commit 链：plan `8e7f39a` → T1 errors `f3c7a93` → T2 retry 收编 `1f528ae` → T3 预算收敛 `59a82ee` → T4 timeout `15d9150` → T5 背景超时 `77bdc37` → T6 SSE 收编 `c21a81d` → T7 DiagnosePolicy 同源 `feb46f6` → freeze 修复 `692cd9f`
+- **回归**：全量 `cd backend && pytest` → **891 passed / 0 failed / 1 skipped**（e2e env-gated）；P8 同口径子集 contracts+smoke+graphs **662 passed ≥ 627 基线，零回退**
+- **计划外修复（P2 边界 freeze 打回）**：初版 `reliability/errors.py` 直 import `app.tools.mcp_errors`，被 `test_mcp_boundary_freeze.py`（AST 扫描）2 例拦下——改为鸭子类型读 `exc.code.value` 查值字符串表，P2 钉原样保留不放行
+- 落地偏差：T6 顺带收编了 requirement-analysis 路径的 generic `except`（原 `code="INTERNAL"` → `classify_exception`），与 confirmed 路径同源；`code` 字符串 `INTERNAL`→`INTERNAL_ERROR` 变化已确认前端 reducer 无 code 白名单依赖（仅 REQUIREMENT_INCOMPLETE 特判）
 
 ## Context
 

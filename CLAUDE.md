@@ -152,7 +152,7 @@ Report Agent 输出结构化 ReportSpec（非自由 Markdown）；三层 Validat
 - SSE Disconnect ≠ Backend Failed——断连后任务继续跑完并持久化，前端轮询通知。
 - Background Task 超 `MAX_TASK_DURATION` → Persist FAILED → ReportVersion(error)，不允许永远停在 generating。
 
-> 现状：超时/重试散装在 llm_resilience.py、sql_graph、main.py；ErrorEnvelope 统一分类 P9（收编 llm_resilience 语义，不重写算法）。
+> 现状（2026-08-30 P9 后）：`backend/app/reliability/`（errors / retry / backoff / timeout）已落——ErrorEnvelope + 10 码统一分类，AGENT（DiagnosePolicy）与 USER（SSE canRetry）两张 recoverable 表显式分离；`llm_resilience.py` 整体收编 `reliability/retry.py`（算法未重写，原文件为兼容 shim）；RetryPolicy 固定预算 SQL 2 / MCP 2 / LLM 2（`LLM_MAX_RETRIES` 默认自 5 收敛为契约值 2）；`MAX_TASK_DURATION`（默认 600s）背景任务超时全链：Persist FAILED → ReportVersion(error) → TASK_TIMEOUT 事件。SSE 用户码 `QUERY_*` 与 runtime 码双轨有意保留（前端契约稳定）；Langfuse 落库 P13、adaptive retry 留 Evaluation。
 
 ## 12. Observability
 
@@ -325,6 +325,8 @@ Important root `.env` variables:
 | `APP_ENV` | `development` / `staging` / `production`; **fail-closed: unset means `production`** |
 | `ALLOW_INSECURE_DEFAULT_AUTH` | `1` bypasses the auth gate, **only honored when `APP_ENV=development`** |
 | `MEM0_ENABLED` | Optional mem0-based L3 fact extraction (default `false` → pure LLM extraction) |
+| `MAX_TASK_DURATION` | `600`; background confirm/adjust task total budget (P9); on expiry → FAILED persist + `TASK_TIMEOUT` SSE error |
+| `MAX_SQL_REPAIR_RETRIES` / `MAX_PLAN_RETRIES` | `2` / `1`; SQL repair & replan budgets (P8), pinned against `reliability/retry.RETRY_BUDGETS` |
 
 > **P6 注记**：上表 `MINIMAX_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` 将随 Unified LLM Migration 收敛为 `LLM_*` settings（宪法 §8）；届时当天更新本表。
 
