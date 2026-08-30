@@ -25,13 +25,13 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
-| [2026-08-30-p11-frontend-sse.md](2026-08-30-p11-frontend-sse.md) | P11 实施：Frontend / SSE Contract——registry live publish + trace progress（kind×status 细化，不新增事件类型）+ report 事件补 sse-v2 wire 形态 + 前端事件面统一（transport→schema→dispatch）+ ProgressCard 真信号 + session resume + P9-5 user_message 接线 + chitchat 终态修复 | 宪法 §9 / frontend-contract / 伞形 §P11 验收清单为硬约束；开工审计 8 findings 见 plan Context |
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
 ## 已完成
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-30-p11-frontend-sse.md](2026-08-30-p11-frontend-sse.md) | P11 实施：Frontend / SSE Contract——后端 `infra/execution/progress.py`（节点→kind×status 映射 + `AsyncCallbackHandler`，progress 族不新增顶层事件类型）+ `registry.publish/live`（在线推 live + 迟到订阅者 `result=live+final` 重放）+ `_persist_report` merged 补 sse-v2 wire 形态（version/parent_version/title）+ 子图 `callbacks_only` 转发（langgraph callbacks 真传到嵌套 sql_graph）+ P9-5 接线 `user_message()`（泛化异常文案不再传 provider trace）+ chitchat 终态 `idle` + 前端 `phase(idle)` 复位；前端事件面统一为 transport(`api/sse.ts parseSSEFrameRaw`)→schema(`analysisEvents.ts parseAnalysisSSEEvent`，七事件 + trace/thinking + report wire 形态，唯一 schema 层，两流共用）→dispatch(`stores/sessionEvents.ts handleSSEEvent`，单一写者) 三层；ProgressCard 真 trace 信号（`stageFromTrace` 单调 + `liveDetailFromEntry`）+ 移除 650ms 假定时器；adjust 流 report→`refreshVersionsAndSelectLatest`（F5）+ chitchat 闲聊泡（F4）；session resume 恢复真实 phase + busy 会话接后台轮询（F6） | 分支 `p11-frontend-sse`：`4f3abe1`(plan) → `e27aae2`(backend T1+T2+T3) → `d60b842`(frontend T4+T5+T6) → `0d24502`(docs) + plan 收尾；全量 296 frontend passed / backend contracts+api+graphs 618 passed / `tsc -b` 干净；落地偏差 5 项（含 `complete()` 保留签名、合并 commit 理由、legacy union 移除）见 plan 落地记录 |
 | [2026-08-30-p10-report-validator.md](2026-08-30-p10-report-validator.md) | P10 实施：Report Runtime——`app/report/` 域包三件套（spec/validator/versioning）+ ReportSpec v2（KpiSpec/TableSpec/DataBinding provenance，旧 payload 兼容 + contracts shim）+ 三层 Validator（structure 字段存在性 / numeric KPI 聚合重算 / fabrication 行存在性+膨胀检测；insight 文本不入正则审计）+ 父图接线 violations→FAILED + `ErrorCode.REPORT_VALIDATION_ERROR`（P9 码挂接生产者）+ decision trace；数据真实性从确定性工具的实现巧合变成被钉住的契约；前端 answer 契约零改动（vitest 259 持平） | p9-reliability 分支续作：`8249322`(plan) → `a3afb0e`(T1) → `6b9530a`(T2) → `e5839fb`(T3) → `163efc2`(T4/T5) → 收尾；Review-1：P10-1 行键 ⊆ fields + 拒空行（provenance 闭合）；全量 **920+ passed**；落地偏差 3 项 + Review-1 修 3 记 5 见 plan 落地记录 |
 
 ## 已完成

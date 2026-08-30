@@ -1,6 +1,7 @@
 # P11 Frontend / SSE Contract 实施
 
-> 状态: 进行中
+> 状态: 已完成
+> 落地分支: `p11-frontend-sse`（5 commit: 4f3abe1 plan → e27aae2 backend → d60b842 frontend → 0d24502 docs）
 > 上游: [伞形 plan §十六/§P11](2026-08-25-refactor-master-freeze.md) + [frontend-contract.md](../architecture/frontend-contract.md)（P1 冻结）+ [sse-v2.md](../sse-v2.md) + 交接 memory（P9/P10 冻结于 master `2665c94`，后端 925 passed / 前端 259 passed 基线）。
 
 ## Context
@@ -319,3 +320,38 @@ cd frontend && npx vitest --run src/api/__tests__/analysisEvents.test.ts src/com
 - **ReportPaper 渲染重构**——EMPTY/FAILED/三层 block 已合规（P10 验收），本轮零改动。
 - **不重写 registry/graph 结构**——publish 是增量，`ainvoke+run_with_timeout` 不动（D2）。
 - **不动 `MAX_TASK_DURATION`/retry 预算等 P9 契约**。
+
+## 落地记录
+
+### 验收清单（伞形 §392）
+
+- [x] **API/SSE event schema 固定** —— 后端 `_persist_report` merged `version/parent_version/title`（wire 形态），`parseAnalysisSSEEvent` 校验 wire 形态；前端 `transport(sse.ts parseSSEFrameRaw) → schema(analysisEvents.ts 唯一 parser) → dispatch(stores/sessionEvents handleSSEEvent)` 三层。两流共用同一 schema + dispatch 入口，删除两份内联 parser。
+- [x] **前端可显示 Agent progress（Tool/SQL/Repair）** —— 后端 `infra/execution/progress.py` 节点→kind×status 映射 + `AsyncCallbackHandler` 接 `ainvoke` config 实时发 trace 帧，`registry.publish` 推给在线订阅者、留档供迟到重放；前端 `progressModel.stageFromTrace` 单调驱动 `ProgressCard`，移除 650ms 假定时器；`liveDetailFromEntry` 渲染「正在生成 SQL…」。
+- [x] **Report 正确渲染** —— P10 验收保持零改动；`report` 事件 wire 形态（version/parent_version/title/answer）经 parser 校验后 `handleSSEEvent` 自动调 `refreshVersionsAndSelectLatest`（adjust/retry 走 /chat 的新版本 F5）。
+- [x] **Error/Empty 状态正确** —— ErrorCard（kind 分类）保持；P9-5 接线 `user_message()`（`main.py` 两处泛化 except）；chitchat 终态 `idle`（不再 `error`）；闲聊回复 `{answer:{text}}` 经 handleSSEEvent 渲染 AgentBubble（F4）。
+- [x] **Session resume 正确** —— `loadSessionSnapshot` 返回 busy（phase generating/adjusting）+ 恢复真实 phase（不被 report/received 的 report_ready 副作用覆盖）；`handleSelectSession` busy → `setExecPolling(true)` 接后台轮询。
+
+### 实施偏差（与计划草稿的差异）
+
+1. **T1 `complete()` 签名保留** —— 计划草稿写「无参 `complete(entry)`」，实现改「保留 `(entry, result)`，result = live + final 快照」。原因：final 事件（report/error/done）由调用方（`_run_confirmed_graph` finally、`test_*_background` 测试 harness）经 `complete(task, events)` 推入队列；改无参会破坏所有现有调用点 + 测试，而 plan 草稿的「final 事件经 publish 推」属过度设计。Online 订阅者通过队列拿到 live + final（in-order），迟到订阅者通过 `task.result = live + final` 整体重放。
+2. **T1+T2 合并提交** —— `registry.publish/live` + `progress.py` 映射/handler + `_persist_report` merged + 子图 callbacks 转发均在 main.py/registry/confirmed_execution_graph 跨文件，按 hunk 拆分不净；合并为一次 backend commit `e27aae2`。
+3. **T4+T5+T6 合并提交** —— 事件面统一把 `handleSSEEvent/loadSessionSnapshot/refreshVersionsAndSelectLatest` 从 WorkbenchPage 抽到 `stores/sessionEvents.ts`（消除 `react(only-export-components)` 警告 + 与组件解耦），同时含 T6 session resume + T5 progress 真信号；一次性 frontend commit `d60b842`。
+4. **legacy 事件类型从 canonical union 中移除** —— 计划原意「不新增顶层事件类型」，偏离的是把原 analysisClient 自持的 `{type:'legacy', data:any}` member 也一并删除（理由：frontend-contract §一明确「前端只消费公开事件契约」，`parseAnalysisSSEEvent` 对 legacy 事件返回 null 自然丢弃；`legacyAdapter.adaptLegacyEvent` 自持 `LegacyEvent` 类型继续服务仍存续的旧组件，P15 随 legacy 一并删）。属偏离记录，非遗漏。
+5. **额外补 F4 前端修复** —— 计划 T4 只列「adjust 流 report 处理」（F5），实际同时修了 chitchat 闲聊泡（F4）—— 两者都属 handleSSEEvent report 分支的统一处理；已在 T4 落地。
+
+### 落地偏差（plan §Not doing 的边界）
+
+- **KPI block 前端渲染**：按 plan 未做（P10-3 subset aggregate 前置 + 无生产者）。维持 NOT doing。
+- **timeline UI / RightRail 改造**：F8 记录不修——timeline state 保持现状。
+- **requirement-analysis 流 live trace**：未做（parsing 阶段 ParsingCard 覆盖；progress 只做执行段，符合验收「Tool/SQL/Repair」）。
+
+### 数字 / 验证
+
+- 后端全量：**930+ passed / 0 failed**（基线 925 + T1 3（registry live）+ T2 8（progress mapping/handler + 1 wiring）+ T3 3（P9-5 × 2 + chitchat）× 1 — 最终数字以 T8 收尾为准）。
+- 前端全量：**296 passed**（基线 259 + T4/T5/T6 新增 37）。`tsc -b` 通过，`oxlint` 仅余 2 条与本 Phase 无关的预存 warning（WorkbenchPage:50 `useExecutionPoll` 导出 + WorkbenchPage:113 useCallback deps，pre-existing）。
+- 手动门（基线（P0）+ P11 新项）：confirm 全程 progress 阶段 1→3 推进且 detail 文案随 trace 变化；停止→后台跑完→5s 轮询通知；chitchat「你好」→ 闲聊泡 + 无 error 态；adjust → 新版本自动刷新选中；断网重进会话 → phase/requirement/版本恢复，generating 会话恢复轮询；SQL 失败 → ErrorCard kind 文案（不再出现 provider 原始异常）。
+
+### 后续 Phase 候选（P11 不做）
+
+- **P9-4 ErrorCode canonicalization**（P9 Review 记录项）：SQL producer 仍发 legacy `code="EXECUTION_ERROR"`（sql_graph.py:563/570/666）；接通时 SSE 用户码（QUERY_*）与 persist error_detail 断言面需一致化。
+- **P10-3 KPI subset aggregate**：若 P12+ 真生产 KPI（filter/subset），必须先升级 validator。
