@@ -26,6 +26,7 @@
 | Plan | 主题 | 备注 |
 |---|---|---|
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
+| [2026-08-30-p9-reliability-layer.md](2026-08-30-p9-reliability-layer.md) | P9 实施：Reliability Layer——`backend/app/reliability/` 顶层新包（errors/retry/backoff/timeout 四模块）+ ErrorEnvelope 统一分类（10 码 + AGENT/USER 两张 recoverable 表显式分离）+ llm_resilience 整体收编 `retry.py`（不重写算法，shim 保兼容）+ LLM_MAX_RETRIES 默认收敛 2 + `MAX_TASK_DURATION` 背景任务超时全链（persist_error_run 落库 + TASK_TIMEOUT 事件）+ DiagnosePolicy/main.py SSE 出口收编表驱动（行为不变） | 分支 `p9-reliability` |
 
 ## 已完成
 
