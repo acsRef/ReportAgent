@@ -14,6 +14,7 @@ from typing import Any
 
 from app.infra.db import report_version_repository
 from app.infra.db.postgres import get_pool
+from app.report.versioning import resolve_report_status
 
 
 class VersionConflictError(Exception):
@@ -42,7 +43,7 @@ async def persist_confirmed_run(
         requirement_draft_id=requirement_draft_id,
         adjustment_text=None,
         title=title,
-        report_status="done",
+        report_status=resolve_report_status("SUCCESS"),
         report_payload=report_payload,
         query_snapshot=query_snapshot,
         trace_id=trace_id,
@@ -69,7 +70,7 @@ async def persist_adjust_run(
         requirement_draft_id=requirement_draft_id,
         adjustment_text=adjustment_text,
         title=title,
-        report_status="done",
+        report_status=resolve_report_status("SUCCESS"),
         report_payload=report_payload,
         query_snapshot=query_snapshot,
         trace_id=trace_id,
@@ -108,7 +109,7 @@ async def persist_empty_run(
         requirement_draft_id=requirement_draft_id,
         adjustment_text=None,
         title=title,
-        report_status="done",
+        report_status=resolve_report_status("EMPTY"),
         report_payload=payload,
         query_snapshot=query_snapshot,
         trace_id=trace_id,
@@ -155,7 +156,7 @@ async def persist_error_run(
         requirement_draft_id=requirement_draft_id,
         adjustment_text=None,
         title=title,
-        report_status="error",
+        report_status=resolve_report_status("FAILED"),
         report_payload=payload,
         query_snapshot=query_snapshot,
         trace_id=trace_id,
