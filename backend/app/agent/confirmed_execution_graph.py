@@ -17,6 +17,7 @@ import logging
 from typing import Any, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
+from langchain_core.runnables import RunnableConfig
 
 from app.infra.checkpoint.factory import get_checkpointer
 
@@ -165,7 +166,7 @@ async def _sql_gate(state: ConfirmedExecutionState) -> dict:
 
 
 @traced_node("confirmed_data_agent")
-async def _confirmed_data_agent(state: ConfirmedExecutionState, config: Optional[dict] = None) -> dict:
+async def _confirmed_data_agent(state: ConfirmedExecutionState, config: Optional[RunnableConfig] = None) -> dict:
     """Refresh schema (do NOT re-analyze requirements)."""
     data_graph = build_data_graph()
     ds = await data_graph.ainvoke({
@@ -179,7 +180,7 @@ async def _confirmed_data_agent(state: ConfirmedExecutionState, config: Optional
 
 
 @traced_node("confirmed_sql_agent")
-async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[dict] = None) -> dict:
+async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[RunnableConfig] = None) -> dict:
     """Run the SQL subgraph. Note: we deliberately reuse `build_sql_graph`
     WITHOUT its `_intent_analyze` entry node — the requirement is already
     confirmed, so we just plan → generate → execute.
@@ -308,7 +309,7 @@ def _format_confirmed_requirement(card) -> str | None:
 
 
 @traced_node("confirmed_report_agent")
-async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Optional[dict] = None) -> dict:
+async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Optional[RunnableConfig] = None) -> dict:
     """Build the report payload from the query result.
 
     Three-state verdict drives `execution_status`:
