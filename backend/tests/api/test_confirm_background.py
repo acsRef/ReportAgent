@@ -164,6 +164,38 @@ async def test_fast_graph_unaffected_by_timeout_budget(monkeypatch):
     assert ("s1", "report_ready", None) in calls
 
 
+async def test_generic_exception_classified_via_envelope(monkeypatch):
+    """P9：泛化异常出口走 classify_exception——LLM 预算耗尽不再是笼统 INTERNAL。"""
+    calls: list = []
+    _patch_deps(monkeypatch, calls)
+    from app.reliability.retry import LLMTimeoutError
+
+    task = registry.ConfirmedTask(session_id="s1", user_id=1, kind="confirm")
+    graph = FakeGraph(error=LLMTimeoutError("budget"))
+    await _run_confirmed_graph(
+        task, graph, {"trace_id": "t1"}, "s1", "confirm"
+    )
+    assert [e["event"] for e in task.result] == ["error", "done"]
+    err = json.loads(task.result[0]["data"])
+    assert err["code"] == "LLM_TIMEOUT"
+    assert err["recoverable"] is True
+    assert ("s1", "error", "confirm") in calls
+
+
+async def test_unknown_exception_falls_to_internal_error(monkeypatch):
+    """未知异常兜底 INTERNAL_ERROR / recoverable=False（原 INTERNAL 语义收编为契约码）。"""
+    calls: list = []
+    _patch_deps(monkeypatch, calls)
+    task = registry.ConfirmedTask(session_id="s1", user_id=1, kind="confirm")
+    graph = FakeGraph(error=RuntimeError("boom"))
+    await _run_confirmed_graph(
+        task, graph, {"trace_id": "t1"}, "s1", "confirm"
+    )
+    err = json.loads(task.result[0]["data"])
+    assert err["code"] == "INTERNAL_ERROR"
+    assert err["recoverable"] is False
+
+
 # --- _subscribe_events：未完成等信号 / 已完成重放 -----------------------------------
 
 

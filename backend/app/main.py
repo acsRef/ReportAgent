@@ -65,6 +65,7 @@ from app.services import (
     snapshot_service,
 )
 from app.infra.db import report_version_repository
+from app.reliability.errors import classify_exception, normalize_kind, user_code, user_message, user_recoverable
 from app.reliability.timeout import MAX_TASK_DURATION, run_with_timeout
 
 VECTOR_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
@@ -79,22 +80,10 @@ VECTOR_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 # (≤200 chars). Without this the front-end has to guess why a query
 # failed, and silent failures (DB unreachable returned as "no data")
 # become indistinguishable from legitimate empty results.
-_ERROR_FRIENDLY: dict[str, str] = {
-    "timeout":    "查询超时,请缩小时间范围或维度后重试",
-    "connection": "数据库连接失败,请稍后重试",
-    "permission": "权限不足,无法执行该查询",
-    "syntax":     "SQL 语法错误,请调整查询条件后重试",
-    "object":     "查询引用的表/列不存在,请检查维度后重试",
-    "other":      "查询执行失败,请稍后重试或调整需求",
-}
-_ERROR_CODE: dict[str, str] = {
-    "timeout":    "QUERY_TIMEOUT",
-    "connection": "QUERY_CONNECTION",
-    "permission": "QUERY_PERMISSION",
-    "syntax":     "QUERY_SYNTAX",
-    "object":     "QUERY_OBJECT",
-    "other":      "QUERY_FAILED",
-}
+#
+# P9：kind → 用户码 / 文案 / 可重试 三张表收编进 app.reliability.errors
+# （USER_* 表 + user_code/user_message/user_recoverable），本文件不再本地维护；
+# SSE payload 契约逐字段不变（前端 analysisReducer / confirmStream 已钉）。
 
 
 def _normalize_sql_snippet(sql: str | None, limit: int = 200) -> str:
@@ -125,17 +114,14 @@ def _build_sse_error(
     The SQL snippet is appended to message so the front-end ErrorCard can
     show it in a collapsible section without losing context if the user
     only reads the toast.
+
+    Always use the friendly mapping — the raw PG message (often in
+    English / opaque) is kept in trace logs but never shown to end users.
     """
     err_dict: dict = err if isinstance(err, dict) else {}
-    kind = err_dict.get("kind") or "other"
-    if kind not in _ERROR_FRIENDLY:
-        kind = "other"
-    code = _ERROR_CODE[kind]
-    # Always use the friendly mapping — the raw PG message (often in
-    # English / opaque) is kept in trace logs but never shown to end
-    # users. The point of the helper is to make every kind produce a
-    # distinct, actionable sentence in Chinese.
-    base_message = _ERROR_FRIENDLY[kind]
+    kind = normalize_kind(err_dict.get("kind"))
+    code = user_code(kind)
+    base_message = user_message(kind)
     snippet = _normalize_sql_snippet(sql)
     message = base_message if not snippet else f"{base_message}\n尝试的 SQL: {snippet}"
     return {
@@ -143,7 +129,7 @@ def _build_sse_error(
         "data": json.dumps({
             "code": code,
             "message": message,
-            "recoverable": kind in ("timeout", "connection", "object", "other"),
+            "recoverable": user_recoverable(kind),
             "failed_action": failed_action,
             "kind": kind,
             "sql": snippet,
@@ -300,14 +286,16 @@ async def _run_confirmed_graph(
             }, ensure_ascii=False),
         })
     except Exception as exc:
+        # P9：泛化异常走 classify_exception——LLM/MCP 家族各归各位，未知 → INTERNAL_ERROR。
         final_phase = "error"
         await session_manager.update_phase(session_id, "error", failed_action=failed_action)
+        envelope = classify_exception(exc, failed_action=failed_action)
         events.append({
             "event": "error",
             "data": json.dumps({
-                "code": "INTERNAL",
+                "code": envelope.code,
                 "message": str(exc)[:300],
-                "recoverable": False,
+                "recoverable": envelope.recoverable,
                 "failed_action": failed_action,
             }, ensure_ascii=False),
         })
@@ -661,12 +649,14 @@ async def _chat_requirement_analysis(
             # 无需清理，直接透传完成取消（不产生半截 done 事件）。
             raise
         except Exception as exc:
+            # P9：泛化异常走 classify_exception（与 confirmed 路径同源）。
+            envelope = classify_exception(exc, failed_action=request.mode)
             yield {
                 "event": "error",
                 "data": json.dumps({
-                    "code": "INTERNAL",
+                    "code": envelope.code,
                     "message": str(exc)[:300],
-                    "recoverable": False,
+                    "recoverable": envelope.recoverable,
                     "failed_action": request.mode,
                 }, ensure_ascii=False),
             }

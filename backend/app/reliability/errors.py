@@ -63,18 +63,18 @@ def agent_recoverable(kind: str) -> bool:
     return kind in AGENT_RECOVERABLE_KINDS
 
 
-def _normalize_kind(kind: Optional[str]) -> str:
+def normalize_kind(kind: Optional[str]) -> str:
     """未知 / 空 kind 归一为 other（main.py 收编语义）。"""
     return kind if kind in SQL_ERROR_KINDS else "other"
 
 
 def user_recoverable(kind: Optional[str]) -> bool:
-    return _normalize_kind(kind) in USER_RECOVERABLE_KINDS
+    return normalize_kind(kind) in USER_RECOVERABLE_KINDS
 
 
 def kind_to_error_code(kind: Optional[str]) -> ErrorCode:
     """SQL kind → runtime 码：syntax/timeout 独立成码，其余归 SQL_EXECUTION_ERROR。"""
-    kind = _normalize_kind(kind)
+    kind = normalize_kind(kind)
     if kind == "syntax":
         return ErrorCode.SQL_SYNTAX_ERROR
     if kind == "timeout":
@@ -85,7 +85,7 @@ def kind_to_error_code(kind: Optional[str]) -> ErrorCode:
 def classify_sql_kind(
     kind: Optional[str], message: str = "", failed_action: str = "sql"
 ) -> ErrorEnvelope:
-    kind = _normalize_kind(kind)
+    kind = normalize_kind(kind)
     return ErrorEnvelope(
         code=kind_to_error_code(kind).value,
         kind=kind,
@@ -184,8 +184,8 @@ _USER_CODES: dict[str, str] = {
 
 
 def user_message(kind: Optional[str]) -> str:
-    return _USER_MESSAGES[_normalize_kind(kind)]
+    return _USER_MESSAGES[normalize_kind(kind)]
 
 
 def user_code(kind: Optional[str]) -> str:
-    return _USER_CODES[_normalize_kind(kind)]
+    return _USER_CODES[normalize_kind(kind)]
