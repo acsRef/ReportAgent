@@ -16,6 +16,7 @@ from app.tools.registry import registry
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
 from app.utils.text import extract_sql, safe_json_parse
 from app.infra.trace.sdk import current_tracer, traced_node
+from app.reliability.errors import SQL_ERROR_KINDS, agent_recoverable
 from app.tools.sql_tools import validate_sql, execute_sql
 from app.state.checkpoint_adapter import migrate_checkpoint
 from app.agent.prompts import (
@@ -98,20 +99,22 @@ class DiagnosePolicy:
         max_sql = _get_max_sql_retries()
         max_plan = _get_max_plan_retries()
         kind = (error_kind or "other").lower()
-        if kind not in ("syntax", "object", "timeout", "connection", "permission", "other"):
+        if kind not in SQL_ERROR_KINDS:
             kind = "other"
         # R2: validation_failed / raw_empty 路径直接按 retry budget 走，不再二次
         # normalize kind。修复前先把 kind 限制到 {"syntax","object","other"}，
         # 导致 timeout/connection/permission fail 分支永远进不去；叠加 R1
         # 修好的 _evaluate 优先 validation 路径后，validation_failed 时
         # evaluate_result.kind 已是 "syntax"，timeout 不再泄漏进来。
+        # P9：kind 白名单与 fail 判定收编 reliability.errors 单一来源（表驱动，
+        # 决策输出不变——test_diagnose_policy_sources.py 钉同源）。
         if raw_empty or validation_failed:
             if sql_retries < max_sql:
                 return DiagnoseDecision(action="retry_sql", reason=f"{kind}: retry sql {sql_retries+1}/{max_sql} (validation)", error_kind=kind, recoverable=True, retry_target="generate_sql", confidence=0.7)
             if plan_retries < max_plan:
                 return DiagnoseDecision(action="replan", reason=f"{kind}: replan {plan_retries+1}/{max_plan} (validation)", error_kind=kind, recoverable=True, retry_target="plan", confidence=0.6)
             return DiagnoseDecision(action="clarify", reason=f"{kind}: budget exhausted after validation", error_kind=kind, recoverable=False, retry_target="end", confidence=0.5)
-        if kind in ("timeout", "connection", "permission"):
+        if not agent_recoverable(kind):
             return DiagnoseDecision(action="fail", reason=f"{kind}: non-recoverable", error_kind=kind, recoverable=False, retry_target="end", confidence=0.9)
         if sql_retries < max_sql:
             return DiagnoseDecision(action="retry_sql", reason=f"{kind}: retry sql {sql_retries+1}/{max_sql}", error_kind=kind, recoverable=True, retry_target="generate_sql", confidence=0.7)
