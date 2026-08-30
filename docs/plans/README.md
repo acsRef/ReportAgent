@@ -25,6 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
+| [2026-08-30-p12-playwright.md](2026-08-30-p12-playwright.md) | P12 实施：Playwright E2E 两层——Contract（mock LLM + real PG/MCP，CI per-PR）+ Full（real LLM/MCP/PG + REPORTAGENT_E2E=1 gate，nightly/manual）；`backend/app/llm/mock.py` MockLLMAdapter + env switch + fixture 驱动；`frontend/e2e/` Playwright 工程（playwright.config.ts + helpers + 12 specs）+ `evaluation/baseline_cases.json` 前若干例复用 | 伞形 §十五 Testing 两层 E2E + §P12 验收（≥ 10 场景：happy/clarification/retry/empty/failed/version/background/recovery/memory/trace + chitchat/empty-error-report）；开工审计 7 findings 见 plan Context |
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
 ## 已完成
