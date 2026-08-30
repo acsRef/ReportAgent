@@ -119,7 +119,8 @@ async def persist_error_run(
     *,
     session_id: str,
     user_id: int,
-    requirement_draft_id: int,
+    # P9 背景任务超时路径拿不到 draft（graph 已被 cancel），允许 None。
+    requirement_draft_id: int | None,
     title: str,
     error_detail: dict,
     query_snapshot: dict | None,

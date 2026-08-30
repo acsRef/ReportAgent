@@ -65,6 +65,7 @@ from app.services import (
     snapshot_service,
 )
 from app.infra.db import report_version_repository
+from app.reliability.timeout import MAX_TASK_DURATION, run_with_timeout
 
 VECTOR_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
@@ -217,7 +218,9 @@ async def _run_confirmed_graph(
     events: list[dict] = []
     try:
         config = {"configurable": {"thread_id": session_id}}
-        result = await graph.ainvoke(initial, config)
+        # P9：背景任务总预算（伞形 §200）——超时 → Persist FAILED → ReportVersion(error)
+        # → 前端 error，不允许永远停在 generating。runner 有界 ⇒ registry 不会挂死。
+        result = await run_with_timeout(graph.ainvoke(initial, config), MAX_TASK_DURATION)
         status = result.get("execution_status", "FAILED")
         if status == "FAILED":
             final_phase = "error"
@@ -263,6 +266,37 @@ async def _run_confirmed_graph(
                 "message": str(exc)[:300],
                 "recoverable": False,
                 "failed_action": failed_action,
+            }, ensure_ascii=False),
+        })
+    except asyncio.TimeoutError:
+        # P9 Background Task Timeout：graph 被 cancel，draft_id / query_snapshot
+        # 拿不到——诚实降级传 None，落库行仍保证版本历史可见（不停在 generating）。
+        final_phase = "error"
+        await session_manager.update_phase(session_id, "error", failed_action=failed_action)
+        try:
+            await report_version_service.persist_error_run(
+                session_id=session_id,
+                user_id=task.user_id,
+                requirement_draft_id=None,
+                title="报告",
+                error_detail={
+                    "code": "TASK_TIMEOUT",
+                    "message": f"后台任务超过 {int(MAX_TASK_DURATION)}s 未完成",
+                    "kind": "timeout",
+                },
+                query_snapshot=None,
+                trace_id=initial.get("trace_id"),
+            )
+        except Exception:  # noqa: BLE001 - 落库失败不拦 SSE error 事件
+            logger.exception("task timeout persist failed: session=%s", session_id)
+        events.append({
+            "event": "error",
+            "data": json.dumps({
+                "code": "TASK_TIMEOUT",
+                "message": f"后台任务超过 {int(MAX_TASK_DURATION)}s 未完成，请稍后重试",
+                "recoverable": False,
+                "failed_action": failed_action,
+                "kind": "timeout",
             }, ensure_ascii=False),
         })
     except Exception as exc:

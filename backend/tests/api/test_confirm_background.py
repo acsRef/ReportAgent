@@ -105,6 +105,65 @@ async def test_graph_exception_emits_event(monkeypatch):
     assert ("s1", "error", "confirm") in calls
 
 
+# --- P9 背景任务超时（MAX_TASK_DURATION → Persist FAILED → TASK_TIMEOUT 事件）-------
+
+
+class HangingGraph:
+    async def ainvoke(self, initial: dict, config: dict) -> dict:
+        await asyncio.sleep(999)
+
+
+async def test_task_timeout_emits_task_timeout_and_persists_error(monkeypatch):
+    calls: list = []
+    _patch_deps(monkeypatch, calls)
+    persist_calls: list = []
+
+    async def fake_persist_error_run(**kwargs):
+        persist_calls.append(kwargs)
+        return {"version": 1}
+
+    monkeypatch.setattr(
+        "app.main.report_version_service.persist_error_run", fake_persist_error_run
+    )
+    monkeypatch.setattr("app.main.MAX_TASK_DURATION", 0.05)
+    task = registry.ConfirmedTask(session_id="s1", user_id=1, kind="confirm")
+    await _run_confirmed_graph(
+        task, HangingGraph(), {"trace_id": "t1", "user_query": "q"}, "s1", "confirm"
+    )
+
+    # 不允许永远停在 generating：error + done 事件、phase=error、FAILED 落库
+    assert [e["event"] for e in task.result] == ["error", "done"]
+    err = json.loads(task.result[0]["data"])
+    assert err["code"] == "TASK_TIMEOUT"
+    assert err["recoverable"] is False
+    assert json.loads(task.result[1]["data"])["final_phase"] == "error"
+    assert ("s1", "error", "confirm") in calls
+
+    assert len(persist_calls) == 1
+    kwargs = persist_calls[0]
+    assert kwargs["session_id"] == "s1"
+    assert kwargs["user_id"] == 1
+    # graph 被 cancel 后 draft_id 拿不到——诚实降级传 None
+    assert kwargs["requirement_draft_id"] is None
+    assert kwargs["title"] == "报告"
+    assert kwargs["error_detail"]["code"] == "TASK_TIMEOUT"
+    assert kwargs["error_detail"]["kind"] == "timeout"
+    assert kwargs["trace_id"] == "t1"
+
+
+async def test_fast_graph_unaffected_by_timeout_budget(monkeypatch):
+    calls: list = []
+    _patch_deps(monkeypatch, calls)
+    monkeypatch.setattr("app.main.MAX_TASK_DURATION", 5)
+    task = registry.ConfirmedTask(session_id="s1", user_id=1, kind="confirm")
+    await _run_confirmed_graph(
+        task, FakeGraph(SUCCESS_RESULT), {"trace_id": "t1"}, "s1", "confirm"
+    )
+    # 未超时路径行为不变：report + done、report_ready
+    assert [e["event"] for e in task.result] == ["report", "done"]
+    assert ("s1", "report_ready", None) in calls
+
+
 # --- _subscribe_events：未完成等信号 / 已完成重放 -----------------------------------
 
 
