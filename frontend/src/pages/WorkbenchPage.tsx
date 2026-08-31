@@ -23,6 +23,7 @@ import { fetchSessions, fetchSession, patchRequirement, SESSIONS_PAGE_SIZE } fro
 import type { SessionSummary as ApiSessionSummary } from '../api/sessionsClient'
 import { openChat } from '../api/analysisClient'
 import { postConfirmStream } from '../api/confirmStream'
+import { armStream, abortStream } from '../api/streamAbort'
 import { stageFromTrace, liveDetailFromEntry } from '../components/workbench/progressModel'
 import {
   handleSSEEvent,
@@ -156,7 +157,10 @@ export default function WorkbenchPage() {
   // P11：progress 由真实 trace 事件驱动——liveDetail 显示当前步骤文案。
   const [liveDetail, setLiveDetail] = useState<string | undefined>(undefined)
   const [casualReply, setCasualReply] = useState<string | null>(null)
-  const confirmAbortRef = useRef<AbortController | null>(null)
+  // P11 Review-1 P1-2：confirm/retry 与 adjust(/chat openChat) 三条路径共用 armStream/abortStream，
+  // 停止按钮能真断所有活跃 SSE；先前只有 confirm/retry 写入 controller，
+  // adjust 走 openChat 的 controller 没保存，「停止」对 adjust 无效。
+  // streamAbortRef 删除——改用模块级单例（src/api/streamAbort）便于单测 + 三流共用。
 
   // P11 D5：trace progress 帧 → stage（单调不减）+ live 文案。两个流
   // （/confirm 的 postConfirmStream 与 /chat 的 openChat）共用。
@@ -167,9 +171,11 @@ export default function WorkbenchPage() {
 
   function handleStop() {
     // 「后台跑完」语义：停止只断开本连接的渲染，后端任务继续跑到落库。
-    confirmAbortRef.current?.abort()
-    confirmAbortRef.current = null
+    abortStream()
     setConfirming(false)
+    // P11 Review-1 P1-2：adjust 路径先前 stop 不 setSending(false)——UI 卡在「处理中」
+    // 直到 60s timeout；同时停止必须同步关掉 streaming 标记，否则确认按钮被锁。
+    setSending(false)
     dispatch({ type: 'phase/received', phase: 'awaiting_confirm' })
     setExecPolling(true)
     toast.info('已停止显示，报告仍在后台生成，完成后将通知你')
@@ -225,6 +231,9 @@ export default function WorkbenchPage() {
     setLastQuestion(null)
     setCasualReply(null)
     setLiveDetail(undefined)
+    // P11 Review-1 P2：「新分析」必须显式清 execPolling——同 P1 残留，
+    // 否则旧会话残留轮询会与新 session 重叠。
+    setExecPolling(false)
   }
 
   function handleSend(textOverride?: string) {
@@ -241,7 +250,9 @@ export default function WorkbenchPage() {
       dispatch({ type: 'session/selected', sessionId: sid })
     }
     const mode = chatModeForPhase(phase)
-    openChat(
+    // P11 Review-1 P1-2：openChat 返回 AbortController——必须 armStream 注册到
+    // 单例，否则 adjust 模式下「停止」按钮实际无效（SSE 继续收事件）。
+    const controller = openChat(
       {
         user_query: text,
         mode,
@@ -256,6 +267,7 @@ export default function WorkbenchPage() {
         onTrace: handleProgress,
       }),
     )
+    armStream(controller)
     setTimeout(() => {
       setSending((cur) => {
         if (cur) {
@@ -276,8 +288,11 @@ export default function WorkbenchPage() {
     )
     // P11 F6：恢复快照（requirement/版本/phase）；busy 会话（generating/adjusting）
     // 恢复后台轮询——停止后重进会话仍能收到「后台跑完」通知。
+    // P11 Review-1 P2：始终 setExecPolling(busy)——非 busy 时同步 false，
+    // 否则旧会话残留的 execPolling=true 会让 useExecutionPoll 误轮询新会话
+    // 并在 phase=report_ready/error 时错误地触发「报告已在后台生成」通知。
     void loadSessionSnapshot(sessionId, toast).then((busy) => {
-      if (busy) setExecPolling(true)
+      setExecPolling(busy)
     })
   }
 
@@ -296,7 +311,7 @@ export default function WorkbenchPage() {
         setStageIndex(1)
         setLiveDetail(undefined)
         const controller = new AbortController()
-        confirmAbortRef.current = controller
+        armStream(controller)
         await postConfirmStream(
           activeSessionId,
           {
@@ -332,7 +347,7 @@ export default function WorkbenchPage() {
     setStageIndex(1)
     setLiveDetail(undefined)
     const controller = new AbortController()
-    confirmAbortRef.current = controller
+    armStream(controller)
     try {
       await postConfirmStream(
         activeSessionId,
