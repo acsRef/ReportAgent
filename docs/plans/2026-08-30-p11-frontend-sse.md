@@ -355,3 +355,37 @@ cd frontend && npx vitest --run src/api/__tests__/analysisEvents.test.ts src/com
 
 - **P9-4 ErrorCode canonicalization**（P9 Review 记录项）：SQL producer 仍发 legacy `code="EXECUTION_ERROR"`（sql_graph.py:563/570/666）；接通时 SSE 用户码（QUERY_*）与 persist error_detail 断言面需一致化。
 - **P10-3 KPI subset aggregate**：若 P12+ 真生产 KPI（filter/subset），必须先升级 validator。
+
+## P11 Review-1（2026-08-31，用户实审发现）
+
+用户基于 `4f3abe1 → c656a07` 完整 diff 给出 **REQUEST CHANGES / 不通过**，2 个 P1 + 1 个 P2：
+
+### P1-1：FAILED verdict 被 `_persist_report` 抹成 DONE → 用户收假成功报告
+
+**事实**：`confirmed_execution_graph._persist_report` 返回 `{"report_payload": merged, "execution_status": "DONE"}` 恒为 DONE（无论 verdict 是 FAILED/EMPTY/SUCCESS）。`_run_confirmed_graph` 读 `result.execution_status` 决定 SSE 出口——之前因 DONE，FAILED 路径被走到 else 分支发 `report` 事件而非 `error`。前端 `handleSSEEvent` `case 'report' with version` 走「报告 vN 已生成」+ 自动选版本；用户收假成功 + ErrorCard 不出。
+
+**修复**（`6d174cf`）：`_persist_report` 不再覆写 `execution_status`——verdict 由 `_confirmed_report_agent` 写入 state 沿流到 main.py；main.py 据此 `if status == "FAILED"` → error SSE；否则 → report SSE（含 EMPTY 三态 band）。P10 三态分离契约真正生效。
+
+**测试闭环**：
+- `test_persist_report_does_not_overwrite_failed_verdict` — surgical，直接调 `_persist_report` 断言返回值无 `execution_status`。
+- `test_real_graph_failed_emits_error_not_report` — 端到端，跑真实 `build_confirmed_execution_graph()`（monkeypatch 全部 DB/load 节点保留真实 `_persist_report`），断言 SSE 事件序列只有 `error + done(error)`，无 `report`。
+
+**为何 941 passed 掩盖**：旧 `test_failed_emits_error_and_phase` 直接给 `_run_confirmed_graph` 喂 `FakeGraph(FAILED_RESULT)`——绕过了真实 graph 与 `_persist_report`，verdict 覆盖路径完全没被覆盖。
+
+### P1-2：adjust 模式的「停止」实际无效 + handleStop 不 setSending(false)
+
+**事实**：`handleSend` 调 `openChat()` 拿 AbortController 但**没存**——`confirmAbortRef` 只在 `handlePatchAndConfirm` / `handleRetry` 写入。`handleStop` abort `confirmAbortRef.current?.abort()` 对 adjust 无效，SSE 继续收事件；外加 `handleStop` 不 `setSending(false)`，UI 卡「处理中」直到 60s timeout。
+
+**修复**（`1d04bd9`）：抽 `src/api/streamAbort.ts` 模块级单例 `armStream/abortStream/hasActiveStream`；`handleSend` / `handlePatchAndConfirm` / `handleRetry` 三处统一 `armStream(controller)`；`handleStop` `abortStream() + setSending(false) + setConfirming(false)`。模块级单例而非 useRef 是为了（a）三流共用避免 ref 跨 hook 边界，（b）单测不需要 render。
+
+**测试**：5 例 streamAbort 单测（arm/abort/替换旧/无 active 不抛错/二次 abort 返 false）；页面级整合测试留 P12 Playwright spec 03-retry。
+
+### P2：session 切换不清 execPolling（旧 busy 残留轮询新 session）
+
+**事实**：`handleSelectSession` 只 `if (busy) setExecPolling(true)`；非 busy session 切到时不清 false。若用户在 A 会话点停止（execPolling=true）后切到 B（B 已是 report_ready），`useExecutionPoll(B, true)` 立刻满足条件 → 触发「报告已在后台生成」通知（错误通知）。
+
+**修复**（`1d04bd9`，同 P1-2 commit 含）：`handleSelectSession` 改为 `setExecPolling(busy)` 始终覆盖；`handleNewAnalysis` 加 `setExecPolling(false)`。无独立单测（需 render WorkbenchPage，留 P12 Playwright spec 08-session-recovery 覆盖）。
+
+### Review-1 复审请求
+
+按用户指示：**P1-1 + P1-2 修掉后做 P11 exit review**，重点只复查这两个修复有无引入回归，不重审整个 Phase。后续 dev + git push `1d04bd9` 已上 origin 等复审。
