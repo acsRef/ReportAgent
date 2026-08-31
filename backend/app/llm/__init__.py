@@ -4,7 +4,12 @@ import os
 
 from app.llm.adapter import LLMAdapter, SchemaValidationError, StructuredParseError, strip_think_tags
 from app.llm.config import LLMConfig
-from app.llm.mock import MockLLMAdapter, MockLLMMiss
+from app.llm.mock import (
+    MockLLMAdapter,
+    MockLLMMiss,
+    reset_mock_session_scope,
+    set_mock_session_scope,
+)
 
 _adapter: LLMAdapter | None = None
 
@@ -103,4 +108,4 @@ def get_chat_llm(**kwargs):
     return ChatOpenAI(**base)
 
 
-__all__ = ["LLMAdapter", "LLMConfig", "SchemaValidationError", "StructuredParseError", "get_llm_adapter", "generate", "generate_structured", "strip_think_tags", "_format_tools_for_prompt", "_INTENT_TOOL_WHITELIST", "call_llm", "MockLLMAdapter", "MockLLMMiss"]
+__all__ = ["LLMAdapter", "LLMConfig", "SchemaValidationError", "StructuredParseError", "get_llm_adapter", "generate", "generate_structured", "strip_think_tags", "_format_tools_for_prompt", "_INTENT_TOOL_WHITELIST", "call_llm", "MockLLMAdapter", "MockLLMMiss", "set_mock_session_scope", "reset_mock_session_scope"]

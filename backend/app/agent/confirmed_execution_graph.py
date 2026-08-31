@@ -189,6 +189,12 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
     into `confirmed_requirement` and passed to `_plan` so the LLM does
     not re-infer from the (potentially vague) `user_query`.
     """
+    # review-prep-r2 Fix 1：每个 graph entry 把 session_id 写到 mock scope contextvar，
+    # 让同一 backend process 内不同 session 的 MockLLMAdapter counter 隔离。
+    from app.llm import set_mock_session_scope
+
+    set_mock_session_scope(f"{state.get('user_id', 0)}:{state['session_id']}")
+
     sql_graph = build_sql_graph()
     schema = state.get("schema_context")
     from app.models.contracts import SchemaContext as SchemaCtx

@@ -4,12 +4,37 @@ import json
 import logging
 import os
 import re
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from app.llm.adapter import StructuredParseError, _validate_against_schema
 
 logger = logging.getLogger(__name__)
+
+# Mock session scope（review-prep-r2 Fix 1）：用 contextvars 隔离不同 session 的
+# fixture cursor。scope 标识 = f"{user_id}:{session_id}"，未设/None → "__default__"
+# （向后兼容旧行为，保留 singleton 单 counter 语义）。
+# 真实 LLM 路径（LLMAdapter.generate）不感知，零侵入。
+_current_mock_scope: ContextVar[str] = ContextVar(
+    "current_mock_session_scope", default="__default__"
+)
+
+
+def set_mock_session_scope(scope_id: str | None) -> Any:
+    """设置当前 mock session scope（counter key 隔离边界）。
+
+    返回 token 用于 reset。None / 空 → 使用 "__default__"。
+    真实 LLM 路径不感知（adapter.generate 不读）。
+    Contract E2E 在 graph entry 调用，让 fixture cursor 不跨 session 共享。
+    """
+    scope = scope_id if scope_id else "__default__"
+    return _current_mock_scope.set(scope)
+
+
+def reset_mock_session_scope(token: Any) -> None:
+    """还原 scope（与 set_mock_session_scope 返回的 token 配对）。"""
+    _current_mock_scope.reset(token)
 
 # kind 小写蛇形；seq ≥ 1。如 "sql_generate:1"、"requirement_parse:2"。
 # Fix 4：手写 fixture 时漏冒号 / 大小写错 / seq=0 都会静默成「永远 miss」——
@@ -80,7 +105,9 @@ class MockLLMAdapter:
     def __init__(self, fixtures_dir: Path, case_id: str, delay_ms: int = 0) -> None:
         self._case_id = case_id
         self._responses = _load_case(fixtures_dir, case_id)
-        self._counters: dict[str, int] = {}
+        # review-prep-r2 Fix 1：scope → {kind: seq} 二级 dict，让 fixture cursor
+        # 按 session scope 隔离（contextvars 驱动）；向后兼容默认 scope "__default__"。
+        self._counters: dict[str, dict[str, int]] = {}
         # 仅 mock 模式用：人为延迟 generate / generate_structured，扩展 LLM 调用窗口。
         # 用途：Contract spec 07 background-execution 需要 generating 窗口足够长
         # 让停止按钮可点击。LLM_MOCK_DELAY_MS=3000 → 每次 mock LLM 调用先 sleep 3s。
@@ -132,13 +159,15 @@ class MockLLMAdapter:
 
     def _lookup(self, prompt: str | list) -> Any:
         kind = prompt_kind(prompt)
-        seq = self._counters.get(kind, 0) + 1
-        self._counters[kind] = seq
+        scope = _current_mock_scope.get()
+        scope_counters = self._counters.setdefault(scope, {})
+        seq = scope_counters.get(kind, 0) + 1
+        scope_counters[kind] = seq
         key = f"{kind}:{seq}"
         if key not in self._responses:
-            logger.warning("MockLLMMiss case=%s key=%s", self._case_id, key)
+            logger.warning("MockLLMMiss case=%s scope=%s key=%s", self._case_id, scope, key)
             raise MockLLMMiss(
-                f"case {self._case_id}: no fixture for `{key}`（kind={kind}）"
+                f"case {self._case_id} scope={scope}: no fixture for `{key}`（kind={kind}）"
             )
         if self._delay_ms > 0:
             import time

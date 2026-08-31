@@ -210,6 +210,13 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
     这里直接复用（避免二次检索）；任何失败降级为空串、绝不影响主流程；命中片段以
     "- source: text[:300]" 形式序列化，由 parse_requirement 拼到「数据字典参考」段。
     """
+    # review-prep-r2 Fix 1：每个 graph entry 把 session_id 写到 mock scope contextvar，
+    # 让同一 backend process 内不同 session 的 MockLLMAdapter counter 隔离。
+    # asyncio task 结束 → contextvar 自动清理 → 下个 session（新 task）从 default 起。
+    from app.llm import set_mock_session_scope
+
+    set_mock_session_scope(f"{state.get('user_id', 0)}:{state['session_id']}")
+
     conversation_context = ""
     assembled_context = ""
     # P4c Task 1: 真正接入 ContextRuntime.build() —— 替代 facade build_session_context；
