@@ -25,6 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
+| [2026-08-31-p12-review-prep.md](2026-08-31-p12-review-prep.md) | P12 review-prep 修复：4 项加固（高：`get_chat_llm` fail-closed 防 mock 旁路 + spec 07 background-execution 加 session phase/report 落库断言；中：spec 03 retry 加 `execution_status=SUCCESS` 显式修复证据；低：mock fixture key 格式校验防 typo 静默） | 接 P12 已落地（48222f2 等 6 commit）+ review 反馈 6 项中 4 项落实，独立 4 个 fix commit + 1 个 docs commit，不动 P12 已落地主 commit |
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
 ## 已完成
