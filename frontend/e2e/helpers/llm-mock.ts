@@ -35,8 +35,11 @@ async function waitForHealth(url: string, timeoutMs = 90_000): Promise<void> {
  * 启动/重启一个 Contract 后端（uvicorn :8100，LLM_PROVIDER=mock）。
  * 每个 spec 独占一次（workers=1 串行），保证 mock 的 kind:seq 计数器从 0 开始，
  * 同一 case 的 fixture key 序列可预测（happy: sql_plan:1 → sql_generate:1 → report_plan:1）。
+ *
+ * `delayMs` 仅 mock 模式生效：让每次 mock LLM 调用先 sleep N ms，扩展 generating 窗口，
+ * 让停止按钮（spec 07 background-execution）可确定性点击。LLM_MOCK_DELAY_MS env。
  */
-export async function startContractBackend(caseId: string): Promise<void> {
+export async function startContractBackend(caseId: string, delayMs = 0): Promise<void> {
   await stopBackend()
   const env = {
     ...process.env,
@@ -45,6 +48,7 @@ export async function startContractBackend(caseId: string): Promise<void> {
     LLM_MOCK_CASE: caseId,
     LLM_MOCK_DIR: CONTRACT_FIXTURES_DIR,
     RAGENT_MCP_PYTHON,
+    LLM_MOCK_DELAY_MS: String(delayMs),
   }
   backend = spawn(PYTHON, ['-m', 'uvicorn', 'app.main:app', '--port', '8100'], {
     cwd: BACKEND_DIR,

@@ -77,10 +77,15 @@ class MockLLMAdapter:
     兜底 dict）；为 str 时返回 str（sql_generate 的 SQL 文本）。
     """
 
-    def __init__(self, fixtures_dir: Path, case_id: str) -> None:
+    def __init__(self, fixtures_dir: Path, case_id: str, delay_ms: int = 0) -> None:
         self._case_id = case_id
         self._responses = _load_case(fixtures_dir, case_id)
         self._counters: dict[str, int] = {}
+        # 仅 mock 模式用：人为延迟 generate / generate_structured，扩展 LLM 调用窗口。
+        # 用途：Contract spec 07 background-execution 需要 generating 窗口足够长
+        # 让停止按钮可点击。LLM_MOCK_DELAY_MS=3000 → 每次 mock LLM 调用先 sleep 3s。
+        # 注意：仅 mock；不污染真 LLM 路径。
+        self._delay_ms = delay_ms
 
     @classmethod
     def from_env(cls) -> "MockLLMAdapter":
@@ -90,7 +95,8 @@ class MockLLMAdapter:
             raise MockLLMMiss(
                 "LLM_PROVIDER=mock 需要 LLM_MOCK_DIR 与 LLM_MOCK_CASE env（plan D3）"
             )
-        return cls(Path(fixtures_dir), case_id)
+        delay_ms = int(os.getenv("LLM_MOCK_DELAY_MS", "0") or "0")
+        return cls(Path(fixtures_dir), case_id, delay_ms=delay_ms)
 
     def generate(self, prompt: str | list, **kwargs: Any) -> Any:
         # 返回 fixture 原值：dict 由 caller 的 `isinstance(raw, str) else raw` 直接吃，
@@ -134,4 +140,7 @@ class MockLLMAdapter:
             raise MockLLMMiss(
                 f"case {self._case_id}: no fixture for `{key}`（kind={kind}）"
             )
+        if self._delay_ms > 0:
+            import time
+            time.sleep(self._delay_ms / 1000)
         return self._responses[key]
