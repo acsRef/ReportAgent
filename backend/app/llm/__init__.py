@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+import os
+
 from app.llm.adapter import LLMAdapter, SchemaValidationError, StructuredParseError, strip_think_tags
 from app.llm.config import LLMConfig
+from app.llm.mock import MockLLMAdapter, MockLLMMiss
 
 _adapter: LLMAdapter | None = None
 
 
 def get_llm_adapter() -> LLMAdapter:
+    """P12 D3 env switch：`LLM_PROVIDER=mock` → MockLLMAdapter（Contract E2E 离真实 key）。
+
+    默认（含 unset）→ 真实 LLMAdapter。mock 模式缺少 LLM_MOCK_DIR/LLM_MOCK_CASE 时
+    from_env 抛 MockLLMMiss 明确失败，不允许静默兜底。
+    """
     global _adapter
-    if _adapter is None:
+    if os.getenv("LLM_PROVIDER") == "mock":
+        if not isinstance(_adapter, MockLLMAdapter):
+            _adapter = MockLLMAdapter.from_env()
+        return _adapter
+    if not isinstance(_adapter, LLMAdapter):
         _adapter = LLMAdapter()
     return _adapter
 
@@ -80,4 +92,4 @@ def get_chat_llm(**kwargs):
     return ChatOpenAI(**base)
 
 
-__all__ = ["LLMAdapter", "LLMConfig", "SchemaValidationError", "StructuredParseError", "get_llm_adapter", "generate", "generate_structured", "strip_think_tags", "_format_tools_for_prompt", "_INTENT_TOOL_WHITELIST", "call_llm", "get_chat_llm"]
+__all__ = ["LLMAdapter", "LLMConfig", "SchemaValidationError", "StructuredParseError", "get_llm_adapter", "generate", "generate_structured", "strip_think_tags", "_format_tools_for_prompt", "_INTENT_TOOL_WHITELIST", "call_llm", "get_chat_llm", "MockLLMAdapter", "MockLLMMiss"]

@@ -166,14 +166,16 @@ test('happy-path: 需求 → 确认 → 报告（Contract mock LLM）', async ({
 
 **Files:** `backend/app/llm/mock.py`（新建）+ `backend/app/llm/adapter.py`（修改）+ `backend/tests/contracts/test_mock_llm_adapter.py`（新建）
 
-- [ ] Step 1 red：
+- [x] Step 1 red：
   - `test_mock_llm_adapter_loads_case`：tmpdir 写 `happy-path.json` 含一 prompt_key → 生成返回 fixture 数据。
   - `test_mock_llm_adapter_misses_raises`：`MockLLMMiss` 不允许静默兜底。
   - `test_mock_llm_adapter_structured_output`：传入 pydantic model → 自动 model_validate。
   - `test_get_llm_adapter_env_switch`：monkeypatch `LLM_PROVIDER=mock` → 返回 `MockLLMAdapter`；默认 → `MiniMaxAdapter`。
-- [ ] Step 2 跑：`cd backend && D:/miniConda/envs/agent/python.exe -m pytest tests/contracts/test_mock_llm_adapter.py -x` 确认 FAIL（模块不存在）。
-- [ ] Step 3 实现 `mock.py`（如 Design 形状）+ `adapter.py` env switch。
-- [ ] Step 4 green + 跑 contracts 全量无回归；commit `feat(p12): MockLLMAdapter + env switch（Contract E2E 离真实 key）+ plan: p12-playwright`。
+- [x] Step 2 跑：`cd backend && D:/miniConda/envs/agent/python.exe -m pytest tests/contracts/test_mock_llm_adapter.py -x` 确认 FAIL（模块不存在）。
+- [x] Step 3 实现 `mock.py`（如 Design 形状）+ `adapter.py` env switch。
+- [x] Step 4 green + 跑 contracts 全量无回归；commit `feat(p12): MockLLMAdapter + env switch（Contract E2E 离真实 key）+ plan: p12-playwright`。
+
+> T1 落地记录：`mock.py` + env switch 已落（4 例测试 510 contracts 全绿 / 全量 945 passed 无回归）；**两处偏差**——① `get_llm_adapter()` 实际位于 `app/llm/__init__.py`（非 plan Files 表所写 adapter.py），env switch 按代码现实落在那里；② Mock 实现真实 `LLMAdapter` 同步接口（`generate`→str / `generate_structured`→dict / `generate_structured_safe`），未采用 Design 骨架中带 `structured_output` 的 async 签名——`get_llm_adapter()` 现有 caller 全部走真实接口，mock 必须可替换；`_prompt_key` v1 取 prompt SHA-256，同 case 重复 prompt 需不同响应时由 T3 fixtures 叠加调用序后缀。
 
 ### T2 frontend/e2e 工程骨架（F1/F2/F7）
 
