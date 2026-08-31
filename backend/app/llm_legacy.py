@@ -78,8 +78,22 @@ def _format_tools_for_prompt(whitelist: set[str] | None = None) -> str:
 
 
 def get_chat_llm(**kwargs) -> ChatOpenAI:
-    config = {**_LLM_CONFIG, **kwargs}
-    return ChatOpenAI(**config)
+    """DEPRECATED：保留为 thin wrapper 转 `app.llm.get_chat_llm`（fail-closed 收口）。
+
+    历史上这是 `ChatOpenAI` 直构造的旁路；plan 2026-08-31-p12-review-prep.md Fix 1 后
+    主入口 `app.llm.get_chat_llm` 已在 `LLM_PROVIDER=mock` 时抛 NotImplementedError，
+    本函数必须同样 fail-closed。新代码不应再 import 此函数。
+    """
+    import warnings
+
+    from app.llm import get_chat_llm as _main
+
+    warnings.warn(
+        "app.llm_legacy.get_chat_llm is deprecated, use app.llm.get_chat_llm（mock 模式抛 NotImplementedError）",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _main(**kwargs)
 
 
 def call_llm(prompt: str | list, **kwargs) -> str:

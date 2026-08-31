@@ -123,3 +123,34 @@ def test_get_llm_adapter_env_switch(monkeypatch, tmp_path):
     # 切回默认 → 缓存按 provider 重建，仍真实 LLMAdapter
     monkeypatch.delenv("LLM_PROVIDER")
     assert isinstance(get_llm_adapter(), LLMAdapter)
+
+
+# —— Fix 1：get_chat_llm fail-closed（mock 模式禁用 ChatOpenAI 直构造） ——
+
+
+def test_get_chat_llm_in_mock_mode_raises_not_implemented(monkeypatch):
+    """LLM_PROVIDER=mock → get_chat_llm 必须 fail-closed 抛 NotImplementedError。
+
+    防 Contract E2E 出现「主路径 mock + 旁路真 LLM」半 mock：任意 import get_chat_llm
+    都会绕开 get_llm_adapter switch，让真 LLM 泄漏进 mock 测试。
+    """
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("LLM_MOCK_DIR", "/tmp")
+    monkeypatch.setenv("LLM_MOCK_CASE", "x")
+
+    from app.llm import get_chat_llm
+
+    with pytest.raises(NotImplementedError, match="LLM_PROVIDER=mock 禁用"):
+        get_chat_llm()
+
+
+def test_get_chat_llm_in_real_mode_still_constructs(monkeypatch):
+    """LLM_PROVIDER 非 mock → get_chat_llm 仍返回 ChatOpenAI 实例（real path 不被破坏）。"""
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+
+    from langchain_openai import ChatOpenAI
+
+    from app.llm import get_chat_llm
+
+    chat = get_chat_llm()
+    assert isinstance(chat, ChatOpenAI)

@@ -85,6 +85,17 @@ def call_llm(prompt: str | list, **kwargs) -> str:
 
 
 def get_chat_llm(**kwargs):
+    """Real-LLM ChatOpenAI 构造（legacy 出口，main path 应走 get_llm_adapter()）。
+
+    mock 模式下禁止直构造 ChatOpenAI —— Contract E2E 必须 100% 经过 get_llm_adapter switch，
+    否则任意一行 import 此函数即让真 LLM 泄漏进 Contract 测试，造成"主路径 mock + 旁路真 LLM"
+    的半 mock 状态。
+    """
+    if os.getenv("LLM_PROVIDER") == "mock":
+        raise NotImplementedError(
+            "LLM_PROVIDER=mock 禁用 get_chat_llm 直构造 ChatOpenAI；"
+            "Contract E2E 必须走 get_llm_adapter().generate()。详见 plan 2026-08-31-p12-review-prep.md Fix 1。"
+        )
     from langchain_openai import ChatOpenAI
 
     base = LLMConfig().to_chat_kwargs()
@@ -92,4 +103,4 @@ def get_chat_llm(**kwargs):
     return ChatOpenAI(**base)
 
 
-__all__ = ["LLMAdapter", "LLMConfig", "SchemaValidationError", "StructuredParseError", "get_llm_adapter", "generate", "generate_structured", "strip_think_tags", "_format_tools_for_prompt", "_INTENT_TOOL_WHITELIST", "call_llm", "get_chat_llm", "MockLLMAdapter", "MockLLMMiss"]
+__all__ = ["LLMAdapter", "LLMConfig", "SchemaValidationError", "StructuredParseError", "get_llm_adapter", "generate", "generate_structured", "strip_think_tags", "_format_tools_for_prompt", "_INTENT_TOOL_WHITELIST", "call_llm", "MockLLMAdapter", "MockLLMMiss"]
