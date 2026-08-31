@@ -12,7 +12,9 @@
     "test:run": "vitest --run",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "e2e:contract": "playwright test --config e2e/playwright.config.ts e2e/specs/0[1-9]-*.spec.ts e2e/specs/10-*.spec.ts",
-    "e2e:full": "playwright test --config e2e/playwright.config.ts e2e/specs/1[1-2]-*.spec.ts"
+    "e2e:full": "playwright test --config e2e/playwright.config.ts e2e/specs/1[1-2]-*.spec.ts",
+    "e2e:contract:report": "playwright test --config e2e/playwright.config.ts --reporter=list --reporter=json,e2e/artifacts/playwright-contract-report.json e2e/specs/0[1-9]-*.spec.ts e2e/specs/10-*.spec.ts",
+    "e2e:full:report": "playwright test --config e2e/playwright.config.ts --reporter=list --reporter=json,e2e/artifacts/playwright-full-report.json e2e/specs/1[1-2]-*.spec.ts"
   },
   "dependencies": {
     "echarts": "^6.1.0",

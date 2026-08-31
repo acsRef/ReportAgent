@@ -261,6 +261,18 @@ test('happy-path: 需求 → 确认 → 报告（Contract mock LLM）', async ({
 
 **T6 commit：** `docs(p12): frontend-contract 现状 + CLAUDE.md §9 + README 索引翻转（plan 落地收尾）+ plan: p12-playwright`
 
+## E2E 边界定义（review-prep-r2 Fix 2）
+
+| 层 | 栈组成 | 触发 | 期望 |
+|---|---|---|---|
+| Contract | real browser + real FastAPI + real LangGraph + real PG + mock LLM + **intentionally disabled MCP**（`RAGENT_MCP_PYTHON=D:/non-existent/...`） | `npm run e2e:contract`（CI per-PR） | 10/10 passed |
+| Full | real browser + real FastAPI + real LangGraph + real PG + real LLM（MiniMax）+ real MCP（ragent-py） | `REPORTAGENT_E2E=1 npm run e2e:full`（nightly/manual） | 2/2 passed |
+
+**Contract 故意禁用 MCP**——证明「MCP 不可用时系统 fallback 后能工作」，
+不是「frontend→backend→MCP→DB 全链路」（那是 Full 的范畴）。
+
+未设 `REPORTAGENT_E2E`：`npm run e2e:full` 跑 2 skipped / 0 failed（env gate）。
+
 ## Verification
 
 ```bash

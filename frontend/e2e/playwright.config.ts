@@ -18,7 +18,12 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [['list']],
+  // list 给开发实时反馈；json 归档每次完整 report（含 timing + failure 路径）便于 CI 串接。
+  // CI 跑 `e2e:contract:report` / `e2e:full:report` 时各自的产物分文件归档。
+  reporter: [
+    ['list'],
+    ['json', { outputFile: './artifacts/playwright-report.json' }],
+  ],
   use: {
     baseURL: 'http://127.0.0.1:3000',
     // 失败时保留 trace.zip（含视频 + 网络日志 + DOM snapshot）与 PNG 截图

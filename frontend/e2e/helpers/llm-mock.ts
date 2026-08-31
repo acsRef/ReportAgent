@@ -4,9 +4,27 @@ import { BACKEND_URL, CONTRACT_FIXTURES_DIR, loadDotEnv, repoRoot } from './env'
 
 const PYTHON = process.env.RAGENT_PYTHON ?? 'D:/miniConda/envs/agent/python.exe'
 const BACKEND_DIR = resolve(repoRoot, 'backend')
-// Contract 强制不连真实 MCP：指向不存在的解释器 → RagMCPClient 子进程起不来，
-// dict_hit=False → intent 走 mock LLM；schema 空 → plan/generate 由 fixture 直接
-// 返回可执行 SQL（对真实 seeded PG 跑）。fixture key 是语义 kind，不依赖 schema 漂移。
+
+/**
+ * ============================================================
+ * Contract E2E 边界定义（review-prep-r2 Fix 2 正式化）
+ * ============================================================
+ * Contract E2E = real browser + real FastAPI + real LangGraph
+ *             + real PG + mock LLM + INTENTIONALLY DISABLED MCP
+ *
+ * 强制不连真实 MCP：`RAGENT_MCP_PYTHON=D:/non-existent/...` 让 RagMCPClient
+ * 子进程启动失败 → dict_hit=False / schema 空 → 走 mock LLM + 本地 schema fallback。
+ * 这证明：「MCP 不可用时，系统 fallback 后能工作」——不是 frontend → backend →
+ * MCP → DB 全链路（那是 Full E2E 的范畴）。
+ *
+ * Full E2E 边界：real browser + real FastAPI + real LangGraph + real PG +
+ * real LLM (MiniMax) + real MCP (ragent-py)。env `REPORTAGENT_E2E=1` gate。
+ *
+ * 适用场景：
+ *   - Contract E2E：CI per-PR 跑（无外部 key 依赖，可靠）
+ *   - Full E2E：nightly / manual（需真 LLM key + ragent-py 服务）
+ * ============================================================
+ */
 const RAGENT_MCP_PYTHON = process.env.RAGENT_MCP_PYTHON ?? 'D:/non-existent/ragent-python.exe'
 
 let backend: ChildProcess | null = null

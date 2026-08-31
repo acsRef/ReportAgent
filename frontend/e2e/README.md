@@ -1,56 +1,68 @@
-# frontend/e2e Playwright E2E（P12）
+# P12 Playwright E2E
 
-ReportAgent 浏览器端到端。测试对象 = React 工作台（:3000，vite），经 `/api` proxy 到 backend（:8100）。
-
-## 两层
-
-| 层 | 后端 LLM | env | 谁跑 |
-|---|---|---|---|
-| **Contract** | mock（`LLM_PROVIDER=mock` + fixture 驱动；不连真实 MCP） | 无额外要求 | `npm run e2e:contract` — 本地/CI per-PR |
-| **Full** | 真实 LLM（MiniMax）+ 真实 MCP（ragent-py） | `REPORTAGENT_E2E=1` | `npm run e2e:full` — nightly/manual |
-
-Contract 后端由每个 spec 的 `beforeAll` 独占启动（fixture key = 语义 kind + 调用序，
-与日期/schema 漂移无关）。Full spec 顶部 `test.skip(!process.env.REPORTAGENT_E2E)` 守门。
-
-## 依赖
-
-- PostgreSQL :5432（`ragent-postgres` 容器 + `init_pg.sql` + `seed_pg.sql`）
-- Playwright chromium（`npx playwright install chromium`）
-- Full 层还需：`.env` 里真实 `MINIMAX_API_KEY` + `D:/PyProject/ragent-py`（MCP 子进程）
-
-## 命令
+## Contract E2E（CI per-PR，10 specs）
 
 ```bash
-cd frontend
-npm run e2e            # 全部（Contract specs 正常跑，Full specs 无 REPORTAGENT_E2E 自动 skip）
-npm run e2e:contract   # specs/01..10（mock LLM，CI per-PR）
-REPORTAGENT_E2E=1 npm run e2e:full   # specs/11..12（真实 LLM，nightly/manual）
+npm run e2e:contract
+# 或带 JSON 归档：
+npm run e2e:contract:report
+# 产物：frontend/e2e/artifacts/playwright-contract-report.json
 ```
 
-## 目录
+**栈组成**：real browser（Playwright bundled Chromium）+ real FastAPI +
+real LangGraph + real PG（localhost:5432）+ mock LLM（fixture 驱动）+
+**intentionally disabled MCP**（`RAGENT_MCP_PYTHON=D:/non-existent/...`）。
 
-```text
-frontend/e2e/
-├── playwright.config.ts   # baseURL :3000，chromium，workers=1（serial backend per spec）
-├── helpers/
-│   ├── env.ts             # repo root / .env 读取 / URL 常量
-│   ├── llm-mock.ts        # startContractBackend(caseId)：uvicorn :8100 + LLM_PROVIDER=mock
-│   ├── global-setup.ts    # 验证 PG + 起 vite :3000
-│   ├── global-teardown.ts # 关 backend + vite
-│   ├── auth.ts            # login → token → localStorage 注入（ragent_auth）
-│   ├── page-objects.ts    # WorkbenchPage（sendQuery/confirm/expectReport...）
-│   └── wait-for-sse.ts    # 轮询动态条件（phase / trace 文本）
-├── specs/
-│   ├── 00-smoke.spec.ts   # 工程冒烟（未登录跳 /login）
-│   ├── 01-happy-path.spec.ts ... 10-trace-progress.spec.ts   # Contract
-│   └── 11-chitchat-bubble.spec.ts ... 12-empty-error-report.spec.ts  # Full
-└── fixtures/llm/          # mock fixture（{kind:seq: response}，由 llm-mock 读）
+**证明**：MCP 不可用时系统 fallback 后能工作 + 各业务路径 spec 行为契约
+（happy / clarification / empty / failed / retry / background / version /
+recovery / memory / trace progress）。
+
+**期望**：10/10 passed（CI 无 env 依赖）。
+
+## Full E2E（nightly / manual gate，2 specs）
+
+```bash
+REPORTAGENT_E2E=1 npm run e2e:full
+# 或带 JSON 归档：
+REPORTAGENT_E2E=1 npm run e2e:full:report
+# 产物：frontend/e2e/artifacts/playwright-full-report.json
 ```
 
-## mock 语义 key
+**栈组成**：real browser + real FastAPI + real LangGraph + real PG +
+real LLM（MiniMax，需 `LLM_API_KEY`）+ real MCP（ragent-py，需
+`RAGENT_MCP_PYTHON` 指向真实解释器 + ragent-py 服务运行中）。
 
-fixture 文件 `{case}.json` 的 key 是 `kind:seq`（`backend/tests/fixtures/llm_responses/`）：
-- `kind` 由 prompt 固定 system_contract 首句分类（intent_classify / requirement_parse /
-  sql_plan / sql_generate / report_plan …），不受「当前日期 / schema_text / memory 上下文」漂移影响
-- `seq` 是该 kind 在本 backend 进程内被调用的次数（repair：`sql_generate:1` 坏 → `sql_generate:2` 好）
-- 未命中抛 `MockLLMMiss`，绝不让 mock 静默兜底污染断言
+**证明**：frontend → backend → MCP → DB 全链路 + 真实 LLM 决策。
+
+**期望**：2/2 passed（spec 11 chitchat + spec 12 empty-result with real data）。
+
+未设 `REPORTAGENT_E2E`：`npm run e2e:full` 自动 `test.skip` 2 个 spec →
+输出 `2 skipped / 0 failed`（不是 bug，是 env gate）。
+
+## 报告解读
+
+- 默认 `npm run e2e` 跑全 12 个 spec（10 Contract + 2 Full），未设
+  `REPORTAGENT_E2E` 时 2 个 Full 自动 skip。
+- CI 调用 `e2e:contract` 期望 10/10 passed；调用 `e2e:full` 前必须设 env。
+- JSON report 含每个 spec 的 timing + 失败 trace 路径，便于 CI 归档对比。
+
+## Contract E2E 边界说明（review-prep-r2 Fix 2）
+
+Contract E2E 故意禁用 MCP（`RAGENT_MCP_PYTHON` 指向不存在的解释器）。
+这不是缺陷——是设计选择：
+
+- **Contract**：证明业务契约 + fallback 路径（不需要真 MCP）。
+- **Full**：证明端到端全栈（需要真 MCP + 真 LLM）。
+
+二者互补，不重叠。Full spec 默认 env-gated 是为了 CI 不依赖外部 key。
+
+## MockLLM session scope（review-prep-r2 Fix 1）
+
+`backend/app/llm/mock.py` 在 review-prep-r2 后支持 per-session cursor
+scope（`set_mock_session_scope(f"{user_id}:{session_id}")` 在 graph entry
+调用）。这保证：
+
+- 同一 backend process 内多个 session 各自 cursor 从 `:1` 起；
+- 业务流程多调一次 / 少调一次不会让后续 session fixture 漂移。
+
+详见 [docs/plans/2026-08-31-p12-review-prep-r2.md](../../docs/plans/2026-08-31-p12-review-prep-r2.md)。
