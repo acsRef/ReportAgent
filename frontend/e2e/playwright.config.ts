@@ -9,6 +9,9 @@ import { defineConfig, devices } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './specs',
+  // 失败用例的 trace + 截图 + DOM snapshot 落到项目内固定目录，方便 review
+  // 直接 `git checkout e2e/artifacts/<project>/<spec>/test-failed-1.png` 查看
+  outputDir: './e2e/artifacts',
   timeout: 120_000,
   expect: { timeout: 30_000 },
   fullyParallel: false,
@@ -17,6 +20,7 @@ export default defineConfig({
   reporter: [['list']],
   use: {
     baseURL: 'http://127.0.0.1:3000',
+    // 失败时保留 trace.zip（含视频 + 网络日志 + DOM snapshot）与 PNG 截图
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
