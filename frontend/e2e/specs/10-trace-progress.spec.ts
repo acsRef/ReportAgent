@@ -3,7 +3,22 @@ import { startContractBackend, stopBackend } from '../helpers/llm-mock'
 import { auth } from '../helpers/auth'
 import { WorkbenchPage } from '../helpers/page-objects'
 
-test.describe('10-trace-progress — 执行期 ProgressCard 显示真实 trace 文案', () => {
+/**
+ * 测试范围：DOM-level smoke assertion —— 证明 `.wb-progress-detail` DOM
+ * 出现过真实 trace 文本（regex 含 P11 节点名：生成 SQL / 校验 SQL /
+ * 执行查询 / 组织报告）。
+ *
+ * 不在本 spec 覆盖的强契约（由 P11 vitest 单元覆盖）：
+ *   - SSE transport 帧解析（api/sse.ts parseSSEFrameRaw）
+ *   - schema 解析（analysisEvents.ts parseAnalysisSSEEvent）
+ *   - dispatch（sessionEvents.ts handleSSEEvent）
+ *   - progressModel 状态机（stageFromTrace + liveDetailFromEntry）
+ *   - running → success 完整序列
+ *
+ * 即：本 spec 是 browser-level 集成 smoke，不是严格的 progress contract。
+ * 强契约失效不会被本 spec 钉住（需 P11 vitest 单元）。
+ */
+test.describe('10-trace-progress — DOM-level smoke：ProgressCard 由真实 trace 帧驱动（强 contract 由 P11 vitest 单测）', () => {
   test.beforeAll(async () => {
     await startContractBackend('happy-path')
   }, { timeout: 120_000 })
