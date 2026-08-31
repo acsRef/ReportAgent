@@ -164,7 +164,12 @@ def test_callbacks_only_forwards_narrow_config() -> None:
 
 
 async def test_persist_report_merges_wire_fields(monkeypatch) -> None:
-    """P11 F3：merged report_payload 带 version/parent_version/title（sse-v2 wire 形态）。"""
+    """P11 F3：merged report_payload 带 version/parent_version/title（sse-v2 wire 形态）。
+
+    P11 Review-1 P1-1：verdict（SUCCESS / EMPTY / FAILED）由 _confirmed_report_agent
+    写入 state，_persist_report 不覆写——main.py 据此决定 error/report SSE 出口。
+    本测试断言返回值不含 execution_status 键（避免再次钉住 P1-1 bug）。
+    """
     import app.agent.confirmed_execution_graph as ceg
 
     captured: dict = {}
@@ -198,7 +203,8 @@ async def test_persist_report_merges_wire_fields(monkeypatch) -> None:
     }
     out = await ceg._persist_report(state)
 
-    assert out["execution_status"] == "DONE"
+    # verdict 不被覆盖（P11 Review-1 P1-1 修复）
+    assert "execution_status" not in out
     merged = out["report_payload"]
     assert merged["version"] == 3
     assert merged["parent_version"] is None

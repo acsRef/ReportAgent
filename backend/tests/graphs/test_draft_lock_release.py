@@ -95,7 +95,9 @@ async def test_persist_report_releases_lock_after_success(monkeypatch):
     }
     result = await ceg._persist_report(state)
 
-    assert result["execution_status"] == "DONE"
+    # P11 Review-1 P1-1：_persist_report 不再覆写 execution_status；verdict 由
+    # _confirmed_report_agent 写入 state 沿流到 main.py 决定 error/report SSE 出口。
+    assert "execution_status" not in result
     assert result["report_payload"]["version"] == 2
     assert calls == [5]
 
