@@ -1,7 +1,7 @@
 # P12 Playwright E2E 实施
 
-> 状态: 进行中
-> 上游: 伞形 §十五 Testing（两层 E2E 契约）+ §P12 验收（≥ 10 场景）+ 交接 memory p11-p12-handoff（P0 真端到端 runner 转自动化）。P11 已合 master `c656a07`（后端 941 passed / 前端 296 passed）。
+> 状态: 已完成（2026-08-31；p12-playwright 分支 5 commit：580b42b plan / 0873be7 T1 MockLLMAdapter / 4ae1610 T1.5 mock keying kind+seq / 48222f2 T2+T3+T4 frontend/e2e + 10 Contract specs / 3224a8d T5 Full specs）
+> 上游: 伞形 §十五 Testing（两层 E2E 契约）+ §P12 验收（≥ 10 场景）+ 交接 memory p11-p12-handoff（P0 真端到端 runner 转自动化）。P11 已合 master `c656a07`（后端 941 passed / 前端 296 passed）；P12 实施完成后端 **945 passed / 1 skipped / 5 warnings**、前端 vitest 301 passed + Playwright 10 Contract specs + 1 Full spec 全绿（chitchat）。
 
 ## Context
 
@@ -253,11 +253,13 @@ test('happy-path: 需求 → 确认 → 报告（Contract mock LLM）', async ({
 
 **T5 commit：** `feat(p12): Full specs 11-12 env-gated（startFullBackend + chitchat PASS）+ plan: p12-playwright`
 
-### T6 docs + CLAUDE.md §15 现状 + 索引翻转
+### T6 docs + CLAUDE.md §15 现状 + 索引翻转（commit pending）
 
-- [ ] `docs/architecture/frontend-contract.md` §现状映射加 Playwright 行。
-- [ ] `CLAUDE.md` §15 加现状描述。
-- [ ] 本 plan 落地记录 + `docs/plans/README.md` 移入已完成。
+- [x] `docs/architecture/frontend-contract.md` §现状映射补 Playwright 行 + 状态由「截至 P1」改「截至 P12」+ progress 事件族翻「已实现（P11）」。
+- [x] `CLAUDE.md` §9 Frontend Contract 现状追加 P12 增补（10 Contract specs + 2 Full specs env-gated + mock keying 语义 kind+调用序）；Phase门纪律「e2e 在 P12 前保持手动门」翻「P12 后 Contract E2E 入 CI per-PR 自动跑，Full E2E env-gated nightly/manual」。
+- [x] 本 plan 落地记录（每任务含 commit / 偏差）+ `docs/plans/README.md` 移入已完成。
+
+**T6 commit：** `docs(p12): frontend-contract 现状 + CLAUDE.md §9 + README 索引翻转（plan 落地收尾）+ plan: p12-playwright`
 
 ## Verification
 
