@@ -442,10 +442,12 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
     - FAILED:  persist_error_run — still inserts a row so version
       history shows the failed attempt; status='error'.
 
-    All three end with execution_status='DONE' so main.py can emit a
-    `report` SSE event regardless of the empty/err verdict. The actual
-    SSE error event is emitted by main.py from the FAIL/EMPTY exit, not
-    here — see _route_after_report.
+    P11 Review-1 P1-1：返回值**保留** verdict（SUCCESS / EMPTY / FAILED）—
+    main.py 读 result.execution_status 决定 SSE 出口（FAILED→error，
+    其余→report）；之前在 return 里覆盖成 "DONE" 把 FAILED 抹成 report，
+    用户收到假成功报告 + version，未走 ErrorCard。verdict 由
+    _confirmed_report_agent 写入 state，这里只 merge report_payload
+    + 持久化副作用，不动 verdict。
     """
     if state.get("report_payload") is None:
         return {"execution_status": "FAILED"}
@@ -520,9 +522,10 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
         "parent_version": row.get("parent_version"),
         "title": row.get("title") or "报告",
     }
+    # P11 Review-1 P1-1：verdict 由 _confirmed_report_agent 写入 state；本节点只 merge
+    # report_payload 副作用，不覆写 execution_status——main.py 据此决定 error/report SSE。
     return {
         "report_payload": merged,
-        "execution_status": "DONE",
     }
 
 
