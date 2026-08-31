@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from app.llm.adapter import StructuredParseError, _validate_against_schema
 
 logger = logging.getLogger(__name__)
+
+# kind 小写蛇形；seq ≥ 1。如 "sql_generate:1"、"requirement_parse:2"。
+# Fix 4：手写 fixture 时漏冒号 / 大小写错 / seq=0 都会静默成「永远 miss」——
+# 在加载时显式拒绝，让 fixture 作者立刻看到 typo。
+_FIXTURE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*:[1-9][0-9]*$")
 
 # 语义 kind → prompt 内的固定标识（各 prompt 的 system_contract 首句，P7 常量）。
 # 顺序无依赖（marker 互不为子串）；匹配用「包含」，因此 prompt 前置注入的
@@ -50,6 +56,13 @@ def _load_case(fixtures_dir: Path, case_id: str) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise MockLLMMiss(f"fixture {path} must be a dict[`kind:seq`, response]")
+    # Fix 4：key 格式校验（手写 fixture typo 早暴露，避免静默 miss）
+    for k in data:
+        if not _FIXTURE_KEY_RE.match(k):
+            raise MockLLMMiss(
+                f"fixture {path}: key {k!r} 不符合 kind:N 格式（kind 需小写蛇形如 'sql_generate'，"
+                f"seq 为 ≥1 的正整数，如 'sql_generate:1'）"
+            )
     return data
 
 

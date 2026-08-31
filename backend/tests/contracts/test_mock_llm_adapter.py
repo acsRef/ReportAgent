@@ -154,3 +154,31 @@ def test_get_chat_llm_in_real_mode_still_constructs(monkeypatch):
 
     chat = get_chat_llm()
     assert isinstance(chat, ChatOpenAI)
+
+
+# —— Fix 4：fixture key 格式校验（防手写 typo 静默 miss） ——
+
+
+def test_load_case_rejects_malformed_key(tmp_path):
+    """fixture key 必须为 kind:N（kind 小写蛇形，seq ≥ 1），否则 MockLLMMiss 早暴露。"""
+    from app.llm.mock import _load_case
+
+    # 缺冒号 → 拒
+    (tmp_path / "bad.json").write_text(json.dumps({"sqlplan1": {}}), encoding="utf-8")
+    with pytest.raises(MockLLMMiss, match="key 'sqlplan1' 不符合"):
+        _load_case(tmp_path, "bad")
+
+    # 大写 → 拒
+    (tmp_path / "upper.json").write_text(json.dumps({"SQL_Plan:1": {}}), encoding="utf-8")
+    with pytest.raises(MockLLMMiss, match="key 'SQL_Plan:1' 不符合"):
+        _load_case(tmp_path, "upper")
+
+    # seq=0 → 拒（seq 必须 ≥ 1）
+    (tmp_path / "zero.json").write_text(json.dumps({"sql_plan:0": {}}), encoding="utf-8")
+    with pytest.raises(MockLLMMiss, match="key 'sql_plan:0' 不符合"):
+        _load_case(tmp_path, "zero")
+
+    # 合法 key 通过
+    (tmp_path / "ok.json").write_text(json.dumps({"sql_plan:1": {}, "requirement_parse:12": {}}), encoding="utf-8")
+    loaded = _load_case(tmp_path, "ok")
+    assert set(loaded.keys()) == {"sql_plan:1", "requirement_parse:12"}
