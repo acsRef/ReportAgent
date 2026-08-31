@@ -54,12 +54,13 @@ ReportPaper 对 EMPTY 渲染「未找到匹配记录」带、对 FAILED 按 `err
 
 **V1 能力范围**：创建 / 查看 / 切换 / 继续调整 / 重新生成（已有能力，强化即可）。version diff / favorite / delete / compare 属 V2，非当前技术含金量核心。
 
-## 四、现状映射（截至 P1）
+## 四、现状映射（截至 P12）
 
 | 契约要素 | 现状 | 差距归属 Phase |
 |---|---|---|
 | Phase 状态机 + reducer 单写者 | `frontend/src/stores/analysisReducer.ts` + `api/confirmStream.ts` 在位 | P11 事件面整理基座 |
 | 七事件基线 | 已实现（`analysisClient.ts` + sse 解析） | — |
-| progress 事件族 | 未实现 | P11 |
+| progress 事件族 | P11 已实现（节点→kind×status 映射；前端 `wb-progress-detail` 真 trace 驱动） | — |
 | ReportVersion UI | 创建/查看/切换/调整/重新生成已有 | 强化属 P10/P11 |
 | 后台执行轮询 | SSE 解耦独立任务 + 前端 5s 轮询通知（execution-background-run） | 保留 |
+| Playwright E2E 两层（Contract mock + Full env-gated） | `frontend/e2e/` 10 Contract specs + 2 Full specs（11 chitchat PASS；12 env-gated skip in CI）；mock keying = 语义 kind + 调用序（plan T1 + T1.5） | P12 落地 |

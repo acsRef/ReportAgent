@@ -133,7 +133,7 @@ AnalysisPhase 状态机 + `analysisReducer` 单一 phase 写者 + discriminated-
 
 详见 [frontend-contract.md](docs/architecture/frontend-contract.md)。
 
-> 现状（2026-08-30 P11 后）：事件面统一为 transport→schema→dispatch 三层——`api/sse.ts parseSSEFrameRaw`（拆帧）→ `api/analysisEvents.ts parseAnalysisSSEEvent`（七事件 + trace/thinking + report wire 形态，唯一 schema 层，两流共用）→ `stores/sessionEvents.ts handleSSEEvent`（单一写者 dispatch）；confirm/adjust 后台流执行中实时推 `trace` progress 帧（`infra/execution/progress.py` 节点→kind×status 映射，progress 族不新增顶层事件类型）；泛化异常 SSE 文案走 `user_message()`（P9-5 接线）；chitchat 终态 idle + 前端闲聊泡；session resume 恢复真实 phase + busy 会话接后台轮询；ProgressCard 由真 trace 信号驱动（移除 650ms 假定时器）。Report 渲染 / EMPTY / FAILED 保持 P10 验收零改动（KPI block 无生产者，P10-3 subset 前置）。
+> 现状（2026-08-30 P11 后，2026-08-31 P12 增补）：事件面统一为 transport→schema→dispatch 三层——`api/sse.ts parseSSEFrameRaw`（拆帧）→ `api/analysisEvents.ts parseAnalysisSSEEvent`（七事件 + trace/thinking + report wire 形态，唯一 schema 层，两流共用）→ `stores/sessionEvents.ts handleSSEEvent`（单一写者 dispatch）；confirm/adjust 后台流执行中实时推 `trace` progress 帧（`infra/execution/progress.py` 节点→kind×status 映射，progress 族不新增顶层事件类型）；泛化异常 SSE 文案走 `user_message()`（P9-5 接线）；chitchat 终态 idle + 前端闲聊泡；session resume 恢复真实 phase + busy 会话接后台轮询；ProgressCard 由真 trace 信号驱动（移除 650ms 假定时器）。Report 渲染 / EMPTY / FAILED 保持 P10 验收零改动（KPI block 无生产者，P10-3 subset 前置）。**P12**：浏览器端到端 `frontend/e2e/` Playwright 工程——10 Contract specs（mock LLM + real PG，CI per-PR）+ 2 Full specs（env `REPORTAGENT_E2E=1` gate，nightly/manual）；mock keying = 语义 kind（prompt 固定 system_contract 首句分类）+ 调用序，不受日期/schema 漂移影响。
 
 ## 10. Report Contract
 
@@ -208,7 +208,7 @@ Workflow：Trigger → Brainstorm before planning（fuzzy 时走 superpowers:bra
 
 15 个 Phase 严格按序（P0 Baseline → P1 Freeze → P2 MCP → P3 Context → P4 Memory → P5 Tool → P6 LLM → P7 Prompt → P8 Agent Loop → P9 Reliability → P10 Report → P11 Frontend/SSE → P12 Playwright → P13 Langfuse → P14 Evaluation → P15 Docs/Demo）。每个 Phase 完成必须走 `代码 → Unit Test → Integration Test → Golden Case → Git Commit → 更新 CLAUDE.md 对应章节` 再进下一个；每个 Phase 另开实施 plan 并登记索引。
 
-全程回归红线：任一 Phase 落地后全量 offline suite 不回退；e2e 在 P12 前保持手动门。
+全程回归红线：任一 Phase 落地后全量 offline suite 不回退；P12 后 Contract E2E 入 CI per-PR 自动跑，Full E2E env-gated（`REPORTAGENT_E2E=1`）nightly/manual。
 
 ---
 

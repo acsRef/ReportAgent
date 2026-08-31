@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright E2E artifacts (outputDir=./e2e/artifacts；保留 README 说明命名规范)
+e2e/artifacts/test-results/
+e2e/artifacts/playwright-report/
+e2e/.e2e-vite.pid
+
+# Playwright E2E artifacts (cwd-relative，default outputDir 兼容)
+test-results/
+playwright-report/
+e2e/.e2e-vite.pid
+
+frontend/e2e/artifacts/.last-run.json
