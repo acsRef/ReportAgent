@@ -25,13 +25,14 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
-| [2026-08-31-p12-review-prep.md](2026-08-31-p12-review-prep.md) | P12 review-prep 修复：4 项加固（高：`get_chat_llm` fail-closed 防 mock 旁路 + spec 07 background-execution 加 session phase/report 落库断言；中：spec 03 retry 加 `execution_status=SUCCESS` 显式修复证据；低：mock fixture key 格式校验防 typo 静默） | 接 P12 已落地（48222f2 等 6 commit）+ review 反馈 6 项中 4 项落实，独立 4 个 fix commit + 1 个 docs commit，不动 P12 已落地主 commit |
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
 ## 已完成
 
 | Plan | 主题 | 落地 |
 |---|---|---|
+| [2026-08-31-p12-review-prep-r2.md](2026-08-31-p12-review-prep-r2.md) | P12 review 第 2 轮：MockLLM cursor scope 隔离（contextvar per-session）+ spec 05/10 命名校准 + Contract E2E 边界正式定义 + CI 报告分组 | 分支 `p12-playwright` 接 review-prep-r1 后 user 亲自 review 代码给出 1 P1 + 3 P2 + CI 报告诉求；独立 4 fix commit（`37223e1` mock cursor scope / `ab47121` spec 05 改名 / `61ec961` spec 10 文档化 / `fe8e9be` 边界定义 + CI 分组）+ 1 docs commit；backend 955 passed / 1 skipped（baseline 951 + 4 新增 scope 测试）；Playwright Contract 10/10 全绿 |
+| [2026-08-31-p12-review-prep.md](2026-08-31-p12-review-prep.md) | P12 review-prep 修复：4 项加固（高：`get_chat_llm` fail-closed 防 mock 旁路 + spec 07 background-execution 加 session phase/report 落库断言；中：spec 03 retry 加 `execution_status=SUCCESS` 显式修复证据；低：mock fixture key 格式校验防 typo 静默） | 分支 `p12-playwright` 接 P12 主实施 6 commit（48222f2 等）+ review 反馈 6 项中 4 项落实；独立 4 fix commit（`f2e415c`/`62b4ff9`/`0325cbe`/`3722637`）+ 1 docs commit（`b18565f`）+ 1 artifact setup（`a55db1f`）；backend 951 passed / 1 skipped；Playwright Contract 11/11 全绿 |
 | [2026-08-30-p12-playwright.md](2026-08-30-p12-playwright.md) | P12 实施：Playwright E2E 两层——Contract（mock LLM + real PG/MCP，CI per-PR）+ Full（real LLM/MCP/PG + REPORTAGENT_E2E=1 gate，nightly/manual）；`backend/app/llm/mock.py` MockLLMAdapter + env switch + fixture 驱动（**语义 kind + 调用序**，不受日期/schema 漂移影响）；`frontend/e2e/` Playwright 工程（playwright.config.ts + helpers + **10 Contract specs 全绿** + 2 Full specs env-gated）+ `evaluation/baseline_cases.json` 前若干例复用 | 分支 `p12-playwright`：580b42b(plan) → 0873be7(T1 MockLLMAdapter) → 4ae1610(T1.5 mock keying kind+seq) → 48222f2(T2+T3+T4 frontend/e2e + 10 Contract specs) → 3224a8d(T5 Full specs)；**10 Contract specs + 1 Full spec（chitchat）全绿**，后端 945 passed / 1 skipped / 5 warnings；落地偏差 6 项（含 env-gated 自动 skip / mock keying v2 / 两次点击 UX / failed-result 渲染为 ReportPaper error band 而非 ErrorCard / SSE body 抓 0 字节 / spec 12 真 LLM 不可控）见 plan 落地记录 |
 
 ## 已完成
