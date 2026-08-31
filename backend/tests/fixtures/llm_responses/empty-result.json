@@ -1,0 +1,23 @@
+{
+  "intent_classify:1": {"kind": "report", "confidence": 0.9, "reason": "销售额查询"},
+  "requirement_parse:1": {
+    "summary": "2024年各区域销售额",
+    "target_metrics": ["销售额"],
+    "time_range": "2024",
+    "scope": [],
+    "dimensions": ["区域"],
+    "analysis_methods": ["group_compare"],
+    "confidence": 0.9,
+    "missing_fields": [],
+    "assumptions": []
+  },
+  "sql_plan:1": {
+    "target_metric": "销售额",
+    "dimensions": ["区域"],
+    "filters": [{"field": "year", "operator": "=", "value": 2024}],
+    "aggregation": "sum",
+    "time_range": "2024",
+    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_sales", "confidence": 0.9, "reasoning": "合法零行查询"}
+  },
+  "sql_generate:1": "SELECT r.region_name AS 区域, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_region r ON f.region_id = r.region_id\nWHERE 1 = 0\nGROUP BY r.region_name"
+}

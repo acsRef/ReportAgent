@@ -177,6 +177,47 @@ test('happy-path: 需求 → 确认 → 报告（Contract mock LLM）', async ({
 
 > T1 落地记录：`mock.py` + env switch 已落（4 例测试 510 contracts 全绿 / 全量 945 passed 无回归）；**两处偏差**——① `get_llm_adapter()` 实际位于 `app/llm/__init__.py`（非 plan Files 表所写 adapter.py），env switch 按代码现实落在那里；② Mock 实现真实 `LLMAdapter` 同步接口（`generate`→str / `generate_structured`→dict / `generate_structured_safe`），未采用 Design 骨架中带 `structured_output` 的 async 签名——`get_llm_adapter()` 现有 caller 全部走真实接口，mock 必须可替换；`_prompt_key` v1 取 prompt SHA-256，同 case 重复 prompt 需不同响应时由 T3 fixtures 叠加调用序后缀。
 
+### T1.5 backend：mock keying 语义 kind+调用序（commit `4ae1610`）
+
+> 兑现 T1 落地记录最后一条——纯 SHA-256(prompt) 在 CI 每日失效（`当前日期`/`schema_text`/memory 上下文漂移）。
+
+**Files：** `backend/app/llm/mock.py` + `backend/tests/contracts/test_mock_llm_adapter.py`
+
+- [x] `_prompt_key` 重构为**语义 kind + 调用序**——kind 由 prompt 固定 system_contract 首句分类（intent_classify / requirement_parse / sql_plan / sql_generate / report_plan；6 种 marker 互不为子串，substring 匹配不受前置 context 影响）；seq 同 kind 在本 backend 进程内被调用的次数（repair：`sql_generate:1` 坏 → `sql_generate:2` 好）。
+- [x] `MockLLMMiss` 加 WARNING 日志——fixture 作者调试用，对 Contract E2E 「缺哪个 key」给出明确信号。
+- [x] T1 测试更新到 kind+seq（新增 `test_prompt_kind_maps_marker_to_kind` / `test_prompt_kind_unknown_marker_raises` / `test_mock_llm_adapter_seq_increments_per_kind`）；513 contracts passed。
+
+### T2 frontend/e2e 工程骨架（commit pending）
+
+**Files：** `frontend/e2e/{playwright.config.ts, helpers/{env,llm-mock,global-setup,global-teardown,auth,wait-for-sse,page-objects}.ts, README.md}` + `frontend/package.json`（scripts + `@playwright/test`）+ `frontend/.gitignore` + `frontend/test-results/` 不入仓。
+
+- [x] Step 1 red：占位 spec `specs/00-smoke.spec.ts`（`test('homepage loads', ...)` 期望跳转 /login）。
+- [x] Step 2 实现 `playwright.config.ts`（baseURL :3000，chromium，workers=1——Contract 每 spec 独占重启 :8100 backend mock 串行防端口冲突；globalSetup PG 验证 + 起 vite :3000 + 复用已有；globalTeardown 收尾）+ helpers 七个 + `auth.ts` 注入 `ragent_auth`（参考 `.e2elogs/ui_pagination.mjs`）+ `page-objects.ts` WorkbenchPage 门面（sendQuery/expectRequirementCard/confirmRequirement/expectReport 等原子）。
+- [x] Step 3 green + smoke spec 通过。
+
+> T2 落地记录：**两处偏差**——① `npm playwright install chromium` 国内 CDN 卡死，切 npmmirror 镜像（PLAYWRIGHT_DOWNLOAD_HOST）后 700MB 安装成功；② Playwright config 在 `frontend/e2e/` 不被 cwd 自动发现，需 `npx playwright test --config e2e/playwright.config.ts`（package.json scripts 已加）。
+
+### T3 Contract specs 1-5（happy / clarification / retry / empty / failed）
+
+**Files：** `frontend/e2e/specs/{01..05}-*.spec.ts` + `backend/tests/fixtures/llm_responses/{happy-path,clarification,retry,empty-result,failed-result}.json`
+
+- [x] Step 1 red：5 份 spec + 5 份 fixture JSON。
+- [x] Step 2 实现：每 spec `test.beforeAll({timeout:120_000})` 独占起 mock backend（seq 归零——mock 是进程级 seq counter，多 session 共享 backend 会让 key :2 错位）；fixture key 全部命中验证（5 例手探过 happy-path 完整 SSE，确认 trace 帧/真实 PG 行/报告 v1 落库）。
+- [x] Step 3 green + 5 specs 全过。
+
+> T3 落地记录：**三处偏差**——① **UX 是两次点击**：`补充完成，查看确认` 仅本地置 complete（`handleReview` 不调 `onConfirm`），需再点 `确认并生成报告` 触发 PATCH+confirm；spec 02 起步仅一次点击时无 PATCH/confirm 触发（修正）；② **`/chat` requirement parse 在 MCP 挂时也走真实 `intent_classify:1` LLM**——dict_hit=False 短路到 `_llm_classify`，首次 fixture 必须含 `intent_classify:1`（否则 INTERNAL_ERROR）；③ **failed-result 的失败渲染不是 ErrorCard 而是 ReportPaper 错误 band**（`.wb-finding` 执行失败）——主链在确认失败时 Persist FAILED report version + emit `report` 事件，ReportPaper 用历史 FAILED 版本渲染错误带（spec 05 已改 `.wb-finding` 断言）。
+
+### T4 Contract specs 6-10（version / background / recovery / memory / trace）
+
+**Files：** `frontend/e2e/specs/{06..10}-*.spec.ts` + `backend/tests/fixtures/llm_responses/{report-version,memory-multiturn,background-execution}.json`
+
+- [x] Step 1 red + Step 2 实现按 T3 模式。
+- [x] Step 2 green + 5 specs 全过 → 10 Contract specs 全绿。
+
+> T4 落地记录：**四处偏差**——① 调整（adjust）走完整 confirmed graph 复跑 plan/generate/report（不重跑 requirement），fixture `report-version.json` 含 `sql_plan:2`/`sql_generate:2`（产品维度 SQL JOIN dim_product）/`report_plan:2`；② `background-execution` fixture 用 `pg_sleep(3)` 拉长 generating 窗口，使停止按钮可确定性点击（避免快速 mock 下 stop 按钮已被流程终结）；③ `page.on('response')` + `resp.text()`/`resp.body()` 在 SSE chunked 下返回 0 字节（Playwright 不捕获 chunked 流），trace-progress 改 DOM 端捕获 `.wb-progress-detail` 文本（每 50ms 轮询累积），符合 P11 spec「ProgressCard 真 trace 驱动」；④ `session-recovery` 用 happy-path fixture 完整跑一遍 + `page.reload()` + 选第一条 `.wb-session-main`，验证报告版本恢复（busy→report_ready polling 路径与 07 background-execution 互补）。
+
+**T2+T3+T4 一起 commit（commit message）：** `feat(p12): frontend/e2e Playwright + 10 Contract specs 全绿（mock LLM + real PG）+ plan: p12-playwright`
+
 ### T2 frontend/e2e 工程骨架（F1/F2/F7）
 
 **Files:** `frontend/e2e/playwright.config.ts`、`frontend/e2e/helpers/{auth,page-objects,wait-for-sse,llm-mock}.ts`、`frontend/e2e/README.md`、`frontend/package.json`（scripts + dep if missing）。

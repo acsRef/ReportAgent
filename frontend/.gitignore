@@ -22,3 +22,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright E2E artifacts
+e2e/.e2e-vite.pid
+e2e/test-results/
+e2e/playwright-report/
+
+# Playwright E2E artifacts (cwd-relative)
+test-results/
+playwright-report/
+e2e/.e2e-vite.pid

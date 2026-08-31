@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from app.llm.adapter import StructuredParseError, _validate_against_schema
+
+logger = logging.getLogger(__name__)
 
 # 语义 kind → prompt 内的固定标识（各 prompt 的 system_contract 首句，P7 常量）。
 # 顺序无依赖（marker 互不为子串）；匹配用「包含」，因此 prompt 前置注入的
@@ -114,6 +117,7 @@ class MockLLMAdapter:
         self._counters[kind] = seq
         key = f"{kind}:{seq}"
         if key not in self._responses:
+            logger.warning("MockLLMMiss case=%s key=%s", self._case_id, key)
             raise MockLLMMiss(
                 f"case {self._case_id}: no fixture for `{key}`（kind={kind}）"
             )
