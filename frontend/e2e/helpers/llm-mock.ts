@@ -72,3 +72,28 @@ export async function stopBackend(): Promise<void> {
     setTimeout(done, 3_000)
   })
 }
+
+/**
+ * Full 层后端：真实 LLM（MiniMax）+ 真实 MCP（ragent-py）。
+ * 走 .env 配置；由 spec 顶部 `test.skip(!process.env.REPORTAGENT_E2E)` 守门（CI 自动 skip）。
+ */
+export async function startFullBackend(): Promise<void> {
+  await stopBackend()
+  const env = {
+    ...process.env,
+    ...loadDotEnv(),
+    APP_ENV: process.env.APP_ENV ?? 'development',
+    ALLOW_INSECURE_DEFAULT_AUTH: process.env.ALLOW_INSECURE_DEFAULT_AUTH ?? '1',
+  }
+  backend = spawn(PYTHON, ['-m', 'uvicorn', 'app.main:app', '--port', '8100'], {
+    cwd: BACKEND_DIR,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  backend.stdout?.on('data', (d) => process.stderr.write(`[backend:full] ${d.toString()}`))
+  backend.stderr?.on('data', (d) => process.stderr.write(`[backend:full] ${d.toString()}`))
+  backend.on('exit', (code, sig) => {
+    process.stderr.write(`[backend:full] exited code=${code} sig=${sig}\n`)
+  })
+  await waitForHealth(`${BACKEND_URL}/health`)
+}
