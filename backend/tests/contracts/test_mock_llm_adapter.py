@@ -7,22 +7,49 @@ import pytest
 
 pytestmark = pytest.mark.contracts
 
-from app.llm.mock import MockLLMAdapter, MockLLMMiss, _prompt_key
+from app.llm.mock import MockLLMAdapter, MockLLMMiss, prompt_kind
+
+# 语义 kind marker 取自各 prompt 的 system_contract 首句（app/agent/prompts/），
+# 与 mock.py KIND_MARKERS 保持同步。测试用「含 marker 的最小 prompt」触发分类。
+_MARKERS = {
+    "intent_classify": "你是 ReportAgent 的意图分类器。",
+    "requirement_parse": "你是 ReportAgent 需求解析器。",
+    "sql_plan": "你是 ReportAgent SQL 规划器。",
+    "sql_generate": "你是 ReportAgent SQL 生成专家。",
+    "report_plan": "你是 ReportAgent 报告规划师。",
+}
+
+# 各 kind 的 fixture key 前缀（kind:seq；seq 从 1 起，按调用顺序递增）
+_KEYS = {kind: f"{kind}:1" for kind in _MARKERS}
 
 
 def _write_fixture(tmp_path: Path, case: str, mapping: dict) -> None:
-    """写一份 `{prompt_key: response}` 的 mock fixture 文件。"""
+    """写一份 `{kind:seq: response}` 的 mock fixture 文件。"""
     (tmp_path / f"{case}.json").write_text(json.dumps(mapping), encoding="utf-8")
+
+
+def test_prompt_kind_maps_marker_to_kind():
+    """prompt 按固定 marker 分类，不受前置动态内容影响。"""
+    assert prompt_kind(_MARKERS["requirement_parse"] + " 动态 user_query/schema") == "requirement_parse"
+    assert prompt_kind(_MARKERS["sql_generate"]) == "sql_generate"
+    # list 形态（chat messages）也归类
+    assert prompt_kind([{"role": "user", "content": _MARKERS["sql_generate"]}]) == "sql_generate"
+
+
+def test_prompt_kind_unknown_marker_raises():
+    """无法归类的 prompt 明确失败，不静默。"""
+    with pytest.raises(MockLLMMiss):
+        prompt_kind("随意文本，不属任何已知 prompt")
 
 
 def test_mock_llm_adapter_loads_case(tmp_path):
     """fixture 命中 → generate 返回对应文案（不是真实 LLM）。"""
-    prompt = "requirement: 2024 年各区域销售额排名"
-    _write_fixture(tmp_path, "happy-path", {_prompt_key(prompt): "mock 需求卡片 JSON"})
+    prompt = _MARKERS["requirement_parse"] + " 2024 年各区域销售额排名"
+    _write_fixture(tmp_path, "happy-path", {_KEYS["requirement_parse"]: {"summary": "mock 需求卡"}})
 
     adapter = MockLLMAdapter(tmp_path, "happy-path")
 
-    assert adapter.generate(prompt) == "mock 需求卡片 JSON"
+    assert adapter.generate(prompt) == {"summary": "mock 需求卡"}
 
 
 def test_mock_llm_adapter_misses_raises(tmp_path):
@@ -31,7 +58,27 @@ def test_mock_llm_adapter_misses_raises(tmp_path):
     adapter = MockLLMAdapter(tmp_path, "empty")
 
     with pytest.raises(MockLLMMiss):
-        adapter.generate("no such prompt")
+        adapter.generate(_MARKERS["requirement_parse"] + " x")
+
+
+def test_mock_llm_adapter_seq_increments_per_kind(tmp_path):
+    """同一 kind 逐次调用 seq 递增：repair 的 sql_generate:1 → :2 用不同响应。"""
+    prompt = _MARKERS["sql_generate"] + " bad"
+    _write_fixture(
+        tmp_path,
+        "repair",
+        {
+            "sql_generate:1": "SELECT bad_sql",   # 第 1 次坏
+            "sql_generate:2": "SELECT 1 AS ok",   # repair 后第 2 次好
+        },
+    )
+    adapter = MockLLMAdapter(tmp_path, "repair")
+
+    assert adapter.generate(prompt) == "SELECT bad_sql"
+    assert adapter.generate(prompt) == "SELECT 1 AS ok"
+    # 第 3 次越界 → 明确失败
+    with pytest.raises(MockLLMMiss):
+        adapter.generate(prompt)
 
 
 def test_mock_llm_adapter_structured_output(tmp_path):
@@ -42,8 +89,8 @@ def test_mock_llm_adapter_structured_output(tmp_path):
         status: str
         summary: str
 
-    prompt = "report_v2 报告生成"
-    _write_fixture(tmp_path, "report", {_prompt_key(prompt): {"status": "ok", "summary": "s"}})
+    prompt = _MARKERS["report_plan"]
+    _write_fixture(tmp_path, "report", {_KEYS["report_plan"]: {"status": "ok", "summary": "s"}})
     adapter = MockLLMAdapter(tmp_path, "report")
 
     out = adapter.generate_structured(prompt, schema=_ReportSchema)

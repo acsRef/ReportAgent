@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,22 +7,37 @@ from typing import Any
 
 from app.llm.adapter import StructuredParseError, _validate_against_schema
 
+# 语义 kind → prompt 内的固定标识（各 prompt 的 system_contract 首句，P7 常量）。
+# 顺序无依赖（marker 互不为子串）；匹配用「包含」，因此 prompt 前置注入的
+# assembled_context / 动态日期 / schema_text 漂移都不影响分类——这是 Contract
+# fixture 在 CI 逐日稳定的关键（纯 SHA-256(prompt) 会因「当前日期」每日失效）。
+KIND_MARKERS: list[tuple[str, str]] = [
+    ("intent_classify", "你是 ReportAgent 的意图分类器。"),
+    ("requirement_parse", "你是 ReportAgent 需求解析器。"),
+    ("sql_intent_analyze", "你是 ReportAgent 意图分析器。"),
+    ("sql_plan", "你是 ReportAgent SQL 规划器。"),
+    ("sql_generate", "你是 ReportAgent SQL 生成专家。"),
+    ("report_plan", "你是 ReportAgent 报告规划师。"),
+]
+
 
 class MockLLMMiss(Exception):
-    """mock fixture 未命中（或 LLM_MOCK_* env 缺失）时明确失败——mock 不静默兜底。
+    """mock fixture 未命中（或 LLM_MOCK_* env 缺失 / prompt 无法归类）时明确失败。
 
     Contract E2E 需要在缺失 fixture 时立刻暴露，而不是让 mock 返回兜底文案污染断言。
     """
 
 
-def _prompt_key(prompt: str | list) -> str:
-    """prompt → 稳定 key（语义哈希）。
-
-    v1 取 prompt 自身的 SHA-256（fixture 文件即按此 key 匹配）。同一 case 内多次相同
-    prompt 需要不同响应时，由 T3 fixtures 阶段再叠加调用序后缀——T1 不提前做该机制。
-    """
+def prompt_kind(prompt: str | list) -> str:
+    """prompt → 语义 kind（固定 marker 匹配，支持 list 形态的 chat messages）。"""
     text = prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    for kind, marker in KIND_MARKERS:
+        if marker in text:
+            return kind
+    raise MockLLMMiss(
+        f"无法从 prompt 识别语义 kind（no marker matched）。KIND_MARKERS: "
+        f"{[k for k, _ in KIND_MARKERS]}"
+    )
 
 
 def _load_case(fixtures_dir: Path, case_id: str) -> dict[str, Any]:
@@ -32,7 +46,7 @@ def _load_case(fixtures_dir: Path, case_id: str) -> dict[str, Any]:
         raise MockLLMMiss(f"no fixture file for case {case_id}: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        raise MockLLMMiss(f"fixture {path} must be a dict[prompt_key, response]")
+        raise MockLLMMiss(f"fixture {path} must be a dict[`kind:seq`, response]")
     return data
 
 
@@ -40,12 +54,17 @@ class MockLLMAdapter:
     """Fixture 驱动的假 LLM，接口对齐 LLMAdapter（generate / generate_structured）。
 
     供 Contract E2E 在无真实 provider key 时使用：读 `{fixtures_dir}/{case_id}.json`
-    （dict[prompt_key, response]）。未命中一律抛 MockLLMMiss。
+    （dict[`kind:seq`, response]）。key 由 prompt 的语义 kind + 调用序构成：
+      - 语义 kind 来自 prompt 固定 marker（不受日期/schema 漂移影响）
+      - seq 是同一 kind 在本 backend 进程内被调用的次数（repair：sql_generate:1 → :2）
+    未命中一律抛 MockLLMMiss。fixture 值为 dict 时原样返回（caller 均 safe_json_parse
+    兜底 dict）；为 str 时返回 str（sql_generate 的 SQL 文本）。
     """
 
     def __init__(self, fixtures_dir: Path, case_id: str) -> None:
         self._case_id = case_id
         self._responses = _load_case(fixtures_dir, case_id)
+        self._counters: dict[str, int] = {}
 
     @classmethod
     def from_env(cls) -> "MockLLMAdapter":
@@ -57,12 +76,10 @@ class MockLLMAdapter:
             )
         return cls(Path(fixtures_dir), case_id)
 
-    def generate(self, prompt: str | list, **kwargs: Any) -> str:
-        resp = self._lookup(prompt)
-        if isinstance(resp, str):
-            return resp
-        # fixture 允许以 dict 表达 generate 的文本响应之外形态，序列化为字符串文本
-        return json.dumps(resp, ensure_ascii=False)
+    def generate(self, prompt: str | list, **kwargs: Any) -> Any:
+        # 返回 fixture 原值：dict 由 caller 的 `isinstance(raw, str) else raw` 直接吃，
+        # str（SQL 文本）也会原样返回。mock 不需要 json.dumps 序列化。
+        return self._lookup(prompt)
 
     def generate_structured(
         self,
@@ -73,7 +90,7 @@ class MockLLMAdapter:
         resp = self._lookup(prompt)
         if not isinstance(resp, dict):
             raise StructuredParseError(
-                f"case {self._case_id}: fixture for key {_prompt_key(prompt)} "
+                f"case {self._case_id}: fixture for key {prompt_kind(prompt)} "
                 "must be dict for generate_structured"
             ) from None
         if schema is None:
@@ -92,7 +109,12 @@ class MockLLMAdapter:
         return self.generate_structured(prompt, schema=schema, **kwargs)
 
     def _lookup(self, prompt: str | list) -> Any:
-        key = _prompt_key(prompt)
+        kind = prompt_kind(prompt)
+        seq = self._counters.get(kind, 0) + 1
+        self._counters[kind] = seq
+        key = f"{kind}:{seq}"
         if key not in self._responses:
-            raise MockLLMMiss(f"case {self._case_id}: no fixture for prompt key {key}")
+            raise MockLLMMiss(
+                f"case {self._case_id}: no fixture for `{key}`（kind={kind}）"
+            )
         return self._responses[key]
