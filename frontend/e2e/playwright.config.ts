@@ -11,7 +11,8 @@ export default defineConfig({
   testDir: './specs',
   // 失败用例的 trace + 截图 + DOM snapshot 落到项目内固定目录，方便 review
   // 直接 `git checkout e2e/artifacts/<project>/<spec>/test-failed-1.png` 查看
-  outputDir: './e2e/artifacts',
+  // outputDir 相对 config 文件位置（frontend/e2e/），所以是 './artifacts'
+  outputDir: './artifacts',
   timeout: 120_000,
   expect: { timeout: 30_000 },
   fullyParallel: false,

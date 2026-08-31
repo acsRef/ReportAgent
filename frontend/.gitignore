@@ -32,3 +32,5 @@ e2e/.e2e-vite.pid
 test-results/
 playwright-report/
 e2e/.e2e-vite.pid
+
+frontend/e2e/artifacts/.last-run.json
