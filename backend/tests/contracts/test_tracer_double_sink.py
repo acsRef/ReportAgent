@@ -75,3 +75,20 @@ def test_tracer_redacts_user_query_at_construction():
     assert "13800138000" not in t.user_query
     assert "***" in t.user_query
     assert t._trace.user_query == t.user_query
+
+
+def test_tracer_handle_output_span_redacts_pii():
+    """_handle_output_span 把节点输出在写入 span.input 前 redact（PII sink coverage 全）。"""
+    from app.infra.trace.sdk import _handle_output_span
+
+    t = Tracer(trace_id="t-out")
+    with t.span("data_agent"):
+        _handle_output_span(t, {
+            "user_query": "手机 13800138000",
+            "nested": {"id_card": "110101199001011234"},
+        })
+    out_span = next(s for s in t._spans if s.span_name == "data_agent_output")
+    assert out_span.input
+    flat = str(out_span.input)
+    assert "13800138000" not in flat
+    assert "110101199001011234" not in flat

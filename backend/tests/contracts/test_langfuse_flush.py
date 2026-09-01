@@ -117,7 +117,7 @@ async def test_flush_to_langfuse_redacts_pii_in_inputs(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_flush_to_langfuse_writes_decisions_metadata(monkeypatch):
-    """P8 D5 Diagnose 决策写入 Langfuse observation metadata（code comment 承诺 P13 落库）。"""
+    """P8 D5 Diagnose 决策按 span_id 写入对应 Langfuse observation metadata（code comment 承诺 P13 落库）。"""
     mock_langfuse = _mock_langfuse()
     monkeypatch.setattr(
         "app.observability.langfuse_flush.get_langfuse_client",
@@ -126,10 +126,111 @@ async def test_flush_to_langfuse_writes_decisions_metadata(monkeypatch):
 
     await flush_to_langfuse(_make_tracer(), langfuse_config=_CFG)
 
+    # _make_tracer 的 decision span_id="sp-1" 对应 span "intent" → decisions 落到该 span metadata
+    span_calls = [
+        c for c in mock_langfuse.start_as_current_observation.call_args_list
+        if c.kwargs.get("name") == "intent"
+    ]
+    assert span_calls, "decision 应挂在 span observation metadata 而非 root"
+    md = span_calls[0].kwargs.get("metadata") or {}
+    assert "decisions" in md
+    assert any(d.get("name") == "diagnose_route" for d in md["decisions"])
+
+
+@pytest.mark.asyncio
+async def test_flush_llm_call_attached_under_parent_span(monkeypatch):
+    """LLMCall.span_id 决定 Langfuse parent-child：generation 嵌套于对应 span observation。
+
+    P13 Review P1：原实现把 llm_call 平铺在 root 下，丢掉 Agent→LLM causal attribution。
+    """
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    await flush_to_langfuse(_make_tracer(), langfuse_config=_CFG)
+
+    names = [c.kwargs.get("name") for c in mock_langfuse.start_as_current_observation.call_args_list]
+    # 顺序：report_agent_run (root) → intent (span) → llm_call (nested)
+    assert names[0] == "report_agent_run"
+    assert names.index("llm_call") > names.index("intent"), (
+        f"llm_call 应嵌套于 span 'intent' 之后，但调用顺序是 {names}"
+    )
+
+    # latency_ms 必须落 Langfuse metadata（P13 验收：latency 可分析）
+    llm_kwargs = [
+        c.kwargs for c in mock_langfuse.start_as_current_observation.call_args_list
+        if c.kwargs.get("name") == "llm_call"
+    ][0]
+    assert llm_kwargs.get("metadata", {}).get("latency_ms") == 1500
+
+
+@pytest.mark.asyncio
+async def test_flush_multiple_decisions_aggregated_and_redacted(monkeypatch):
+    """同一 span 下多个 decision 聚合为 list + PII redact 防覆盖与脱敏漏。"""
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    from app.infra.trace.models import Span as SpanModel
+
+    tracer = MagicMock()
+    tracer.trace_id = "t-agg"
+    tracer.session_id = "s-agg"
+    tracer.user_id = 1
+    tracer.user_query = "查 13800138000 的订单"
+    tracer._spans = [SpanModel(trace_id="t-agg", span_id="sp-x", span_name="sql_agent", input=None)]
+    tracer._llm_calls = []
+    tracer._prompt_versions = []
+    tracer._decisions = [
+        {"span_id": "sp-x", "name": "sql_retry", "reason": "手机 13800138000"},
+        {"span_id": "sp-x", "name": "sql_repair", "reason": "电话 13900139000"},
+    ]
+
+    await flush_to_langfuse(tracer, langfuse_config=_CFG)
+
+    span_calls = [
+        c for c in mock_langfuse.start_as_current_observation.call_args_list
+        if c.kwargs.get("name") == "sql_agent"
+    ]
+    assert span_calls
+    md = span_calls[0].kwargs.get("metadata") or {}
+    decisions = md.get("decisions", [])
+    assert len(decisions) == 2, "两个 decision 必须都保留（不能覆盖）"
+    joined = str(decisions)
+    assert "13800138000" not in joined, "decision PII 必须 redact"
+    assert "13900139000" not in joined
+
+
+@pytest.mark.asyncio
+async def test_flush_unmatched_decisions_and_pvs_to_root(monkeypatch):
+    """无 span_id 的 decision / prompt_version → 聚合写到 root metadata（via update_current_span）。"""
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    tracer = MagicMock()
+    tracer.trace_id = "t-orph"
+    tracer.session_id = "s-orph"
+    tracer.user_id = 1
+    tracer.user_query = None
+    tracer._spans = []
+    tracer._llm_calls = []
+    tracer._prompt_versions = [{"span_id": "", "name": "orphan_p", "version": 1}]
+    tracer._decisions = [{"span_id": "", "name": "orphan_d", "reason": "无归属"}]
+
+    await flush_to_langfuse(tracer, langfuse_config=_CFG)
+
     update_calls = mock_langfuse.update_current_span.call_args_list
     assert update_calls
-    metas = [c.kwargs.get("metadata") for c in update_calls]
-    assert any(isinstance(m, dict) and m.get("decision") for m in metas)
+    md = update_calls[0].kwargs.get("metadata") or {}
+    assert "decisions" in md and len(md["decisions"]) == 1
+    assert "prompt_versions" in md and len(md["prompt_versions"]) == 1
 
 
 @pytest.mark.asyncio
