@@ -158,7 +158,7 @@ Report Agent 输出结构化 ReportSpec（非自由 Markdown）；三层 Validat
 
 架构：`Agent Runtime → Observability Adapter → { PostgreSQL Trace, Langfuse }`。Span 字段明细（trace metadata / LLM generation / tool / MCP / SQL / repair）、PII Redaction 统一做在 Adapter 前一层、所有 timeout 必须产生 span。Metrics 记 Langfuse + 本地；**不引入 Prometheus/Grafana**。
 
-> 现状：PG trace（infra/trace/repository.py 经共享 asyncpg pool）+ observability API 在位；Langfuse 接入与 redaction 层 P13。
+> 现状（2026-09-01 P13 落地）：tracer 双 sink（PG `infra/trace/repository.py` + Langfuse SDK `app/observability/langfuse_flush.py`，env `LANGFUSE_PUBLIC_KEY`+`LANGFUSE_SECRET_KEY` 设时启用，否则仅 PG 路径）+ PII redaction 层（`app/observability/redaction.py` 递归 mask dict/list/str，复用 `app/utils/pii.py` mask_pii；user_query / span input / output 全部入口 mask）+ Prompt version + Model 字段落 Langfuse metadata。LangChain CallbackHandler 未引入（adapter P6 锁定）；Langfuse SDK v4（OTel-based，`start_as_current_observation` + `trace_context` 钉 trace_id 与 PG 关联）。详见 plan `2026-09-01-p13-langfuse.md`。
 
 ## 13. Legacy Policy
 
