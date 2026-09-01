@@ -14,6 +14,8 @@ from typing import Any, Callable, Generator, Optional
 
 from app.infra.trace.models import LLMCall, Span, Trace
 from app.infra.trace.repository import TraceRepository
+from app.observability.langfuse_config import LangfuseConfig
+from app.observability.redaction import redact, redact_user_query
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +44,17 @@ class Tracer:
                  user_query: Optional[str] = None, user_id: Optional[int] = None):
         self.trace_id = trace_id
         self.session_id = session_id
-        self.user_query = user_query
+        # P13: user_query 入口统一 PII mask（PG / Langfuse 落库的都是脱敏值）。
+        # 注意: None 必须保持 None——A-3 无主创建后再 backfill 的身份补齐依赖
+        # `self.user_query is None` 判定，不能把 None 当作 "" 短路掉回填。
+        self.user_query = redact_user_query(user_query) if user_query is not None else None
         self.user_id = user_id
         self._start_time = datetime.now()
         self._trace = Trace(
             trace_id=trace_id,
             session_id=session_id,
             user_id=user_id,
-            user_query=user_query,
+            user_query=self.user_query,  # 已 mask
             status="RUNNING",
             start_time=self._start_time,
         )
@@ -68,8 +73,8 @@ class Tracer:
             self.session_id = session_id
             self._trace.session_id = session_id
         if user_query is not None and self.user_query is None:
-            self.user_query = user_query
-            self._trace.user_query = user_query
+            self.user_query = redact_user_query(user_query)
+            self._trace.user_query = self.user_query
         if user_id is not None and self.user_id is None:
             self.user_id = user_id
             self._trace.user_id = user_id
@@ -154,14 +159,15 @@ class Tracer:
         return self._stack[-1].span_id if self._stack else None
 
     async def flush(self):
-        """落库 trace/spans，但绝不让 DB 卡住挂死调用方。
+        """双 sink（PG + Langfuse）落库 trace/spans，但绝不让 DB/网络卡住挂死调用方。
 
         整体包一层 `asyncio.wait_for` 总超时：超时或任何异常都只告警、不重抛，
         让 SSE 主流程继续；`finally` 兜底释放 _local 桶（C-4）。
+        Langfuse 是否启用由 _flush 内 env 探测决定（P13，未设 LANGFUSE_* 仅 PG）。
         """
         try:
             try:
-                await asyncio.wait_for(self._flush_db(), timeout=_FLUSH_TIMEOUT)
+                await asyncio.wait_for(self._flush(), timeout=_FLUSH_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.warning(
                     "trace flush timed out after %ss for trace_id=%s",
@@ -173,23 +179,43 @@ class Tracer:
             # C-4: 无论落库成败都要释放桶，否则异常路径下 tracer 永驻 _local → 内存泄露。
             _local.pop(self.trace_id, None)
 
-    async def _flush_db(self):
-        """逐操作落库；同一操作失败不拖垮其余。整体由 flush 的 wait_for 兜底超时。"""
-        repo = TraceRepository()
+    async def _flush(self):
+        """双 sink 内部入口：PG 与 Langfuse 独立 best-effort，互不阻塞。"""
         try:
-            await repo.save_trace(self._trace)
+            await _flush_pg(self)
         except Exception as exc:
-            logger.warning("save_trace failed for trace_id=%s: %s", self.trace_id, exc)
-        for llm_call in self._llm_calls:
-            try:
-                await repo.save_llm_call(llm_call)
-            except Exception as exc:
-                logger.warning("save_llm_call failed for trace_id=%s: %s", self.trace_id, exc)
-        for span in self._spans:
-            try:
-                await repo.save_span(span)
-            except Exception as exc:
-                logger.warning("save_span failed for trace_id=%s: %s", self.trace_id, exc)
+            # _flush_pg 对单操作已 catch，这里的兜底防 repo 构造等意外错误。
+            logger.warning("trace pg sink failed for trace_id=%s: %s", self.trace_id, exc)
+        if LangfuseConfig().enabled:
+            await _flush_langfuse(self)
+
+
+async def _flush_pg(tracer: "Tracer") -> None:
+    """PG sink：原 _flush_db 逻辑（module-level 便于测试 patch）。单点失败不拖垮其余。"""
+    repo = TraceRepository()
+    try:
+        await repo.save_trace(tracer._trace)
+    except Exception as exc:
+        logger.warning("save_trace failed for trace_id=%s: %s", tracer.trace_id, exc)
+    for llm_call in tracer._llm_calls:
+        try:
+            await repo.save_llm_call(llm_call)
+        except Exception as exc:
+            logger.warning("save_llm_call failed for trace_id=%s: %s", tracer.trace_id, exc)
+    for span in tracer._spans:
+        try:
+            await repo.save_span(span)
+        except Exception as exc:
+            logger.warning("save_span failed for trace_id=%s: %s", tracer.trace_id, exc)
+
+
+async def _flush_langfuse(tracer: "Tracer") -> None:
+    """Langfuse sink：env-gated（_flush 已 gate，此处再防御直接调用）。失败 best-effort。"""
+    cfg = LangfuseConfig()
+    if not cfg.enabled:
+        return
+    from app.observability.langfuse_flush import flush_to_langfuse
+    await flush_to_langfuse(tracer, langfuse_config=cfg)
 
 
 def get_tracer(trace_id: str, session_id: Optional[str] = None,
@@ -249,19 +275,19 @@ def _handle_output_span(tracer: Tracer, result: Any):
         if isinstance(r[k], (list, dict)) and len(str(r[k])) > 200:
             r[k] = f"<{type(r[k]).__name__}: {len(str(r[k]))} chars>"
     with tracer.span(f"{tracer._stack[-1].span_name if tracer._stack else 'node'}_output",
-                     span_type="DATA", input=r):
+                     span_type="DATA", input=redact(r)):  # P13: PII mask
         pass
 
 
 def _summarize_state(state: dict) -> dict:
-    summary: dict[str, Any] = {}
+    raw: dict[str, Any] = {}
     for k, v in state.items():
         if k == "user_query":
-            summary[k] = v
+            raw[k] = v
         elif isinstance(v, (str, int, float, bool, type(None))):
-            summary[k] = v
+            raw[k] = v
         elif isinstance(v, dict) and len(str(v)) > 100:
-            summary[k] = f"<dict: {len(str(v))} chars>"
+            raw[k] = f"<dict: {len(str(v))} chars>"
         elif isinstance(v, list):
-            summary[k] = f"<list: {len(v)} items>"
-    return summary
+            raw[k] = f"<list: {len(v)} items>"
+    return redact(raw)  # P13: user_query 等字符串统一 PII mask
