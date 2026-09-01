@@ -206,3 +206,53 @@ def test_generate_structured_safe_parser_fallback_on_parse_failure(monkeypatch):
         adapter.generate_structured_safe("prompt")
     # 又多调用了 2 次(主路径 + 兜底 generate),共 4 次
     assert fake_llm.invoke.call_count == 4
+
+
+def test_llm_adapter_generate_records_input_output_to_tracer(monkeypatch):
+    """LLMAdapter.generate() → Tracer.add_llm_call → LLMCall.input/output 链路。
+
+    P13 Review 锁住：adapter → tracer 的 redact(prompt) / redact(strip_think_tags(content)) 透传，
+    防未来 caller 把 LLM input/output 丢掉（导致 Langfuse generation 空白）。
+    """
+    from unittest.mock import MagicMock
+    from app.llm.adapter import LLMAdapter, strip_think_tags
+    from app.observability.redaction import redact
+    from app.infra.trace import sdk
+
+    cfg = LLMConfig()
+    adapter = LLMAdapter(cfg)
+
+    # fake LLM response（含 think 标签 + 手机号 PII）
+    fake_content = "<think>hidden</think>actual response about 手机 13800138000"
+    fake_resp = MagicMock()
+    fake_resp.content = fake_content
+    fake_resp.usage_metadata = {"input_tokens": 11, "output_tokens": 22}
+
+    # patch _chat 让 adapter 不真的连 LLM；patch invoke_with_retry 跳过重试包装
+    mock_chat = MagicMock()
+    mock_chat.invoke.return_value = fake_resp
+    monkeypatch.setattr(adapter, "_chat", lambda **kw: mock_chat)
+    monkeypatch.setattr("app.llm.adapter.invoke_with_retry", lambda fn, **kw: fn())
+
+    t = sdk.Tracer(trace_id="t-adapter")
+    token = sdk._current_tracer.set(t)
+    try:
+        prompt = "Query about 13800138000"
+        text_out = adapter.generate(prompt)
+    finally:
+        sdk._current_tracer.reset(token)
+
+    # adapter 仍返回原文（接口契约不变）
+    assert text_out  # strip_think_tags 后的实际响应
+    # 关键契约：LLMCall.input/output 都已 redact 落 tracer
+    assert t._llm_calls, "adapter.generate 应记 llm_call"
+    lc = t._llm_calls[-1]
+    assert lc.input is not None and lc.output is not None
+    # PII 已 redact（手机号必须被 mask）
+    assert "13800138000" not in str(lc.input)
+    assert "13800138000" not in str(lc.output)
+    # think 标签已 strip
+    assert "hidden" not in str(lc.output)
+    # 精确等于：adapter 用 redact(prompt)/redact(text) 写入
+    assert lc.input == redact(prompt)
+    assert lc.output == redact(strip_think_tags(fake_content))

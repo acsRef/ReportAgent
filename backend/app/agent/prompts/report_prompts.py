@@ -56,6 +56,9 @@ def build_report_plan_prompt(
     row_count: int,
     tools_block: str,
 ) -> str:
+    from app.infra.trace.sdk import record_prompt_version
+
+    record_prompt_version(REPORT_PLAN_META["name"], REPORT_PLAN_META["version"])
     sections = [
         REPORT_PLAN_V1["system_contract"],
         REPORT_PLAN_V1["role"],
