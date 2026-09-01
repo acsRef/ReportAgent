@@ -37,6 +37,18 @@ def current_tracer() -> Optional["Tracer"]:
     return _current_tracer.get()
 
 
+def record_prompt_version(name: str, version: int | str) -> None:
+    """P7 D3 + P13：build_xxx_prompt 出口统一记录 prompt 版本到当前 tracer。
+
+    由各 prompt builder 在组装 prompt 前调用；Langfuse 双 sink flush 时把
+    _prompt_versions 写进 observation metadata（prompt version 可追踪）。
+    无当前 tracer 上下文（纯函数 / 工具路径）静默跳过。
+    """
+    tracer = _current_tracer.get()
+    if tracer is not None:
+        tracer.add_prompt_version(name, version)
+
+
 class Tracer:
     """Accumulates trace/spans in memory; caller must await flush() at the end."""
 

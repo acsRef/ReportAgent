@@ -53,6 +53,9 @@ INTENT_CLASSIFY_META: dict[str, Any] = {
 
 def build_intent_classify_prompt(user_query: str) -> str:
     """组装 6 段 + 注入 user_query。返回完整 prompt string。"""
+    from app.infra.trace.sdk import record_prompt_version
+
+    record_prompt_version(INTENT_CLASSIFY_META["name"], INTENT_CLASSIFY_META["version"])
     sections = [
         INTENT_CLASSIFY_V1["system_contract"],
         INTENT_CLASSIFY_V1["role"],

@@ -84,6 +84,9 @@ def build_requirement_parse_prompt(
     schema_text: str,
     dictionary_block: str,
 ) -> str:
+    from app.infra.trace.sdk import record_prompt_version
+
+    record_prompt_version(REQUIREMENT_PARSE_META["name"], REQUIREMENT_PARSE_META["version"])
     sections = [
         REQUIREMENT_PARSE_V1["system_contract"],
         REQUIREMENT_PARSE_V1["role"],

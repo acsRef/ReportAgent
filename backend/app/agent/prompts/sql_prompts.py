@@ -87,6 +87,9 @@ SQL_INTENT_ANALYZE_META: dict[str, Any] = {
 
 
 def build_sql_intent_analyze_prompt(user_query: str, tools_block: str) -> str:
+    from app.infra.trace.sdk import record_prompt_version
+
+    record_prompt_version(SQL_INTENT_ANALYZE_META["name"], SQL_INTENT_ANALYZE_META["version"])
     sections = [
         SQL_INTENT_ANALYZE_V1["system_contract"],
         SQL_INTENT_ANALYZE_V1["role"],
@@ -185,6 +188,9 @@ def build_sql_plan_prompt(
     plan_fewshot: str = "",
     repair_ctx: Optional[Any] = None,
 ) -> str:
+    from app.infra.trace.sdk import record_prompt_version
+
+    record_prompt_version(SQL_PLAN_META["name"], SQL_PLAN_META["version"])
     sections = [
         SQL_PLAN_V1["system_contract"],
         SQL_PLAN_V1["role"],
@@ -331,6 +337,9 @@ def build_sql_generate_prompt(
     sql_generation_rules: str = "",
     repair_ctx: Optional[Any] = None,
 ) -> str:
+    from app.infra.trace.sdk import record_prompt_version
+
+    record_prompt_version(SQL_GENERATE_META["name"], SQL_GENERATE_META["version"])
     sections = [
         SQL_GENERATE_V1["system_contract"],
         SQL_GENERATE_V1["role"],
