@@ -1568,8 +1568,10 @@ assert sec['requirement.status'] == 'pass'
 assert sec['requirement.target_metrics'] == 'pass'
 assert sec['execution.verdict'] == 'pass'
 assert sec['execution.sql_nonempty'] == 'pass'
-# D1 边界：requirement.section 只出现一份（Phase 2 dispatcher 跳过）
-assert len([k for k in sec if k.startswith('requirement.')]) == 1
+# D1 边界：requirement.<每个 key> 只出现 1 次（Phase 2 dispatcher 跳过 requirement）
+requirement_keys = [k for k in sec if k.startswith('requirement.')]
+for k in set(requirement_keys):
+    assert requirement_keys.count(k) == 1, f'D1 LEGACY_KEYS skip 失败：{k} 应只 1 次，实际 {requirement_keys.count(k)}'
 
 # 3. Phase 2 active dispatch: sql dim（不在 LEGACY_KEYS） → sections 写 sql.* prefix
 sec2, _ = check_turn(obs, {'sql': {'sql_nonempty': True, 'rows_gt': 5}})
