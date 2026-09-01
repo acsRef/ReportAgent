@@ -18,3 +18,4 @@ psycopg[binary]>=3.3.0
 openai>=1.30.0
 sqlglot>=25.0.0
 openpyxl>=3.1.0
+langfuse>=3.0.0
