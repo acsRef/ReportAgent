@@ -3,12 +3,32 @@
 纯函数，不碰网络。原则（冻结基线 §十四）：
 - 可观测即判定；不可观测即 deferred（不影响 pass/fail）。
 - verdict 推导对齐三态语义 SUCCESS / EMPTY / FAILED。
+- P14 升级：Phase 1（legacy 4 段）+ Phase 2（9 子包 dispatcher）。
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
+
+
+# P14 dispatcher registry（key = dim 名, value = (obs, exp) -> (sections, deferred_keys)）
+DIM_REGISTRY: dict[str, Callable[["ObservedTurn", dict], tuple[dict[str, str], list[str]]]] = {}
+
+
+# D1 边界：LEGACY_KEYS 内 4 个 dim 由 Phase 1 legacy 唯一负责；Phase 2 dispatcher 跳过。
+# requirement / execution / report / behavior 是 legacy 来源；execution / behavior 永不在
+# DIM_REGISTRY，requirement / report 注册但被本常量跳过（兼容注册位）。
+LEGACY_KEYS: frozenset[str] = frozenset({"requirement", "execution", "report", "behavior"})
+
+
+def register_dim(name: str) -> Callable:
+    """子包 harness 注册装饰器（幂等：重复 import 不覆盖）。"""
+    def deco(fn: Callable) -> Callable:
+        if name not in DIM_REGISTRY:
+            DIM_REGISTRY[name] = fn
+        return fn
+    return deco
 
 
 class ObservedTurn(BaseModel):
@@ -45,7 +65,12 @@ def _derive_verdict(obs: ObservedTurn) -> str:
 def check_turn(
     observed: ObservedTurn, expectation: dict[str, Any]
 ) -> tuple[dict[str, str], list[str]]:
-    """返回 ({section: pass|fail}, deferred_keys)。任何 fail 即该例 fail。"""
+    """返回 ({section: pass|fail}, deferred_keys)。任何 fail 即该例 fail。
+
+    Phase 1（legacy）：requirement / execution / report / behavior 4 段（P0-P12 行为冻结）。
+    Phase 2（dispatcher）：遍历 DIM_REGISTRY 9 个 dim，跳过 LEGACY_KEYS，
+      对其余 7 dim（memory / retrieval / tool_selection / sql / repair / frontend / e2e）调 harness。
+    """
     sections: dict[str, str] = {}
     deferred: list[str] = []
     exp = expectation or {}
@@ -119,6 +144,15 @@ def check_turn(
     for key in ("memory_required", "memory_types", "retrieval"):
         if beh.get(key) is not None:
             deferred.append(f"behavior.{key}")  # 内部观测 → P13 Langfuse 前不判定
+
+    # ---- Phase 2: 9 子包 dispatcher（D1 边界：LEGACY_KEYS 内 dim 跳过）----
+    for dim, fn in DIM_REGISTRY.items():
+        if dim in LEGACY_KEYS:
+            continue
+        if dim in exp and isinstance(exp[dim], dict):
+            dim_sections, dim_deferred = fn(observed, exp[dim])
+            sections.update({f"{dim}.{k}": v for k, v in dim_sections.items()})
+            deferred.extend([f"{dim}.{k}" for k in dim_deferred])
 
     return sections, deferred
 
