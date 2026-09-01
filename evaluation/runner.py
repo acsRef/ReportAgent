@@ -225,9 +225,26 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
 
         latency_ms = (time.monotonic() - t0) * 1000.0
         status = "fail" if any(v.startswith("fail") for v in sections_all.values()) else "pass"
+
+        # P14：dim_results = DIM_REGISTRY 9 + LEGACY 4（{requirement, report} 重叠，set 去重）
+        from evaluation.checker import DIM_REGISTRY, build_dim_results
+        all_dims = list(DIM_REGISTRY.keys()) + ["requirement", "execution", "report", "behavior"]
+        seen: set[str] = set()
+        unique_dims: list[str] = []
+        for d in all_dims:
+            if d not in seen:
+                seen.add(d)
+                unique_dims.append(d)
+        dim_results = build_dim_results(
+            sections_all,
+            sorted(set(deferred_all)),
+            unique_dims,
+        )
+
         return {
             "case_id": case.id, "category": case.category, "status": status,
             "sections": sections_all, "deferred": sorted(set(deferred_all)),
+            "dim_results": dim_results,  # P14 新增字段
             "sql_executed": sql_executed,
             "latency_ms": round(latency_ms, 1),
         }
@@ -236,6 +253,7 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
             "case_id": case.id, "category": case.category, "status": "error",
             "reason": f"{type(exc).__name__}: {exc}",
             "sections": sections_all, "deferred": sorted(set(deferred_all)),
+            "dim_results": {},
             "sql_executed": sql_executed,
             "latency_ms": round((time.monotonic() - t0) * 1000.0, 1),
         }

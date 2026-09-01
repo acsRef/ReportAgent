@@ -157,6 +157,36 @@ def check_turn(
     return sections, deferred
 
 
+def build_dim_results(
+    sections: dict[str, str],
+    deferred: list[str],
+    dims: "list[str] | tuple[str, ...] | set[str]",
+) -> dict[str, dict[str, int]]:
+    """聚合各 dim 的 pass/fail/deferred 数量。
+
+    纯函数，**不**依赖 runner / DIM_REGISTRY / 测试依赖。
+    输入：
+      - sections: 已合并的 section dict（legacy + dispatcher 都贡献 key）
+      - deferred: 已合并的 deferred key 列表
+      - dims: 要聚合的 dim 列表（runner 调时 = registry 9 + legacy 4 = 11，含 {requirement, report} 重叠）
+    输出：
+      {dim: {"pass": int, "fail": int, "deferred": int}}
+
+    dim 归属规则：`k.startswith(f"{dim}.")`（前缀 + dot 是边界），
+    避免 `dim` contains 误把 `sqltable.foo` 归到 `sql`。
+    """
+    out: dict[str, dict[str, int]] = {}
+    for dim in dims:
+        prefix = f"{dim}."
+        keys_pass = sum(1 for k, v in sections.items() if k.startswith(prefix) and v == "pass")
+        keys_fail = sum(
+            1 for k, v in sections.items() if k.startswith(prefix) and v.startswith("fail")
+        )
+        keys_deferred = sum(1 for k in deferred if k.startswith(prefix))
+        out[dim] = {"pass": keys_pass, "fail": keys_fail, "deferred": keys_deferred}
+    return out
+
+
 def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     """聚合口径：skip/error 不计入分母的比率 + latency 分位。"""
     total = len(results)
