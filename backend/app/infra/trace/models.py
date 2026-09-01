@@ -28,6 +28,10 @@ class LLMCall(BaseModel):
     completion_tokens: int = 0
     latency_ms: int = 0
     cost: float = 0.0
+    # P13：实际 prompt 输入与响应文本（redact 后），供 Langfuse UI 重建 LLM 上下文。
+    # 缺省 None 兼容老调用；adapter 负责 redact 一遍写入。
+    input: Optional[Any] = None
+    output: Optional[Any] = None
 
 
 class Trace(BaseModel):

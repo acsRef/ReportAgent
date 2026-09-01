@@ -46,7 +46,7 @@ def _langfuse_trace_id(trace_id: str) -> str:
 
 
 def _llm_call_obs(langfuse: Any, llm: Any):
-    """包一层 LLM call generation（model + usage + latency_ms 进 metadata）。"""
+    """包一层 LLM call generation（model + usage + latency_ms + input/output 进 observation）。"""
     return langfuse.start_as_current_observation(
         name="llm_call",
         as_type="generation",
@@ -55,6 +55,9 @@ def _llm_call_obs(langfuse: Any, llm: Any):
             "input": getattr(llm, "prompt_tokens", 0),
             "output": getattr(llm, "completion_tokens", 0),
         },
+        # adapter 端已 redact 过一次，此处再走一遍防 span 之外的字典/列表深字段
+        input=redact(getattr(llm, "input", None)) or None,
+        output=redact(getattr(llm, "output", None)) or None,
         metadata={"latency_ms": getattr(llm, "latency_ms", 0)},
     )
 

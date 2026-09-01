@@ -138,6 +138,79 @@ async def test_flush_to_langfuse_writes_decisions_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_flush_llm_call_includes_input_output(monkeypatch):
+    """LLMCall.input/output 透传到 Langfuse generation observation（debug 必须能重建 prompt/response）。"""
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    from app.infra.trace.models import Span as SpanModel
+
+    tracer = MagicMock()
+    tracer.trace_id = "t-io"
+    tracer.session_id = "s-io"
+    tracer.user_id = 1
+    tracer.user_query = "q"
+    tracer._spans = [SpanModel(trace_id="t-io", span_id="sp-y", span_name="intent", input=None)]
+    tracer._llm_calls = [
+        LLMCall(
+            span_id="sp-y", model="x", prompt_tokens=10, completion_tokens=20, latency_ms=100,
+            input="hello world", output="hi there",
+        )
+    ]
+    tracer._prompt_versions = []
+    tracer._decisions = []
+
+    await flush_to_langfuse(tracer, langfuse_config=_CFG)
+
+    llm_kwargs = [
+        c.kwargs for c in mock_langfuse.start_as_current_observation.call_args_list
+        if c.kwargs.get("name") == "llm_call"
+    ][0]
+    # redact 对无 PII 文本是 identity
+    assert llm_kwargs.get("input") == "hello world"
+    assert llm_kwargs.get("output") == "hi there"
+
+
+@pytest.mark.asyncio
+async def test_flush_llm_call_redacts_pii_in_input_output(monkeypatch):
+    """LLM prompt/response 中的 PII（手机/身份证）经 redact 后才进 Langfuse（PII sink coverage 全）。"""
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    from app.infra.trace.models import Span as SpanModel
+
+    tracer = MagicMock()
+    tracer.trace_id = "t-iop"
+    tracer.session_id = "s-iop"
+    tracer.user_id = 1
+    tracer.user_query = "q"
+    tracer._spans = [SpanModel(trace_id="t-iop", span_id="sp-y", span_name="intent", input=None)]
+    tracer._llm_calls = [
+        LLMCall(
+            span_id="sp-y", model="x", prompt_tokens=0, completion_tokens=0, latency_ms=100,
+            input="Phone 13800138000", output="id_card 110101199001011234",
+        )
+    ]
+    tracer._prompt_versions = []
+    tracer._decisions = []
+
+    await flush_to_langfuse(tracer, langfuse_config=_CFG)
+
+    llm_kwargs = [
+        c.kwargs for c in mock_langfuse.start_as_current_observation.call_args_list
+        if c.kwargs.get("name") == "llm_call"
+    ][0]
+    assert "13800138000" not in str(llm_kwargs.get("input"))
+    assert "110101199001011234" not in str(llm_kwargs.get("output"))
+
+
+@pytest.mark.asyncio
 async def test_flush_llm_call_attached_under_parent_span(monkeypatch):
     """LLMCall.span_id 决定 Langfuse parent-child：generation 嵌套于对应 span observation。
 

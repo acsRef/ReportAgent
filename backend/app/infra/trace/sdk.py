@@ -128,8 +128,20 @@ class Tracer:
             self._stack.pop()
             self._spans.append(span)
 
-    def add_llm_call(self, model: str, prompt_tokens: int, completion_tokens: int, latency_ms: int) -> None:
-        """Record an LLM call associated with the current span."""
+    def add_llm_call(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        latency_ms: int,
+        input: Any = None,
+        output: Any = None,
+    ) -> None:
+        """Record an LLM call associated with the current span.
+
+        P13：input / output（adapter 已 redact 过的 prompt 文本与响应）落到 LLMCall，
+        flush_to_langfuse 写入 generation observation 让 Langfuse UI 能重建上下文。
+        """
         span_id = self._current_span_id() or ''
         self._llm_calls.append(LLMCall(
             span_id=span_id,
@@ -137,6 +149,8 @@ class Tracer:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             latency_ms=latency_ms,
+            input=input,
+            output=output,
         ))
 
     def add_prompt_version(self, name: str, version: int | str) -> None:

@@ -96,10 +96,15 @@ class LLMAdapter:
                 pt = getattr(usage, "input_tokens", 0) or 0
                 ct = getattr(usage, "output_tokens", 0) or 0
             from app.infra.trace.sdk import current_tracer
+            from app.observability.redaction import redact
 
             tracer = current_tracer()
             if tracer is not None:
-                tracer.add_llm_call(model, pt, ct, elapsed_ms)
+                tracer.add_llm_call(
+                    model, pt, ct, elapsed_ms,
+                    input=redact(prompt),
+                    output=redact(text),
+                )
         except Exception as exc:
             logger.warning("llm trace failed: %s", exc)
         return text
