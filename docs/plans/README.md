@@ -25,7 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
-| [2026-09-01-llm-dual-model-r1-v3.md](2026-09-01-llm-dual-model-r1-v3.md) | 双模型 LLM（intent=DeepSeek-R1 / 其他=DeepSeek-V3 + SiliconFlow）：LLMConfig.intent_model 字段（env LLM_INTENT_MODEL fallback LLM_MODEL）+ intent._llm_classify 显式传 model + intent prompt 加 R1 no_thinking_directive 段 + CLAUDE.md §8 显式偏离标注 | 接 P12 master `e711bcb`；user 主导从 MiniMax 切到 DeepSeek 平台（成本 + reasoning 质量权衡）；独立 4 fix commit + 1 docs commit |
+| [2026-09-01-p14-evaluation-skeleton.md](2026-09-01-p14-evaluation-skeleton.md) | P14 骨架 + 行为期望：9 子包目录（requirement/memory/retrieval/tool_selection/sql/repair/report/frontend/e2e）+ dispatcher pattern（`evaluation/checker.py` 升级为可注册 hook）+ BehaviorExpectation 升级（memory/retrieval 从 deferred 升级为可注册；Langfuse 实装留 P14b）+ 每子包 1 example case（baseline_cases.json 不增加 categories，保持 13 类）+ frontend/e2e 子包仅占位 | 接 P13 master `079dd2f`；先骨架 + 行为期望（用户 2026-09-01 决策）；后续 P14b（baseline/optimized 对比 + Langfuse trace 查询）/ P14c（regression loop）按需串行 |
 | [2026-08-31-p12-review-prep.md](2026-08-31-p12-review-prep.md) | P12 review-prep 修复：4 项加固（高：`get_chat_llm` fail-closed 防 mock 旁路 + spec 07 background-execution 加 session phase/report 落库断言；中：spec 03 retry 加 `execution_status=SUCCESS` 显式修复证据；低：mock fixture key 格式校验防 typo 静默） | 接 P12 已落地（48222f2 等 6 commit）+ review 反馈 6 项中 4 项落实，独立 4 个 fix commit + 1 个 docs commit，不动 P12 已落地主 commit |
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
@@ -97,6 +97,7 @@
 | Plan | 主题 | 搁置原因 |
 |---|---|---|
 | [2026-07-30-backend-async-refactor.md](2026-07-30-backend-async-refactor.md) | 后端全量 async 重构 | 经确认停在安全子集；两个真 P0 已用 `asyncio.to_thread` 单独修掉；全量改造需重写 5+ 测试、收益 P1 |
+| [2026-09-01-llm-dual-model-r1-v3.md](2026-09-01-llm-dual-model-r1-v3.md) | 双模型 LLM（intent=DeepSeek-R1 / 其他=DeepSeek-V3 + SiliconFlow） | 2026-09-01 用户决策：搁置双模型不做，P14 evaluation 起步阶段不与模型维度评估交叉。pipeline 兼容 MiniMax，宪法 §8 现状「统一原则」保持。重启条件：P14 baseline 跑通 + 模型维度指标评估有信号后再考虑 |
 | [2026-08-29-p3-p4a-p4b-cumulative-review-and-fixes.md](2026-08-29-p3-p4a-p4b-cumulative-review-and-fixes.md) | P3+P4a+P4b cumulative review 修复清单（14 findings：5 必修 + 6 中修 + 3 可延后） | 项目已演进超出原 plan 范围（master 现含 P4c/P5/P6/P7 后共 586 passed 基线）；14 项 finding 中部分由后续 Phase 落实，部分仍 open。master HEAD `a6e9246` 后未回头修；暂缓窗口内仅作为「哪些 finding 已被新 Phase 替代」参考。重启时需逐项 re-check。 |
 
 ## 只读评审

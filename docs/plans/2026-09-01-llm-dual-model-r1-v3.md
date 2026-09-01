@@ -1,6 +1,6 @@
 # 双模型 LLM 切换——intent=DeepSeek-R1 / 其他=DeepSeek-V3 + SiliconFlow Provider
 
-> 状态: 进行中（2026-09-01；接 P12 master `e711bcb` 之后；user 在 P12 合 master 后明确 MiniMax-M2.7-highspeed 体验不佳，主导切到 DeepSeek 双模型 + SiliconFlow）
+> 状态: 暂缓（2026-09-01；2026-09-01 P14 启动决策：搁置双模型不做，避免与 P14 evaluation 在「Model 变更重跑 Golden Set」维度上交叉。base 仍为 P12 master `e711bcb`，**未从 P13 master `079dd2f` rebase**；未实施任何 TDD task（仅 plan 文档落地 commit `87a3f83`）。重启条件：P14 baseline 跑通 + 模型维度指标有评估信号后再讨论；宪法 §8「统一原则」现状不修）
 > 上游: P12 Playwright E2E + review-prep-r2 已合 master `e711bcb`；pytest.ini 移到 repo root 已修 71 failed（953 passed / 1 skipped）；CLAUDE.md §8 现状偏离 P6 收敛目标——本 plan 显式记录偏离原因与边界
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
