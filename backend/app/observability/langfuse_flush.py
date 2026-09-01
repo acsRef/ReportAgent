@@ -10,8 +10,13 @@ P13 Review 后的拓扑：
   ├── llm_call (无 span_id 兜底挂 root)
   ├── <traced_node span>            # nested via OTel context
   │   ├── llm_call (matched by span_id)  ← generation
-  │   └── metadata: decisions / prompt_version
+  │   └── metadata: decisions / prompt_version / execution_duration_ms / original_start_time / original_end_time
   └── llm_call (匹配的 span 不存在的兜底)
+
+Timing 语义分层（plan: docs/plans/2026-09-01-p13-langfuse-execution-timing.md）：
+- Span observation.metadata.execution_duration_ms = 节点业务总耗时（含 LLM 往返）
+- LLM observation.metadata.latency_ms             = LLM 单独往返耗时
+- Langfuse native duration                        = observation 进出 flush 上下文的时间（不可信，仅参考）
 """
 from __future__ import annotations
 
@@ -62,6 +67,28 @@ def _llm_call_obs(langfuse: Any, llm: Any):
     )
 
 
+def _timing_fields(
+    duration_ms: Any,
+    start_time: Any,
+    end_time: Any,
+    duration_key: str,
+) -> dict[str, Any]:
+    """把业务真实耗时字段回放到 metadata；None 字段过滤不入（防污染 Langfuse UI）。
+
+    Span observation 用 duration_key="execution_duration_ms"（节点业务总耗时），
+    root observation 用 duration_key="total_duration_ms"（整 trace 总耗时），
+    ISO 时间戳字段名一致（与 PG 字段名对齐便于对账）。
+    """
+    out: dict[str, Any] = {}
+    if duration_ms is not None:
+        out[duration_key] = duration_ms
+    if start_time is not None:
+        out["original_start_time"] = start_time.isoformat()
+    if end_time is not None:
+        out["original_end_time"] = end_time.isoformat()
+    return out
+
+
 async def flush_to_langfuse(
     tracer: "Tracer",
     langfuse_config: LangfuseConfig | None = None,
@@ -73,6 +100,12 @@ async def flush_to_langfuse(
     - 决策的 span_id 命中 → 聚合到 span metadata 的 decisions 列表（防覆盖 + redact）
     - prompt version 同上
     - 未命中 / 空 span_id → 兜底挂 root（aggregated）
+
+    业务真实耗时回放（plan 2026-09-01-p13-langfuse-execution-timing.md）：
+    - Span observation metadata.execution_duration_ms / original_start_time / original_end_time
+    - root observation metadata.total_duration_ms / original_start_time / original_end_time
+    - LLM observation metadata.latency_ms（既有路径）
+    - Langfuse native duration 仍按 SDK 进出 flush 上下文计——不可信，但 metadata 是真值
     """
     cfg = langfuse_config or LangfuseConfig()
     if not cfg.enabled:
@@ -98,11 +131,20 @@ async def flush_to_langfuse(
             pv_by_span.setdefault(sid, []).append(pv)
 
         # 根 observation：trace_context 钉住 trace_id，metadata 保留原始 UUID 反查
+        # + 整 trace 业务总耗时（与 PG traces.total_duration_ms 对账）
+        trace_obj = getattr(tracer, "_trace", None)
+        root_md: dict[str, Any] = {"pg_trace_id": tracer.trace_id}
+        root_md.update(_timing_fields(
+            getattr(trace_obj, "total_duration_ms", None),
+            getattr(trace_obj, "start_time", None),
+            getattr(trace_obj, "end_time", None),
+            duration_key="total_duration_ms",
+        ))
         with langfuse.start_as_current_observation(
             name=_ROOT_NAME,
             trace_context={"trace_id": _langfuse_trace_id(tracer.trace_id)},
             input=redact({"user_query": tracer.user_query}) if tracer.user_query else None,
-            metadata={"pg_trace_id": tracer.trace_id},
+            metadata=root_md or None,
         ):
             # 无匹配 span 的 LLM calls → 兜底挂 root
             for llm in llm_by_span.pop("", []):
@@ -121,6 +163,13 @@ async def flush_to_langfuse(
                         "name": span_pvs[0].get("name"),
                         "version": span_pvs[0].get("version"),
                     }
+                # 业务真实耗时：与 PG spans.duration_ms / start_time / end_time 一对一
+                span_md.update(_timing_fields(
+                    getattr(span, "duration_ms", None),
+                    getattr(span, "start_time", None),
+                    getattr(span, "end_time", None),
+                    duration_key="execution_duration_ms",
+                ))
                 with langfuse.start_as_current_observation(
                     name=span.span_name,
                     input=redact(span.input) if getattr(span, "input", None) else None,

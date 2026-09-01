@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -7,15 +8,25 @@ import pytest
 
 pytestmark = pytest.mark.contracts
 
-from app.infra.trace.models import LLMCall, Span
+from app.infra.trace.models import LLMCall, Span, Trace
 from app.observability.langfuse_flush import flush_to_langfuse
 
 # langfuse_config mock：enabled=True + flush_timeout 数值（wait_for 需要真实 float）。
 _CFG = SimpleNamespace(enabled=True, flush_timeout=5.0)
 
+# 时间锚：可读性优先——所有 timing 测试用例用同一组时间便于断言。
+_START = datetime(2026, 9, 1, 10, 0, 0)
+_END = _START + timedelta(milliseconds=800)  # 业务耗时 800ms
+_TRACE_START = datetime(2026, 9, 1, 9, 59, 59)
+_TRACE_END = _TRACE_START + timedelta(milliseconds=31_000)  # 整 trace 31s
+
 
 def _make_tracer(trace_id: str = "t-1") -> MagicMock:
-    """构造 Tracer 形状的 mock（真实 Span/LLMCall 数据类 + 含 PII 的 user_query）。"""
+    """构造 Tracer 形状的 mock（真实 Span/LLMCall 数据类 + 含 PII 的 user_query）。
+
+    Span / Trace 字段填满（含 timing）——P13 验证 timing 回放需要真实数据；
+    既有用例不读 timing 字段故不受影响。
+    """
     tracer = MagicMock()
     tracer.trace_id = trace_id
     tracer.session_id = "s-1"
@@ -27,6 +38,9 @@ def _make_tracer(trace_id: str = "t-1") -> MagicMock:
             span_id="sp-1",
             span_name="intent",
             input={"q": "id_card 110101199001011234"},
+            start_time=_START,
+            end_time=_END,
+            duration_ms=800,
         )
     ]
     tracer._llm_calls = [
@@ -38,6 +52,15 @@ def _make_tracer(trace_id: str = "t-1") -> MagicMock:
     tracer._decisions = [
         {"span_id": "sp-1", "name": "diagnose_route", "reason": "sql repair route"},
     ]
+    tracer._trace = Trace(
+        trace_id=trace_id,
+        session_id="s-1",
+        user_id=1,
+        user_query="查询 id_card 110101199001011234 的销售",
+        start_time=_TRACE_START,
+        end_time=_TRACE_END,
+        total_duration_ms=31_000,
+    )
     return tracer
 
 
@@ -324,7 +347,9 @@ async def test_flush_to_langfuse_transform_uuid_trace_id(monkeypatch):
 
     root_call = mock_langfuse.start_as_current_observation.call_args_list[0].kwargs
     assert root_call["trace_context"] == {"trace_id": "31a08ab305dc4d5eaaa9656ed891edd8"}
-    assert root_call["metadata"] == {"pg_trace_id": "31a08ab3-05dc-4d5e-aaa9-656ed891edd8"}
+    # 子集断言：pg_trace_id 必须仍在；其它字段（total_duration_ms / original_*）
+    # 由 execution-timing plan 引入，不属于本 case 验证范围
+    assert root_call["metadata"]["pg_trace_id"] == "31a08ab3-05dc-4d5e-aaa9-656ed891edd8"
 
 
 @pytest.mark.asyncio
@@ -338,3 +363,133 @@ async def test_flush_to_langfuse_handles_exception(monkeypatch):
     )
 
     await flush_to_langfuse(_make_tracer(), langfuse_config=_CFG)  # 不抛
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P13 补完：Span 真实业务耗时回放 Langfuse observation metadata
+# (plan: docs/plans/2026-09-01-p13-langfuse-execution-timing.md)
+#
+# 设计要点：
+# - Span / Trace 已有 start_time / end_time / duration_ms（sdk.py context manager 记录）
+# - Langfuse v4 SDK start_observation/start_as_current_observation 不暴露 start_time/end_time 参数
+#   （实测 confirm），所以真实业务耗时只能作为一等 metadata 字段回放，不能伪装成 SDK native 计时
+# - 字段名 `execution_duration_ms`（与 LLM `latency_ms` 概念区分）
+# - 字段缺失时（None）不入 metadata，避免污染
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_flush_writes_execution_duration_ms_to_span_metadata(monkeypatch):
+    """Span observation metadata 必须含 execution_duration_ms / original_start_time / original_end_time，
+    值与 Span 字段一致（与 PG spans.duration_ms / start_time / end_time 一一对账）。"""
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    await flush_to_langfuse(_make_tracer(), langfuse_config=_CFG)
+
+    span_calls = [
+        c for c in mock_langfuse.start_as_current_observation.call_args_list
+        if c.kwargs.get("name") == "intent"
+    ]
+    assert span_calls, "intent span 必须有 observation"
+    md = span_calls[0].kwargs.get("metadata") or {}
+    assert md.get("execution_duration_ms") == 800
+    assert md.get("original_start_time") == _START.isoformat()
+    assert md.get("original_end_time") == _END.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_flush_writes_total_duration_ms_to_root_metadata(monkeypatch):
+    """root observation metadata 含 total_duration_ms + original_start_time + original_end_time
+    （整 trace 业务总耗时；与 PG traces.total_duration_ms 一一对账）。"""
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    await flush_to_langfuse(_make_tracer(), langfuse_config=_CFG)
+
+    root_call = mock_langfuse.start_as_current_observation.call_args_list[0].kwargs
+    md = root_call.get("metadata") or {}
+    assert md.get("total_duration_ms") == 31_000
+    assert md.get("original_start_time") == _TRACE_START.isoformat()
+    assert md.get("original_end_time") == _TRACE_END.isoformat()
+    # pg_trace_id 保留反向反查能力
+    assert md.get("pg_trace_id") == "t-1"
+
+
+@pytest.mark.asyncio
+async def test_flush_skips_timing_fields_when_span_unset(monkeypatch):
+    """Span 字段缺一（start_time/end_time/duration_ms 为 None）时对应 timing 字段不入 metadata。
+
+    兜底：sdk.py context manager 异常路径或单元测试 mock 时可能丢字段；不传 None 避免
+    metadata 里出现 "execution_duration_ms": None 这类无效值污染 Langfuse UI 渲染。
+    """
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    tracer = MagicMock()
+    tracer.trace_id = "t-no-timing"
+    tracer.session_id = "s-x"
+    tracer.user_id = 1
+    tracer.user_query = None
+    # Span 完全不带 timing 字段（默认值 None）
+    tracer._spans = [
+        Span(trace_id="t-no-timing", span_id="sp-empty", span_name="noop", input=None),
+    ]
+    tracer._llm_calls = []
+    tracer._prompt_versions = []
+    tracer._decisions = []
+    tracer._trace = Trace(trace_id="t-no-timing")  # 默认 None timing
+
+    await flush_to_langfuse(tracer, langfuse_config=_CFG)
+
+    span_calls = [
+        c for c in mock_langfuse.start_as_current_observation.call_args_list
+        if c.kwargs.get("name") == "noop"
+    ]
+    assert span_calls
+    md = span_calls[0].kwargs.get("metadata") or {}
+    assert "execution_duration_ms" not in md
+    assert "original_start_time" not in md
+    assert "original_end_time" not in md
+
+    root_call = mock_langfuse.start_as_current_observation.call_args_list[0].kwargs
+    root_md = root_call.get("metadata") or {}
+    assert "total_duration_ms" not in root_md
+    assert "original_start_time" not in root_md
+    assert "original_end_time" not in root_md
+
+
+@pytest.mark.asyncio
+async def test_flush_preserves_llm_call_latency_ms(monkeypatch):
+    """LLMCall.latency_ms 仍落 Langfuse metadata.latency_ms——P13 既有路径不被本次 timing 改动回归。
+
+    LLM 不混 execution_duration_ms（避免 Agent 节点耗时与 LLM 耗时混淆）：
+    Agent 节点业务耗时 = execution_duration_ms（含 LLM 往返）
+    LLM 单独往返耗时 = latency_ms
+    """
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+
+    await flush_to_langfuse(_make_tracer(), langfuse_config=_CFG)
+
+    llm_calls = [
+        c for c in mock_langfuse.start_as_current_observation.call_args_list
+        if c.kwargs.get("name") == "llm_call"
+    ]
+    assert llm_calls
+    llm_md = llm_calls[0].kwargs.get("metadata") or {}
+    assert llm_md.get("latency_ms") == 1500
+    # LLM observation 不混 execution_duration_ms（语义分层）
+    assert "execution_duration_ms" not in llm_md
