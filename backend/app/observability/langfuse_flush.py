@@ -24,6 +24,19 @@ logger = logging.getLogger(__name__)
 _ROOT_NAME = "report_agent_run"
 
 
+def _langfuse_trace_id(trace_id: str) -> str:
+    """把本仓库 UUID trace_id 转成 Langfuse 接受的 32 位小写 hex。
+
+    Langfuse v4（OTel 内核）要求 trace_id 形如 `[0-9a-f]{32}`，带连字符的
+    UUID 会触发 "invalid literal for int() with base 16" 并被 SDK 拒收。
+    仅当是 36 位带连字符 UUID 时去连字符 + 小写（仍 32 hex，与 PG 一一可逆）；
+    其它 id 原样透传。
+    """
+    if "-" in trace_id and len(trace_id) == 36:
+        return trace_id.replace("-", "").lower()
+    return trace_id
+
+
 async def flush_to_langfuse(
     tracer: "Tracer",
     langfuse_config: LangfuseConfig | None = None,
@@ -38,11 +51,15 @@ async def flush_to_langfuse(
         return
 
     try:
-        # 根 observation：带 trace_context 钉住 trace_id（与 PG trace_id 一致可关联）。
+        # 根 observation：带 trace_context 钉住 trace_id（与 PG trace_id 关联）。
+        # Langfuse v4 OTel 内核要求 32 位小写 hex trace id；UUID（带连字符）须先转 hex，
+        # raw UUID 落 pg_trace_id metadata 供反查（双向可关联）。
+
         with langfuse.start_as_current_observation(
             name=_ROOT_NAME,
-            trace_context={"trace_id": tracer.trace_id},
+            trace_context={"trace_id": _langfuse_trace_id(tracer.trace_id)},
             input=redact({"user_query": tracer.user_query}) if tracer.user_query else None,
+            metadata={"pg_trace_id": tracer.trace_id},
         ):
             # LLM calls → generation observations（当前 observation 下自动成为子节点）。
             for llm_call in tracer._llm_calls:

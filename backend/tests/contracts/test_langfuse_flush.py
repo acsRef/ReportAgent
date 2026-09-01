@@ -133,6 +133,27 @@ async def test_flush_to_langfuse_writes_decisions_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_flush_to_langfuse_transform_uuid_trace_id(monkeypatch):
+    """UUID（带连字符）trace_id → Langfuse 要求的 32 位小写 hex；raw UUID 落 pg_trace_id metadata。
+
+    真测试复现：Langfuse v4 OTel 内核拒收非 32-lowercase-hex trace id
+    （"invalid literal for int() with base 16"），带连字符的 UUID 必须转 hex。
+    """
+    mock_langfuse = _mock_langfuse()
+    monkeypatch.setattr(
+        "app.observability.langfuse_flush.get_langfuse_client",
+        lambda: mock_langfuse,
+    )
+    tracer = _make_tracer(trace_id="31a08ab3-05dc-4d5e-aaa9-656ed891edd8")
+
+    await flush_to_langfuse(tracer, langfuse_config=_CFG)
+
+    root_call = mock_langfuse.start_as_current_observation.call_args_list[0].kwargs
+    assert root_call["trace_context"] == {"trace_id": "31a08ab305dc4d5eaaa9656ed891edd8"}
+    assert root_call["metadata"] == {"pg_trace_id": "31a08ab3-05dc-4d5e-aaa9-656ed891edd8"}
+
+
+@pytest.mark.asyncio
 async def test_flush_to_langfuse_handles_exception(monkeypatch):
     """Langfuse SDK 抛异常 → 主流程不抛（best-effort）。"""
     mock_langfuse = MagicMock()
