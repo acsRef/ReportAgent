@@ -26,20 +26,6 @@ from evaluation.checker import ObservedTurn, check_turn, summarize
 from evaluation.loader import load_all
 from evaluation.schema import BaselineCase
 
-# P14：模块级显式 import 9 子包，确保 DIM_REGISTRY 在 CLI / pytest / 单脚本等不同入口
-# 都注册完整（test_subpackage_layout 在 pytest 路径下帮过一次，但 CLI 直跑不保证）。
-from evaluation import (  # noqa: E402, F401  —— register_dim side-effect
-    e2e,
-    frontend,
-    memory,
-    repair,
-    report,
-    requirement,
-    retrieval,
-    sql,
-    tool_selection,
-)
-
 DEFAULT_DATASET = Path(__file__).resolve().parent / "baseline_cases.json"
 
 
