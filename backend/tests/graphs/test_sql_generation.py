@@ -405,14 +405,13 @@ def test_generate_sql_prompt_contains_fk_chain(monkeypatch) -> None:
     prompt = captured["text"]
     # 全部事实表 → 维度表外键映射都要在 _generate_sql 的 prompt 中
     expected_fk_pairs = [
-        "fact_sales: date_id→dim_date",
-        "region_id→dim_region",
-        "product_id→dim_product",
+        "fact_orders: order_date→dim_date",
+        "store_id→dim_store",
         "customer_id→dim_customer",
-        "fact_returns: return_date_id→dim_date",
-        "sale_id→fact_sales",
-        "warehouse_id→dim_warehouse",
-        "employee_id→dim_employee",
+        "product_id→dim_product",
+        "promotion_id→dim_promotion",
+        "fact_payments: payment_date→dim_date",
+        "order_id→fact_orders",
     ]
     for pair in expected_fk_pairs:
         assert pair in prompt, f"外键映射缺失于 _generate_sql prompt: {pair}"
@@ -452,7 +451,7 @@ def test_plan_prompt_includes_current_date_and_fk(monkeypatch) -> None:
     prompt = captured["text"]
     assert "当前日期:" in prompt
     assert _date.today().isoformat() in prompt
-    assert "fact_sales: date_id→dim_date" in prompt  # _PLAN_TABLE_HINTS 含外键链路
+    assert "fact_orders: order_date→dim_date" in prompt  # _PLAN_TABLE_HINTS 含外键链路
 
 
 def test_generate_sql_multi_join_schema_listed_in_prompt(monkeypatch) -> None:
