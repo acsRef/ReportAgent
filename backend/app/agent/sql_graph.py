@@ -280,6 +280,9 @@ class SQLAgentState(TypedDict, total=False):
     assembled_context: Optional[str]
     evaluate_result: Optional[dict]
     diagnose_decision: Optional[dict]
+    # P15 e2e T4 fault seam：confirmed 图 _confirmed_sql_agent 透传的 e2e 故障覆盖。
+    # 必须在此声明为 channel——否则 langgraph 把未声明 key 从输入丢弃，_evaluate 收不到。
+    fault_override: Optional[dict]
 
 
 _FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
