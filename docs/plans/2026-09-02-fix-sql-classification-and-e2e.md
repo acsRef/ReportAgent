@@ -554,14 +554,14 @@ def test_object_not_found_triggers_mcp_schema_retrieval():
     )
     assert dec.action == "retry_mcp_schema_retrieval"
     assert dec.recoverable is True
-    assert dec.retry_target == "search_schema"  # 触发 MCP schema retrieval
+    assert dec.retry_target == "mcp_schema"  # 触发 MCP schema retrieval
 
 
 def test_object_not_found_after_schema_retrieval_escalates_clarify():
     """object_not_found 错 + 已调过 schema retrieval → escalate clarify（避免死循环）。"""
     dec = DiagnosePolicy.decide(
         error_kind="object_not_found",
-        retry_counters={"sql_generation": 0, "plan": 0, "search_schema": 1},  # 已调 1 次
+        retry_counters={"sql_generation": 0, "plan": 0, "mcp_schema": 1},  # 已调 1 次
     )
     assert dec.action == "clarify"
     assert dec.recoverable is False
@@ -623,10 +623,10 @@ def decide(
     retry_counters = retry_counters or {}
     sql_retries = retry_counters.get("sql_generation", 0)
     plan_retries = retry_counters.get("plan", 0)
-    schema_retrievals = retry_counters.get("search_schema", 0)
+    mcp_schema_retrievals = retry_counters.get("mcp_schema", 0)
     max_sql = _get_max_sql_retries()
     max_plan = _get_max_plan_retries()
-    max_schema = _get_max_mcp_retries()  # NEW：MCP retry 预算（独立于 SQL/plan）
+    max_mcp = _get_max_mcp_retries()  # NEW：MCP retry 预算（与 SQL/plan 正交）
     kind = (error_kind or "other").lower()
     if kind not in SQL_ERROR_KINDS:
         kind = "other"
@@ -640,7 +640,7 @@ def decide(
     # P15 prelude fix: object_not_found 路径优先 MCP schema retrieval
     if kind == "object_not_found":
         if schema_retrievals < max_schema:
-            return DiagnoseDecision(action="retry_mcp_schema_retrieval", reason=f"{kind}: retry MCP schema retrieval {schema_retrievals+1}/{max_schema}", error_kind=kind, recoverable=True, retry_target="search_schema", confidence=0.8)
+            return DiagnoseDecision(action="retry_mcp_schema_retrieval", reason=f"{kind}: retry MCP schema retrieval {mcp_schema_retrievals+1}/{max_mcp}", error_kind=kind, recoverable=True, retry_target="mcp_schema", confidence=0.8)
         # 已调过 schema retrieval 仍错 → escalate clarify
         return DiagnoseDecision(action="clarify", reason=f"{kind}: schema retrieval budget exhausted", error_kind=kind, recoverable=False, retry_target="end", confidence=0.7)
     # object_ambiguous → 必须用户消歧
@@ -669,7 +669,7 @@ def _get_max_mcp_retries() -> int:
     return int(getattr(settings, "MAX_MCP_REPAIR_RETRIES", 1))
 ```
 
-DiagnoseDecision 扩展 `retry_target` 枚举（接受新值 `"search_schema"`）：
+DiagnoseDecision 扩展 `retry_target` 枚举（接受新值 `"mcp_schema"`）：
 
 ```python
 class DiagnoseDecision(BaseModel):
@@ -677,7 +677,7 @@ class DiagnoseDecision(BaseModel):
     reason: str
     error_kind: str
     recoverable: bool
-    retry_target: Literal["generate_sql", "plan", "end", "search_schema"]
+    retry_target: Literal["generate_sql", "plan", "end", "mcp_schema"]
     confidence: float
 ```
 
@@ -706,7 +706,7 @@ git commit -m "fix(agent): DiagnosePolicy object_not_found 走 retry_mcp_schema_
 
 P15 prelude fix：DiagnosePolicy 新路径：
 - object_not_found → retry_mcp_schema_retrieval（action=retry_mcp_schema_retrieval，
-  retry_target=search_schema），budget 用尽 → escalate clarify（避免死循环）
+  retry_target=mcp_schema），budget 用尽 → escalate clarify（避免死循环）
 - object_ambiguous → 直接 clarify（用户必须消歧列名）
 - 'object' 字符串（向后兼容未识别 ProgrammingError 兜底）保留旧 retry_sql 行为
 
@@ -714,7 +714,7 @@ AGENT_RECOVERABLE_KINDS 加 'object_not_found'（保留 'object' 向后兼容）
 USER_RECOVERABLE_KINDS 加 'object_not_found' / 'object_ambiguous'（user 消歧是有意义的）。
 
 DiagnoseDecision Literal 扩展：action 加 'retry_mcp_schema_retrieval'，
-retry_target 加 'search_schema'。"
+retry_target 加 'mcp_schema'。"
 ```
 
 #### 方案 B：直接 clarify（最小实现）
@@ -1347,7 +1347,7 @@ git push origin --delete p15-prelude-fix-and-test
    - 无 TODO / TBD / fill in details
 
 3. **Type consistency**：
-   - `DiagnoseDecision` Literal 扩展：action 加 `"retry_mcp_schema_retrieval"`，retry_target 加 `"search_schema"`—— Task 3.A.4 / Task 3.B / Task 3.C 都引用此扩展
+   - `DiagnoseDecision` Literal 扩展：action 加 `"retry_mcp_schema_retrieval"`，retry_target 加 `"mcp_schema"`—— Task 3.A.4 / Task 3.B / Task 3.C 都引用此扩展
    - `SQL_ERROR_KINDS` 8 kind tuple：Task 1.4 定义，Task 3.A.3 沿用
    - `AGENT_RECOVERABLE_KINDS` extend：Task 1 不动（向后兼容），Task 3.A.3 加 `"object_not_found"`（Task 3.B 反而移除 `"object"`，B 与 A 互斥）
    - `_compute_dim_results` / `build_dim_results` / `check_turn` / `_observe_turn` 签名 Task 5.1 helper 全部沿用 P14 production code
