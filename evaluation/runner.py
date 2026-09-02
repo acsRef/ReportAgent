@@ -152,13 +152,23 @@ def _observe_turn(events: list[dict], sid: str, client: httpx.Client,
             snap = r.json().get("session") or {}
             versions = snap.get("report_versions") or []
             if versions:
-                v1 = versions[0].get("version")
-                rr = client.get(
-                    f"/api/v1/sessions/{sid}/reports/{v1}",
-                    headers={"Authorization": f"Bearer {token}"},
+                # P14 P1 闭环：取 max(version) 而非 versions[0]——多版本 case
+                # (adjust / 重新生成) 的真正最新报告，否则 observation stale
+                # → dim_results 全错。
+                latest_v = max(
+                    (v.get("version", 0) for v in versions if isinstance(v.get("version"), int)),
+                    default=None,
                 )
-                if rr.status_code == 200:
-                    detail = (rr.json() or {}).get("report") or {}
+                if latest_v is None:
+                    # 兼容历史数据：version 字段不是 int，回退 index 0
+                    latest_v = versions[0].get("version")
+                if latest_v is not None:
+                    rr = client.get(
+                        f"/api/v1/sessions/{sid}/reports/{latest_v}",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    if rr.status_code == 200:
+                        detail = (rr.json() or {}).get("report") or {}
         if detail:
             snapshot = detail.get("query_snapshot") or {}
             answer = (detail.get("report_payload") or {}).get("answer") or {}
