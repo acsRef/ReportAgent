@@ -154,11 +154,20 @@ def _build_output(state: ReportAgentState) -> dict:
     fields = [v for v in dims.values() if isinstance(v, str)]
     comps = []
     if chart_config.get("type") and chart_config["type"] != "table":
+        # P10 provenance 闭合：声明 fields 必须 ⊇ 实际行携带字段（validator 钉）。
+        # chart_advisor 的 dimensions 常只给 x/y，行里却带完整列（区域/年份/销售额）——
+        # 声明以行字段并集为准，避免「行携带未声明字段」violations。
+        rows = config.get("data", []) or []
+        declared = list(fields)
+        for row in rows:
+            for k in row.keys():
+                if k not in declared:
+                    declared.append(k)
         comps.append(ComponentSpec(
             id="c1",
             type=chart_config["type"],
             title="数据分析",
-            data_binding=DataBinding(fields=fields, rows=config.get("data", []) or []),
+            data_binding=DataBinding(fields=declared, rows=rows),
             visual_config=config,
         ))
 
