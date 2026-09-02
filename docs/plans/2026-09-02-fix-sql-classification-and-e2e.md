@@ -2,7 +2,7 @@
 
 > 状态: 进行中（2026-09-02；接 P14 master `a253d3d`）
 > 双 issue 合并 plan：fix issue（SQL object/schema error 错误分类触发无信息增益 retry/replan）+ test issue（建立基于真实 RAG MCP + PostgreSQL 的完整链路 Analytics Case 测试集）
-> 决策依据：用户 2026-09-02 拍板——P14 mock 全废 + e2e 取代；DiagnosePolicy 路径需用户后续讨论；e2e 先最小范围再扩全面
+> 决策依据：用户 2026-09-02 拍板——P14 mock 全废 + e2e 取代；DiagnosePolicy 路径**用户拍板方案 A**（object_not_found → retry_mcp_schema_retrieval 1 次 → escalate clarify；object_ambiguous → 直接 clarify）；retry_counters 三 key 正交（sql_generation / plan / **mcp_schema**）；`MAX_MCP_RETRIES` 独立设置
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
