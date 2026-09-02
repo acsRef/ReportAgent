@@ -3,12 +3,16 @@
 设计约束（来自 docs/plans/2026-08-25-baseline-lock-golden-set.md）：
 - 可观测即判定；不可观测（memory/retrieval 内部行为）记 deferred，不影响 pass/fail。
 - verdict 推导对齐三态语义 SUCCESS / EMPTY / FAILED，不自造第四态。
+
+P14 升级：TurnExpectation 加 extra='allow'，让 dynamic dim key（memory / retrieval /
+sql / tool_selection / repair / frontend / e2e）走 Pydantic roundtrip 不丢失。
+Typed 字段（requirement/execution/report/behavior）保持 strict 校验。
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TurnSpec(BaseModel):
@@ -48,7 +52,14 @@ class ReportExpectation(BaseModel):
 
 
 class TurnExpectation(BaseModel):
-    """一段轮次期望，四段均可空——空对象 = 本轮无判定项。"""
+    """一段轮次期望：4 段 typed（strict）+ 任意 dynamic dim key（allow）。
+
+    P14 P0 闭环：dynamic dim key（如 memory/retrieval/sql/tool_selection/repair/
+    frontend/e2e）必须穿过 model_validate → model_dump 不丢失，让 runner.run_case
+    的 check_turn Phase 2 dispatcher 拿得到。
+    """
+
+    model_config = ConfigDict(extra="allow")  # P14: 允许 dynamic dim key roundtrip
 
     requirement: RequirementExpectation | None = None
     execution: ExecutionExpectation | None = None
