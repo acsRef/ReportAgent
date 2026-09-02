@@ -52,7 +52,12 @@ def _build_ddl(table_name: str, columns: list[dict]) -> str:
 
 
 def _parse_table_doc(text: str) -> dict | None:
-    """解析字典表结构文档 chunk → {table_name, description, columns}；失败返回 None。"""
+    """解析字典表结构文档 chunk → {table_name, description, columns}；失败返回 None。
+
+    P15 prelude: 兼容两种标题形态——
+    - 旧格式：# 表 `public.fact_sales`（backtick 包裹）
+    - 新格式：# 表 public.fact_orders（ragent-py render_table_doc 改版，无 backtick）
+    """
     if not text:
         return None
     table_name = None
@@ -64,13 +69,26 @@ def _parse_table_doc(text: str) -> dict | None:
         if line.startswith("# 表 `"):
             inner = line.split("`")[1] if "`" in line else line
             table_name = inner.split(".")[-1].strip()
-        elif line.startswith("## 字段"):
+        elif line.startswith("# 表 ") or line.startswith("【表 "):
+            prefix_len = len("# 表 ") if line.startswith("# 表 ") else len("【表 ")
+            inner = line[prefix_len:]
+            if "`" in inner:
+                inner = inner.split("`")[1] if inner.startswith("`") else inner.split("`")[0]
+            # 支持 chunk 标题带节名: 【表 public.fact_orders / 字段】 取表名部分
+            table_name = inner.split("/")[0].split(".")[-1].strip()
+        elif line.startswith("## 字段") or line.startswith("## 字段清单"):
             in_fields = True
         elif in_fields:
             m = re.match(r"^字段 (\S+) 类型 (.*?) 含义", line)
             if m:
                 columns.append({"name": m.group(1), "type": m.group(2).strip()})
-        elif not in_fields and table_name and line and not line.startswith(("#", "【")):
+            # 新格式 markdown 表格：| `order_amount` | numeric(10,2) | 含义 | ... |
+            elif line.startswith("| `") or (line.startswith("|") and "|" in line[1:]):
+                cells = [c.strip().strip("`").strip() for c in line.strip("|").split("|")]
+                if len(cells) >= 2 and cells[0].replace("-", "").strip() and \
+                        not cells[0].startswith(("字段名", "--")):
+                    columns.append({"name": cells[0], "type": cells[1]})
+        elif not in_fields and table_name and line and not line.startswith(("#", "【", "|", "-", "表 ")):
             description_lines.append(line)
     if not table_name or not columns:
         return None
