@@ -1,6 +1,6 @@
 # SQL object error classification fix + real RAG MCP/PG e2e Analytics Case suite
 
-> 状态: 进行中（2026-09-02；接 P14 master `a253d3d`）
+> 状态: 已完成（2026-09-02；接 P14 master `a253d3d`；落地 6 commit + master merge 待 Step 6.6）
 > 双 issue 合并 plan：fix issue（SQL object/schema error 错误分类触发无信息增益 retry/replan）+ test issue（建立基于真实 RAG MCP + PostgreSQL 的完整链路 Analytics Case 测试集）
 > 决策依据：用户 2026-09-02 拍板——P14 mock 全废 + e2e 取代；DiagnosePolicy 路径**用户拍板方案 A**（object_not_found → retry_mcp_schema_retrieval 1 次 → escalate clarify；object_ambiguous → 直接 clarify）；retry_counters 三 key 正交（sql_generation / plan / **mcp_schema**）；`MAX_MCP_RETRIES` 独立设置
 
@@ -1365,3 +1365,39 @@ git push origin --delete p15-prelude-fix-and-test
    - 双 issue（fix + test）合并而非分开——用户已确认同步处理
    - DiagnosePolicy gated 决策（Task 3）——plan 不能跳过 user decision 自行拍板
    - e2e 5 类最小集起步——后续扩全面是用户「分阶段」决策，本 plan 不写后续 plan
+
+---
+
+## 落地记录（2026-09-02）
+
+| Task | Commit | 说明 |
+|---|---|---|
+| Task 0 plan 登记 | `5d9fc3d` `3fe2a76` `2c8a8ac` | plan 登记 + 用户拍板方案 A + plan header 同步（落地前已完成） |
+| Task 1 SQL 分类精确化 | `3d41c1e` | `_classify_psycopg2_error` 用精确子类 + `SQL_ERROR_KINDS` 扩 8 kind + 14 例 contract + 同步 test_reliability_errors / test_diagnose_policy_sources 两处老测试 |
+| Task 2 既有 diagnose policy 兼容 | (无 commit) | 43/43 PASS（test_diagnose_policy + test_diagnose_policy_sources + test_reliability_errors + test_reliability_retry）；Task 1 阶段已同步两处 |
+| Task 3 DiagnosePolicy 方案 A | `9baff76` | DiagnosePolicy.decide 加 object_not_found → retry_mcp_schema_retrieval / object_ambiguous → clarify；DiagnoseDecision Literal 扩展（action / retry_target 各加一项）；AGENT/USER_RECOVERABLE 调整；4 例 contract + 同步 test_diagnose_policy_sources / test_reliability_errors 两处 |
+| Task 4 删除 P14 mock tests | `9985ac7` | 删 14 文件（7 evaluation/tests/ + 7 子包 tests/），production code 全保留 |
+| Task 5 真 e2e 套件 | `f218068` | `evaluation/tests/test_real_rag_mcp_e2e.py` env-gated 5 类最小集；默认 5 SKIPPED |
+| Task 6 全量回归 + 合 master | `608bd9f` + master merge | test_sql_limits 同步 object_not_found 期望 + master merge 待执行 |
+
+### 落地偏差（plan vs 实施）
+
+1. **plan §Step 1.3 漏补 `SyntaxError` 显式分支**：`SyntaxError` 是 `ProgrammingError` 子类，进 ProgrammingError 分支后无 message 匹配会落 `"object"`。需在精确子类检查前显式处理 `SyntaxError → "syntax"`（Task 1 commit `3d41c1e` 一并修）。
+2. **plan §Files to change 漏列 `test_reliability_errors.py` 同步**：SQL_ERROR_KINDS / AGENT_RECOVERABLE / USER_RECOVERABLE 三表扩展均需同步。Task 1 + Task 3 commit 各补一处。
+3. **plan §Step 3.A.4 第 642 行 typo**：`if schema_retrievals < max_schema:` 应为 `if mcp_schema_retrievals < max_mcp:`（plan 用 `schema_retrievals` / `max_schema` 两个未定义变量；实施用已定义的 `mcp_schema_retrievals` / `max_mcp`）。
+4. **plan §Step 5.1 末尾 `from evaluation.runner import _stream_sse` 笔误**：`evaluation.runner` 无此 helper——本文件内 `_stream_sse` 已定义，删除该行（plan 注释自己也承认「复用 helper 不优雅」）。
+5. **plan §Task 1.6 漏列 `test_sql_limits.py::test_classify_undefined_column_is_object` 同步**：老反例钉期望 `'object'` 与 Task 1 改动不一致。Task 6 收尾前补（commit `608bd9f`）。
+
+### 验证结果
+
+- 后端 contracts + smoke：**676 PASS / 0 FAIL / 3 warnings**（P13 baseline 990 中 contracts + smoke 子集）
+- evaluation suite：**40 PASS / 5 SKIPPED**（P0-P13 baseline 5 文件 + e2e env-gated 默认 skip）
+- 后端全量回归（Phase 收尾合并前最后一次）：**1008 PASS / 1 SKIPPED / 5 warnings**（990 baseline + 18 P15 增量）
+- 5 类 e2e 真链路验证：env-gated 待用户手动门（PG + ragent-py MCP + backend :8100 全启动 + REPORTAGENT_E2E=1）
+
+### 兼容 / 风险
+
+- P14 production code（`evaluation/checker.py` / `runner.py` / `schema.py` / `__init__.py` / 9 子包 `harness.py`）不动——runtime infra 由 e2e 真链路间接验证。
+- `psycopg2.errors.UndefinedColumn` 等是 psycopg2 标准库 API（不是 vendor-specific），版本稳定。
+- `_get_max_mcp_retries()` 与 `_get_max_sql_retries` / `_get_max_plan_retries` 平行；新 helper 读 `settings.MAX_MCP_REPAIR_RETRIES`（默认 1），独立 budget。
+- 真端到端 e2e 跑通验证留手动门（用户启动 PG + MCP + backend 后 `REPORTAGENT_E2E=1`）；CI 自动跑不动（需真 LLM key + 真 DB）。
