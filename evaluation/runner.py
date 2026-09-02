@@ -168,11 +168,40 @@ def _observe_turn(events: list[dict], sid: str, client: httpx.Client,
     return obs, detail
 
 
+def _compute_dim_results(
+    sections_all: dict[str, str], deferred_all: list[str]
+) -> dict[str, dict[str, int]]:
+    """P14：run_case 内部 helper —— 算 11-slot dim_results dict。
+
+    输入：sections_all（merged legacy + dispatcher）+ deferred_all。
+    输出：{dim: {pass, fail, deferred}}，dim 集合 = 9 DIM_REGISTRY ∪ 4 LEGACY_KEYS = 11
+    （requirement/report 在 DIM_REGISTRY 与 LEGACY_KEYS 都出现，set 去重）。
+
+    关键点：异常路径也调这个函数，确保 dim_results shape 与正常路径一致
+    （P14 P3 闭环：regression evaluator 不处理两套格式）。
+    """
+    from evaluation.checker import DIM_REGISTRY, build_dim_results
+
+    all_dims = list(DIM_REGISTRY.keys()) + ["requirement", "execution", "report", "behavior"]
+    seen: set[str] = set()
+    unique_dims: list[str] = []
+    for d in all_dims:
+        if d not in seen:
+            seen.add(d)
+            unique_dims.append(d)
+    return build_dim_results(
+        sections_all,
+        sorted(set(deferred_all)),
+        unique_dims,
+    )
+
+
 def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, Any]:
     if case.requires_fault_injection:
         return {
             "case_id": case.id, "category": case.category, "status": "skip",
             "reason": "requires_fault_injection", "sections": {}, "deferred": [],
+            "dim_results": _compute_dim_results({}, []),  # 11-slot 全 0
             "sql_executed": False, "latency_ms": None,
         }
 
@@ -236,25 +265,10 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
         latency_ms = (time.monotonic() - t0) * 1000.0
         status = "fail" if any(v.startswith("fail") for v in sections_all.values()) else "pass"
 
-        # P14：dim_results = DIM_REGISTRY 9 + LEGACY 4（{requirement, report} 重叠，set 去重）
-        from evaluation.checker import DIM_REGISTRY, build_dim_results
-        all_dims = list(DIM_REGISTRY.keys()) + ["requirement", "execution", "report", "behavior"]
-        seen: set[str] = set()
-        unique_dims: list[str] = []
-        for d in all_dims:
-            if d not in seen:
-                seen.add(d)
-                unique_dims.append(d)
-        dim_results = build_dim_results(
-            sections_all,
-            sorted(set(deferred_all)),
-            unique_dims,
-        )
-
         return {
             "case_id": case.id, "category": case.category, "status": status,
             "sections": sections_all, "deferred": sorted(set(deferred_all)),
-            "dim_results": dim_results,  # P14 新增字段
+            "dim_results": _compute_dim_results(sections_all, deferred_all),  # P14 新增字段
             "sql_executed": sql_executed,
             "latency_ms": round(latency_ms, 1),
         }
@@ -263,7 +277,7 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
             "case_id": case.id, "category": case.category, "status": "error",
             "reason": f"{type(exc).__name__}: {exc}",
             "sections": sections_all, "deferred": sorted(set(deferred_all)),
-            "dim_results": {},
+            "dim_results": _compute_dim_results(sections_all, deferred_all),
             "sql_executed": sql_executed,
             "latency_ms": round((time.monotonic() - t0) * 1000.0, 1),
         }
