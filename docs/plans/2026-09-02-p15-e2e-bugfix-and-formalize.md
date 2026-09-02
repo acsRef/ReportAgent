@@ -1,6 +1,6 @@
 # P15 e2e bug 修复 + 正式用例固化
 
-> 状态: 进行中
+> 状态: 已完成
 
 ## Context（背景）
 
@@ -129,3 +129,24 @@ P15 prelude（已合 master `d83e9d9` + 5 follow-up fix commit）用**真 RAG MC
 - **不**动 ragent-py（独立仓库；`render.py` 改版已在 KB 数据里生效，其 repo commit 另排）。
 - **不**做 memory 0 行数据回填（codec 修好后由正常链路自然累积）。
 - **不**改 ② 为把 supplement 统一进 adjust 机制（两套语义收齐是大重构，留给 P15 主 plan）。
+
+## 落地记录（2026-09-03 收尾）
+
+commit 链：`6633eef`(T1 codec) → `2f4709a`(T2 supplement 继承) → `a751d57`(T3 requested_object) → `0ba6f67`(T4 fault seam) → `f6b0a89`(T5 正式 e2e) → `5cae708`(FK 测试同步) → `d76de95`(相对时间续接) → `d61326e`(SQLAgentState channel 修复) → `210c947`(e2e 断言收敛) → docs。
+
+**live 验证（6 例逐一绿于最终代码；backend REPORTAGENT_E2E=1 重启验证）**：
+- happy / requested_object / schema / multi（轮2 继承 time=2024+scope 华东）→ 真链路绿
+- repair（seam once object_not_found → retry_mcp_schema_retrieval → SUCCESS）/ fail（seam permission persistent → 无 SUCCESS、error 落库）→ 真触发绿
+- 离线：contracts+smoke+graphs 781 passed；persistence vector recall 真 PG 绿；evaluation 40 passed / 6 skipped
+
+**env 修复（非代码）**：live `query_template.intent_embedding` 实为 `vector(4096)` ≠ init_pg.sql `1536` → ALTER 对齐（0 行）。
+
+**落地偏差 6 项**：
+1. P0-1：T1 测试 fake embedding 维度从 `EMBEDDING_DIM` 读（不硬编码）——live 抓出 query_template 4096 不一致
+2. P0-2：`mode` 声明为 RequirementAnalysisState channel、`fault_override` 声明为 ConfirmedExecutionState **且 SQLAgentState** channel——live 抓出未声明 key 被 langgraph 丢弃（`d61326e`，正是 P0-2 警告的 bug 形态）
+3. fault seam 双 gate 需 backend `REPORTAGENT_E2E=1` 启动（文档写明）
+4. requested_object：LLM 遵守「不静默替换」但 assumption key 用 `table_availability`（非契约 `requested_object:`）→ 正式 case 改行为不变量，不钉 key
+5. schema case 降为 smoke：真实表名不在 SSE API 面、Requirement 对 schema 问题卡形态随 LLM → schema→SQL 强证据由 happy/repair 承担
+6. 真 LLM e2e 单次全量偶发漂移（happy/repair/multi 的 LLM 表达）→ 断言按三轮漂移收敛，suite 定位 env-gated manual/nightly（同 P12 Full E2E）
+
+**下一步**：真实用例扩充（多表联合 / MCP 异常中断回滚 / 空结果 / security / 并发等），见 memory `user-e2e-expansion-directive`（逐个真跑、全部做完统一 commit）。
