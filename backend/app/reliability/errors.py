@@ -25,11 +25,16 @@ from pydantic import BaseModel
 SQL_ERROR_KINDS = ("syntax", "object", "object_not_found", "object_ambiguous",
                    "timeout", "connection", "permission", "other")
 
-# Agent 侧（DiagnosePolicy 消费）：syntax/object/other 可 repair。
-AGENT_RECOVERABLE_KINDS = ("syntax", "object", "other")
+# Agent 侧（DiagnosePolicy 消费）：syntax/object/object_not_found/other 可 repair。
+# P15 prelude fix 加 object_not_found（走 retry_mcp_schema_retrieval 路径，独立预算）。
+# object_ambiguous 不在此列——列名歧义必须用户消歧，直接 clarify。
+AGENT_RECOVERABLE_KINDS = ("syntax", "object", "object_not_found", "other")
 
-# 用户侧（SSE _build_sse_error 消费）：timeout/connection/object/other 用户重试有意义。
-USER_RECOVERABLE_KINDS = ("timeout", "connection", "object", "other")
+# 用户侧（SSE _build_sse_error 消费）：timeout/connection/object/object_not_found/
+# object_ambiguous/other 用户重试有意义。
+# P15 prelude fix 加 object_not_found（schema retrieval 后用户可补充）+ object_ambiguous（消歧）。
+USER_RECOVERABLE_KINDS = ("timeout", "connection", "object", "object_not_found",
+                          "object_ambiguous", "other")
 
 
 class ErrorCode(str, Enum):

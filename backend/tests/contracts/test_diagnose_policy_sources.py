@@ -26,23 +26,36 @@ def test_diagnose_policy_kind_vocabulary_is_errors_source():
 def test_diagnose_policy_fail_branch_uses_agent_recoverable_source():
     """源同源钉：fail 分支判定必须是 errors.agent_recoverable 本尊。
 
-    P15 prelude Task 1 阶段：object_not_found / object_ambiguous 故意不在
-    AGENT_RECOVERABLE_KINDS（Task 3 才把 object_not_found 加进 AGENT 表）——
-    此时它们走 fail 分支属正确行为。Task 3 完成后此断言需重新对齐：
-    AGENT_RECOVERABLE_KINDS 加 'object_not_found'，差集仅剩
-    {"timeout", "connection", "permission", "object_ambiguous"}。
+    P15 prelude 方案 A（用户 2026-09-02 拍板）落地后：
+    - AGENT_RECOVERABLE_KINDS 加 'object_not_found'（走 retry_mcp_schema_retrieval）
+    - object_ambiguous 仍故意不进 AGENT 表——直接 clarify
+    故差集固定 {"timeout", "connection", "permission", "object_ambiguous"}。
     """
     assert sql_graph_module.agent_recoverable is errors.agent_recoverable
     assert set(SQL_ERROR_KINDS) - set(AGENT_RECOVERABLE_KINDS) == {
-        "timeout", "connection", "permission", "object_not_found", "object_ambiguous",
+        "timeout", "connection", "permission", "object_ambiguous",
     }
 
 
 def test_diagnose_policy_decisions_match_agent_recoverable_table():
-    """行为表钉（重构前后必须一致）：非 agent-recoverable kind → fail，其余预算内 retry。"""
+    """行为表钉（重构前后必须一致）：非 agent-recoverable kind → fail，其余走预算内决策。
+
+    P15 prelude 方案 A 后增加例外：
+    - object_not_found 走 retry_mcp_schema_retrieval（独立预算，AGENT 表内但 action 特殊）
+    - object_ambiguous 不在 AGENT 表内但走 clarify（用户消歧语义，非 fail）
+    """
     for kind in SQL_ERROR_KINDS:
         decision = sql_graph_module.DiagnosePolicy.decide(error_kind=kind)
-        if agent_recoverable(kind):
+        if kind == "object_not_found":
+            # 方案 A：MCP schema retrieval 独立路径
+            assert decision.action == "retry_mcp_schema_retrieval"
+            assert decision.recoverable is True
+            assert decision.retry_target == "mcp_schema"
+        elif kind == "object_ambiguous":
+            # 方案 A：列名歧义必须用户消歧，直接 clarify
+            assert decision.action == "clarify"
+            assert decision.recoverable is False
+        elif agent_recoverable(kind):
             assert decision.action == "retry_sql"
             assert decision.recoverable is True
         else:
