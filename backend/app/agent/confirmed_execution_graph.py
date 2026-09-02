@@ -68,6 +68,9 @@ class ConfirmedExecutionState(TypedDict, total=False):
     # Used by the SSE error helper so the user sees the query that
     # actually ran when execution fails.
     sql: Optional[str]
+    # P15 e2e T4 fault seam: main 从 X-E2E-Fault header 解析（REPORTAGENT_E2E=1 双 gate），
+    # 经此透传到 sql_graph._evaluate（确定性 fail/repair e2e 用；生产恒 None）。
+    fault_override: Optional[dict]
 
 
 # --- Errors ----------------------------------------------------------------
@@ -251,6 +254,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
         "confirmed_requirement": confirmed_requirement,
         "conversation_context": conversation_context or None,
         "assembled_context": assembled_context or None,  # P4c: 含 recall 的全景 context
+        "fault_override": state.get("fault_override"),  # P15 e2e T4: e2e fault seam 透传
     }, _callbacks_only(config))
     qr = ss.get("query_result")
     # Passthrough of error + last-tried SQL so the parent graph can emit

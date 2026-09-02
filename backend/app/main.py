@@ -68,6 +68,7 @@ from app.services import (
 from app.infra.db import report_version_repository
 from app.reliability.errors import classify_exception, normalize_kind, user_code, user_message, user_recoverable
 from app.reliability.timeout import MAX_TASK_DURATION, run_with_timeout
+from app.reliability import fault_inject
 
 VECTOR_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
@@ -166,10 +167,12 @@ def _confirmed_initial(
     user_query: str = "",
     base_report_version: int | None = None,
     adjustment_text: str | None = None,
+    fault_override: dict | None = None,
 ) -> ConfirmedExecutionState:
     """构造 ConfirmedExecutionState，并抢占创建带身份的 tracer。
 
     必须在 SSE 返回前调用——initial / trace_id 归属于后台任务，不依赖连接存活。
+    fault_override：P15 e2e T4 fault seam（main 已按双 gate 解析 X-E2E-Fault）。
     """
     trace_id = str(uuid.uuid4())
     get_tracer(trace_id, session_id=session_id, user_id=user_id, user_query=user_query)
@@ -186,6 +189,7 @@ def _confirmed_initial(
         "report_payload": None,
         "execution_status": "RUNNING",
         "error": None,
+        "fault_override": fault_override,
     }
 
 
@@ -722,6 +726,7 @@ async def _chat_confirmed_execution(
         user_query=request.user_query,
         base_report_version=request.base_report_version,
         adjustment_text=request.user_query,
+        fault_override=fault_inject.parse_header(req.headers.get("X-E2E-Fault")),
     )
     return _start_confirmed_stream(
         session_id, user["id"], "adjust", graph, initial,
@@ -1097,7 +1102,10 @@ async def confirm_session(
         raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
 
     graph = build_confirmed_execution_graph()
-    initial = _confirmed_initial(session_id, user["id"], user_query="")
+    initial = _confirmed_initial(
+        session_id, user["id"], user_query="",
+        fault_override=fault_inject.parse_header(req.headers.get("X-E2E-Fault")),
+    )
     return _start_confirmed_stream(
         session_id, user["id"], "confirm", graph, initial,
         failed_action="confirm", phase_label="generating",

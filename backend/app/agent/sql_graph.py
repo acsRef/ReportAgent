@@ -17,6 +17,7 @@ from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaCont
 from app.utils.text import extract_sql, safe_json_parse
 from app.infra.trace.sdk import current_tracer, traced_node
 from app.reliability.errors import SQL_ERROR_KINDS, agent_recoverable
+from app.reliability import fault_inject
 from app.tools.sql_tools import validate_sql, execute_sql
 from app.tools.data_tools import search_tables, get_table_ddl
 from app.state.checkpoint_adapter import migrate_checkpoint
@@ -622,6 +623,33 @@ def _execute(state: SQLAgentState) -> dict:
 
 @traced_node("sql_evaluate")
 def _evaluate(state: SQLAgentState) -> dict:
+    # P15 e2e T4 fault seam（fail-closed，仅 REPORTAGENT_E2E=1 时可能激活）：真实判定前
+    # 按 kind_override 注入——object_not_found 走 VALIDATION_FAILED → DiagnosePolicy →
+    # retry_mcp_schema_retrieval（确定性测 repair 恢复）；permission 走 execution FAILED →
+    # DiagnosePolicy not agent_recoverable → fail（确定性测永久 fault 不伪造成功）。
+    _fk = fault_inject.kind_override(state)
+    if _fk is not None:
+        if _fk == "object_not_found":
+            return {
+                "evaluate_result": EvaluateResult(
+                    status="VALIDATION_FAILED", kind="object_not_found",
+                    validation_result={
+                        "valid": False, "error_kind": "object_not_found",
+                        "error": "E2E fault injection (object_not_found)",
+                    },
+                ).model_dump(),
+                "execution_status": "SQL_SYNTAX_ERROR",
+            }
+        return {
+            "evaluate_result": EvaluateResult(
+                status="FAILED", kind=_fk,
+                error=ErrorDetail(
+                    code="SQL_EXECUTION_ERROR",
+                    message=f"E2E fault injection ({_fk})", kind=_fk,
+                ),
+            ).model_dump(),
+            "execution_status": "FAILED",
+        }
     # R1: validation_failed 必须优先于 sql_result 检查——上一轮 execution
     # 留下的 stale sql_result 不能污染本轮 evaluate 判断。修复前 _evaluate
     # 用 `if not raw:` 间接推断 validation failure，结果上一轮 timeout/
