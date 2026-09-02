@@ -33,35 +33,47 @@ MAX_RESULT_ROWS = 5000
 CONNECT_TIMEOUT_S = 10
 STATEMENT_TIMEOUT_MS = 30_000
 
-ErrorKind = str  # "timeout" | "syntax" | "object" | "connection" | "permission" | "other"
+ErrorKind = str  # "timeout" | "syntax" | "object" | "object_not_found" | "object_ambiguous" | "connection" | "permission" | "other"
 
 
 def _classify_psycopg2_error(exc: BaseException) -> ErrorKind:
-    """把 psycopg2 异常分类为 6 个枚举之一，供上层决定重试策略。
+    """把 psycopg2 异常分类为 8 个枚举之一，供上层决定重试策略。
 
-    边界：timeout / connection / permission 不进入 LLM 重试（盲重试无意义，
-    让用户直接收到 FAILED 友好提示）；syntax / object 走原重试；other 兜底。
+    P15 prelude fix：用 psycopg2.errors 具体子类替代 ProgrammingError 兜底——
+    UndefinedColumn/Table/Function 归 'object_not_found'（DiagnosePolicy 走 MCP
+    schema retrieval 路径），AmbiguousColumn 归 'object_ambiguous'（直接 clarify），
+    DivisionByZero/DatatypeMismatch 归 'other'（LLM 修不了）。
+    边界保留：timeout / connection / permission / syntax 不进 LLM retry。
+
+    精确子类优先级高于 message 字符串匹配（psycopg2 子类关系比 message 内容可靠）；
+    旧独立 isinstance 分支（UndefinedColumn/Table/Function/SyntaxError）合并进
+    ProgrammingError 分支内的精确子类检查。
     """
+    # timeout / connection 边界保留
     if isinstance(exc, (psycopg2.errors.QueryCanceled, psycopg2.errors.AdminShutdown, psycopg2.errors.CrashShutdown)):
         return "timeout"
     if isinstance(exc, psycopg2.OperationalError):
         return "connection"
+    # ProgrammingError 细分
     if isinstance(exc, psycopg2.ProgrammingError):
-        # ProgrammingError 涵盖语法错（sqlglot AST 通常已拦下）和权限不足；
-        # 权限类走 permission，其它走 syntax。
         msg = str(exc).lower()
         if "permission" in msg or "denied" in msg:
             return "permission"
         if "syntax" in msg or "parse" in msg:
             return "syntax"
-        return "object"
-    if isinstance(exc, psycopg2.errors.SyntaxError):
-        return "syntax"
-    if isinstance(exc, psycopg2.errors.UndefinedColumn):
-        return "object"
-    if isinstance(exc, psycopg2.errors.UndefinedTable):
-        return "object"
-    if isinstance(exc, psycopg2.errors.UndefinedFunction):
+        # 精确子类优先级高于兜底（独立于 message 匹配）
+        if isinstance(exc, psycopg2.errors.SyntaxError):
+            return "syntax"
+        if isinstance(exc, (psycopg2.errors.UndefinedColumn,
+                            psycopg2.errors.UndefinedTable,
+                            psycopg2.errors.UndefinedFunction)):
+            return "object_not_found"
+        if isinstance(exc, psycopg2.errors.AmbiguousColumn):
+            return "object_ambiguous"
+        if isinstance(exc, (psycopg2.errors.DivisionByZero,
+                            psycopg2.errors.DatatypeMismatch)):
+            return "other"
+        # 未识别 ProgrammingError 兜底保留 'object'（向后兼容）
         return "object"
     return "other"
 

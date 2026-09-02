@@ -17,8 +17,13 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-# SQL 6 kind —— app/tools/sql_tools.py:_classify_psycopg2_error 的输出域。
-SQL_ERROR_KINDS = ("syntax", "object", "timeout", "connection", "permission", "other")
+# SQL 8 kind —— app/tools/sql_tools.py:_classify_psycopg2_error 的输出域。
+# P15 prelude fix：在原 6 kind 基础上加 object_not_found / object_ambiguous；
+#   - object_not_found：UndefinedColumn/Table/Function 拼写错（DiagnosePolicy 走 retry_mcp_schema_retrieval）
+#   - object_ambiguous：AmbiguousColumn 列名歧义（直接 clarify 让用户消歧）
+# 'object' 保留作向后兼容兜底（未识别 ProgrammingError 仍归 'object'）。
+SQL_ERROR_KINDS = ("syntax", "object", "object_not_found", "object_ambiguous",
+                   "timeout", "connection", "permission", "other")
 
 # Agent 侧（DiagnosePolicy 消费）：syntax/object/other 可 repair。
 AGENT_RECOVERABLE_KINDS = ("syntax", "object", "other")

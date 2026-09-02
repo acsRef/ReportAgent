@@ -16,13 +16,26 @@ from app.reliability.errors import (
 def test_diagnose_policy_kind_vocabulary_is_errors_source():
     """源同源钉：DiagnosePolicy normalize 用的白名单必须是 errors.SQL_ERROR_KINDS 本尊。"""
     assert sql_graph_module.SQL_ERROR_KINDS is errors.SQL_ERROR_KINDS
-    assert set(SQL_ERROR_KINDS) == {"syntax", "object", "timeout", "connection", "permission", "other"}
+    # P15 prelude fix：8 kind（6 原 + object_not_found + object_ambiguous）
+    assert set(SQL_ERROR_KINDS) == {
+        "syntax", "object", "object_not_found", "object_ambiguous",
+        "timeout", "connection", "permission", "other",
+    }
 
 
 def test_diagnose_policy_fail_branch_uses_agent_recoverable_source():
-    """源同源钉：fail 分支判定必须是 errors.agent_recoverable 本尊。"""
+    """源同源钉：fail 分支判定必须是 errors.agent_recoverable 本尊。
+
+    P15 prelude Task 1 阶段：object_not_found / object_ambiguous 故意不在
+    AGENT_RECOVERABLE_KINDS（Task 3 才把 object_not_found 加进 AGENT 表）——
+    此时它们走 fail 分支属正确行为。Task 3 完成后此断言需重新对齐：
+    AGENT_RECOVERABLE_KINDS 加 'object_not_found'，差集仅剩
+    {"timeout", "connection", "permission", "object_ambiguous"}。
+    """
     assert sql_graph_module.agent_recoverable is errors.agent_recoverable
-    assert set(SQL_ERROR_KINDS) - set(AGENT_RECOVERABLE_KINDS) == {"timeout", "connection", "permission"}
+    assert set(SQL_ERROR_KINDS) - set(AGENT_RECOVERABLE_KINDS) == {
+        "timeout", "connection", "permission", "object_not_found", "object_ambiguous",
+    }
 
 
 def test_diagnose_policy_decisions_match_agent_recoverable_table():

@@ -54,7 +54,13 @@ def test_error_code_has_exactly_the_ten_contract_codes():
 
 
 def test_sql_error_kinds_vocabulary():
-    assert set(SQL_ERROR_KINDS) == {"syntax", "object", "timeout", "connection", "permission", "other"}
+    # P15 prelude fix：8 kind（6 原 + object_not_found + object_ambiguous）；
+    # object_not_found 走 DiagnosePolicy retry_mcp_schema_retrieval，
+    # object_ambiguous 直接 clarify。
+    assert set(SQL_ERROR_KINDS) == {
+        "syntax", "object", "object_not_found", "object_ambiguous",
+        "timeout", "connection", "permission", "other",
+    }
 
 
 def test_agent_recoverable_table_matches_p8_verdict():
