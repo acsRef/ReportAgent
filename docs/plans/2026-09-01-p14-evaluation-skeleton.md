@@ -1,6 +1,7 @@
 # P14 Evaluation 骨架 + 行为期望扩展
 
-> 状态: 进行中（2026-09-01；接 P13 master `079dd2f`；先骨架 + 行为期望；后续 P14b（baseline/optimized 对比）/ P14c（regression loop）按需串行）
+> 状态: 已完成（2026-09-02；接 P13 master `079dd2f`；落地 commit `10793c8` merge(p14)）
+> 决策: 双模型 plan 搁置（用户 2026-09-01 决策）；frontend / e2e 子包仅占位；后续 P14b（Langfuse trace 接入 + baseline/optimized 对比）/ P14c（regression loop）按需串行
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1717,3 +1718,60 @@ git commit -m "docs(p14): evaluation/README.md（9 子包用法 + P14b/c 接力�
    - typo `evaluation/evaluation/*` → ✅ 已修
 
 6. **Out-of-scope 明示**（Explicitly NOT doing）：见 plan §「Explicitly NOT doing」10 条
+
+---
+
+## 落地记录（2026-09-02）
+
+### Commit 链（branch `p14-evaluation-skeleton` → merge `10793c8`）
+
+| Commit | 类型 | 摘要 |
+|---|---|---|
+| `95f6537` | docs | dual-model plan 暂缓 + P14 plan 登记 (admin) |
+| `bf245ae` | docs | plan revise D1/D2 + build_dim_results 纯函数（用户 review 反馈闭环） |
+| `1e59169` | feat | checker.py DIM_REGISTRY + Phase 2 dispatcher（LEGACY_KEYS frozenset） |
+| `162d9cc` | feat | 9 子包 dispatcher 骨架（D2 deferred vs noop 分清） |
+| `83e08fd` | feat | checker.build_dim_results 纯函数 + runner.run_case output 加 dim_results |
+| `f62e80b` | docs | evaluation/README.md + runner.py 显式 import 9 子包（Task 4 收尾 + CLI 路径稳健） |
+| `17efd28` | fix | **P0 闭环**: TurnExpectation extra='allow' 让 dynamic dim key 穿透 Pydantic roundtrip |
+| `0c3d563` | fix | **P1 闭环**: runner._observe_turn 取 max(version) 而非 versions[0] |
+| `01668be` | fix | **P2 闭环**: 9 子包 import 移到 evaluation/__init__.py 顶部（CLI 路径稳健） |
+| `dc5983f` | fix | **P3 闭环**: run_case 异常/skip/success 三路径 dim_results 同形 |
+| `10793c8` | merge | merge(p14) to master |
+
+### 测试统计
+
+| 阶段 | 数字 | 备注 |
+|---|---|---|
+| evaluation/ 总测试 | **108 passed** | 38 P0-P13 既有 + 70 P14 新增（dispatcher 6 + dim_results 6 + layout 16 + 9 subpackage harness 29 + 11 P0/P1/P2/P3 fix） |
+| backend/ 总测试 | **990 passed / 1 skipped / 5 warnings** | 与 P13 master baseline 完全一致，零回归 |
+| backend/ 测试耗时 | 429.25s（7min 09s） | |
+
+### 落地偏差（5 项）
+
+1. **test_harness.py 同名冲突**（D3 边界冲突）：pytest 把所有子包的 `test_harness.py` 当同一模块。修：命名 `test_harness_<dim>.py` per dim
+2. **D2 边界歧义**（用户 2026-09-01 review 反馈）：原 placeholder 返回 `({}, [])` 是 silent no-op 不是 deferred。修：placeholder 改返 `({}, list(exp.keys()))` 让 `dim_results[dim]['deferred']` = 期望 key 数
+3. **D1 LEGACY_KEYS 测试冲突**（用户 review 反馈）：原 plan 同时声称「Phase 2 dispatch requirement」但 `LEGACY_KEYS` 跳过。修：明确 9 注册 + 7 active dispatch，requirement/report 是「兼容注册位」
+4. **Task 3 测试写法**（用户 review 反馈）：原 `inspect.getsource(runner.run_case)` 是源码文本伪测试。修：抽 `build_dim_results` 纯函数 + 6 例行为单测
+5. **CLI 路径 DIM_REGISTRY 不完整**（实施撞到）：`python -m evaluation.runner` 不会自动触发 9 子包 import → DIM_REGISTRY 空。**两次修**：Task 4 commit `f62e80b` 先在 runner.py 顶部 import 9 子包；Issue 3 fix commit `01668be` 移到 evaluation/__init__.py 顶部更稳健（任何 `evaluation.*` 入口都触发注册）
+
+### P14 P0/P1/P2/P3 闭环（review 第二轮反馈）
+
+| 编号 | 边界 | 修复 commit |
+|---|---|---|
+| P0 | dynamic dim key 穿透 Pydantic | `17efd28` |
+| P1 | latest report version 取 max | `0c3d563` |
+| P2 | DIM_REGISTRY 启动期完整（无 test file 依赖） | `01668be` |
+| P3 | error path dim_results 同形 | `dc5983f` |
+
+### P14b / P14c 接力
+
+| 阶段 | 范围 | 锚点 |
+|---|---|---|
+| P14b | ObservedTurn.langfuse_trace 扩字段 + memory/retrieval/tool_selection/repair 子包实装 Langfuse trace 查询；baseline/optimized 对比机制 | `evaluation/README.md` §"P14b / P14c 接力" |
+| P14c | regression detection 自动化——多次 run 收集 dim_results，threshold-based 报警 | 同上 |
+| P15 | 文档收口（README + ADR-001~007 + CLAUDE.md 终稿 + Demo） | 用户 2026-09-01 决策「先 README + ADR 框架」 |
+
+### 用户 review 备注（待 P14b 处理）
+
+> D:\PyProject\ragent-py 数据库清理由用户决定后重造——P14b 启动 Langfuse trace 真接入 / 真 e2e 时一并处理（CLAUDE.md §9 不引入 Prometheus/Grafana 但真 e2e 需要 ragent-py 数据）。
