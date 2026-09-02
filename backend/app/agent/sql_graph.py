@@ -13,11 +13,12 @@ from pydantic import BaseModel, Field
 from app.context import format_context_block
 from app.llm import _format_tools_for_prompt, call_llm
 from app.tools.registry import registry
-from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext
+from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext, TableSchema, ColumnSchema
 from app.utils.text import extract_sql, safe_json_parse
 from app.infra.trace.sdk import current_tracer, traced_node
 from app.reliability.errors import SQL_ERROR_KINDS, agent_recoverable
 from app.tools.sql_tools import validate_sql, execute_sql
+from app.tools.data_tools import search_tables, get_table_ddl
 from app.state.checkpoint_adapter import migrate_checkpoint
 from app.agent.prompts import (
     build_sql_intent_analyze_prompt,
@@ -54,6 +55,52 @@ def _get_max_mcp_retries() -> int:
         return int(os.getenv("MAX_MCP_REPAIR_RETRIES", "1"))
     except (TypeError, ValueError):
         return 1
+
+
+def _parse_ddl_columns(ddl: str) -> list[dict]:
+    """解析 CREATE TABLE DDL 文本 → [{name, type}]。
+
+    P15 prelude retry_mcp_schema_retrieval fallback 用：get_table_ddl 返回
+    "CREATE TABLE fact_orders (...)" 文本，从中提取列名/类型（不为做 AST，
+    够 generate_sql 用即可）。
+    """
+    columns: list[dict] = []
+    for line in ddl.splitlines():
+        line = line.strip().rstrip(",")
+        if not line or line.startswith("CREATE") or line.startswith("(") or line.startswith(")"):
+            continue
+        if line.startswith(("PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT", "INDEX", "CHECK")):
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].islower() and not parts[0].startswith(('"', "'", "--")):
+            columns.append({"name": parts[0].strip('"'), "type": " ".join(parts[1:]).strip('"')})
+    return columns
+
+
+def _extract_table_names(sql_text: str) -> list[str]:
+    """从 SQL 文本提取涉及的 dim_*/fact_* 表名（FROM/JOIN 后跟的标识符）。
+
+    P15 prelude retry_mcp_schema_retrieval 用：给 LLM 的 schema 用 SQL 里
+    真实涉及的表（而不是语义检索可能漏的表）。
+    """
+    names: list[str] = []
+    for keyword in ("FROM ", "JOIN "):
+        idx = 0
+        while True:
+            idx = sql_text.upper().find(keyword, idx)
+            if idx < 0:
+                break
+            rest = sql_text[idx + len(keyword):].lstrip()
+            token = ""
+            for ch in rest:
+                if ch.isalnum() or ch == "_":
+                    token += ch
+                else:
+                    break
+            if token.startswith(("dim_", "fact_")) and token not in names:
+                names.append(token)
+            idx += len(keyword)
+    return names
 
 
 @dataclass
@@ -128,15 +175,11 @@ class DiagnosePolicy:
         # evaluate_result.kind 已是 "syntax"，timeout 不再泄漏进来。
         # P9：kind 白名单与 fail 判定收编 reliability.errors 单一来源（表驱动，
         # 决策输出不变——test_diagnose_policy_sources.py 钉同源）。
-        if raw_empty or validation_failed:
-            if sql_retries < max_sql:
-                return DiagnoseDecision(action="retry_sql", reason=f"{kind}: retry sql {sql_retries+1}/{max_sql} (validation)", error_kind=kind, recoverable=True, retry_target="generate_sql", confidence=0.7)
-            if plan_retries < max_plan:
-                return DiagnoseDecision(action="replan", reason=f"{kind}: replan {plan_retries+1}/{max_plan} (validation)", error_kind=kind, recoverable=True, retry_target="plan", confidence=0.6)
-            return DiagnoseDecision(action="clarify", reason=f"{kind}: budget exhausted after validation", error_kind=kind, recoverable=False, retry_target="end", confidence=0.5)
-        # P15 prelude fix（方案 A，用户 2026-09-02 拍板）：
-        # object_not_found 路径优先走 retry_mcp_schema_retrieval（拿到新 schema 再 generate_sql），
-        # budget 用尽后 escalate clarify 避免死循环。
+        #
+        # P15 prelude fix（方案 A）：object_not_found / object_ambiguous 必须
+        # 优先于 validation_failed 分支——列/表名错误的修复路径是 MCP schema
+        # retrieval 或用户消歧，不是盲 retry_sql。此前 validation_failed 分支
+        # 在前，object_not_found 永远落 retry_sql（同 SQL 重跑无信息增益）。
         if kind == "object_not_found":
             if mcp_schema_retrievals < max_mcp:
                 return DiagnoseDecision(
@@ -149,14 +192,19 @@ class DiagnosePolicy:
                 reason=f"{kind}: schema retrieval budget exhausted",
                 error_kind=kind, recoverable=False, retry_target="end", confidence=0.7,
             )
-        # P15 prelude fix: object_ambiguous（AmbiguousColumn 列名歧义）→ 必须用户消歧，
-        # 不进 MCP retry（MCP schema 不会消歧列名）。
+        # P15 prelude fix: object_ambiguous（AmbiguousColumn 列名歧义）→ 必须用户消歧。
         if kind == "object_ambiguous":
             return DiagnoseDecision(
                 action="clarify",
                 reason=f"{kind}: column ambiguous, user disambiguation required",
                 error_kind=kind, recoverable=False, retry_target="end", confidence=0.9,
             )
+        if raw_empty or validation_failed:
+            if sql_retries < max_sql:
+                return DiagnoseDecision(action="retry_sql", reason=f"{kind}: retry sql {sql_retries+1}/{max_sql} (validation)", error_kind=kind, recoverable=True, retry_target="generate_sql", confidence=0.7)
+            if plan_retries < max_plan:
+                return DiagnoseDecision(action="replan", reason=f"{kind}: replan {plan_retries+1}/{max_plan} (validation)", error_kind=kind, recoverable=True, retry_target="plan", confidence=0.6)
+            return DiagnoseDecision(action="clarify", reason=f"{kind}: budget exhausted after validation", error_kind=kind, recoverable=False, retry_target="end", confidence=0.5)
         if not agent_recoverable(kind):
             return DiagnoseDecision(action="fail", reason=f"{kind}: non-recoverable", error_kind=kind, recoverable=False, retry_target="end", confidence=0.9)
         if sql_retries < max_sql:
@@ -234,14 +282,12 @@ class SQLAgentState(TypedDict, total=False):
 
 
 _FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
-- fact_sales: date_id→dim_date, region_id→dim_region, product_id→dim_product, customer_id→dim_customer
-- fact_returns: return_date_id→dim_date, product_id→dim_product, sale_id→fact_sales
-- fact_inventory: date_id→dim_date, product_id→dim_product, warehouse_id→dim_warehouse
-- fact_attendance: date_id→dim_date, employee_id→dim_employee"""
+- fact_orders: order_date→dim_date, store_id→dim_store, customer_id→dim_customer, product_id→dim_product, promotion_id→dim_promotion
+- fact_payments: payment_date→dim_date, order_id→fact_orders"""
 
 _PLAN_TABLE_HINTS = """常用表速查:
-- fact_sales(销售事实), fact_returns(退货事实), fact_inventory(库存事实), fact_attendance(考勤事实)
-- 维度表: dim_date, dim_region, dim_product, dim_customer, dim_warehouse, dim_employee
+- fact_orders(订单事实), fact_payments(支付事实)
+- 维度表: dim_date, dim_store, dim_product, dim_customer, dim_promotion
 
 """ + _FK_CHAIN_HINTS
 
@@ -583,8 +629,13 @@ def _evaluate(state: SQLAgentState) -> dict:
     # VALIDATION_FAILED 路径，不读 sql_result。
     validation = state.get("validation_result") or {}
     if validation.get("valid") is False:
+        # P15 prelude fix: validate 失败的 kind 不能硬编码 syntax——validate_sql 返回
+        # 的 error_kind（object_not_found / object_ambiguous）是真实的列/表名错误，
+        # 必须透传给 DiagnosePolicy 走 retry_mcp_schema_retrieval / clarify 路径。
+        # 此前丢成 "syntax" → DiagnosePolicy 永远走 retry_sql（同 SQL 反复重跑无信息增益）。
+        vkind = validation.get("error_kind") or "syntax"
         return {
-            "evaluate_result": EvaluateResult(status="VALIDATION_FAILED", kind="syntax", validation_result=validation).model_dump(),
+            "evaluate_result": EvaluateResult(status="VALIDATION_FAILED", kind=vkind, validation_result=validation).model_dump(),
             "execution_status": "SQL_SYNTAX_ERROR",
         }
     raw = state.get("sql_result", "")
@@ -691,6 +742,85 @@ def _diagnose(state: SQLAgentState) -> dict:
             retry_counters=dict(retry_counters),
             execution_status=execution_status,
         )
+    if decision.action == "retry_mcp_schema_retrieval":
+        # P15 prelude fix 第二层：caller 接线。DiagnosePolicy 决策表升级后
+        # 必须有 caller 真调 search_schema + 替换 schema_context + 路由回
+        # generate_sql，否则新 action 等于死代码。
+        #
+        # 设计：从 SQL 文本提取涉及的表名（FROM/JOIN），逐个 get_table_ddl
+        # 拿准确表结构拼 SchemaContext（比语义检索可靠——错误类型可能是
+        # JOIN 键类型错 / 列不存在，只要把 SQL 涉及表的结构给全，LLM 就能修）。
+        # counter 递增 mcp_schema。MCP 失败时仍递增 counter 让 graph 重跑
+        # generate_sql（generate_sql 自己会失败回 DiagnosePolicy，budget 收敛）。
+        sql_text = state.get("generated_sql", "") or ""
+        table_names = _extract_table_names(sql_text)
+        user_query = state.get("user_query", "") or ""
+        discovered: list[dict] = []
+        logger.info(
+            "retry_mcp_schema_retrieval triggered: kind=%s tables_in_sql=%r counters=%s",
+            kind, table_names, retry_counters,
+        )
+        for tname in table_names:
+            try:
+                ddl = get_table_ddl.invoke({"table_name": tname})
+                if isinstance(ddl, str) and ddl and "not found" not in ddl.lower():
+                    discovered.append({
+                        "table_name": tname,
+                        "description": "",
+                        "columns": _parse_ddl_columns(ddl),
+                    })
+            except Exception as exc:
+                logger.warning(
+                    "retry_mcp_schema_retrieval: get_table_ddl(%s) failed: %s", tname, exc,
+                )
+        # 表名提取不全时兜底语义检索（user_query 剥「生成报告：」指令前缀）
+        if not discovered:
+            try:
+                search_query = user_query.split("生成报告", 1)[-1].split("：")[-1][:100] or user_query[:100]
+                raw = search_tables.invoke({"query": search_query, "top_k": 3})
+                parsed = json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(parsed, list):
+                    discovered = parsed
+                logger.info("retry_mcp_schema_retrieval: fallback search_tables got %d tables", len(discovered))
+            except Exception as exc:
+                logger.warning(
+                    "retry_mcp_schema_retrieval: fallback search_tables failed: %s", exc,
+                )
+
+        schema_tables = [
+            TableSchema(
+                name=t.get("table_name", ""),
+                description=t.get("description", ""),
+                columns=[
+                    ColumnSchema(name=c["name"], type=c["type"])
+                    for c in (t.get("columns") or [])
+                    if isinstance(c, dict)
+                ],
+            )
+            for t in discovered[:5]
+        ]
+        new_schema = SchemaContext(
+            version="1.0",
+            source="mcp_search_schema",  # 标记：MCP 重新搜出来的 schema
+            tables=schema_tables,
+            confidence=min(len(schema_tables) * 0.3, 1.0),
+            status="SUCCESS" if schema_tables else "FAILED",
+            error=(
+                None if schema_tables
+                else ErrorDetail(code="NO_TABLES", message="MCP search_schema 无结果")
+            ),
+        )
+
+        new_counters = dict(retry_counters)
+        new_counters["mcp_schema"] = new_counters.get("mcp_schema", 0) + 1
+
+        return {
+            "diagnose_decision": decision.model_dump(),
+            "schema_context": new_schema,
+            "retry_counters": new_counters,
+            # execution_status=SCHEMA_ERROR 与 replan 同语义（让 graph 知道当前不是 SUCCESS）
+            "execution_status": "SCHEMA_ERROR",
+        }
     if decision.action == "retry_sql":
         return {"diagnose_decision": decision.model_dump(), "execution_status": "SQL_SYNTAX_ERROR"}
     if decision.action == "replan":
@@ -797,6 +927,10 @@ def _route_after_diagnose(state: SQLAgentState) -> Literal["plan", "generate_sql
     decision = state.get("diagnose_decision") or {}
     action = decision.get("action") if isinstance(decision, dict) else None
     if action == "retry_sql":
+        return "generate_sql"
+    # P15 prelude caller 接线：retry_mcp_schema_retrieval 把 schema_context 替换后
+    # 路由回 generate_sql 重跑一次（不再走 plan，避免与 replan 语义混淆）。
+    if action == "retry_mcp_schema_retrieval":
         return "generate_sql"
     if action == "replan":
         return "plan"
