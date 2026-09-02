@@ -23,11 +23,42 @@ _pool: Optional[asyncpg.Pool] = None
 _pool_monitor_task: Optional[asyncio.Task] = None
 
 
+def _vector_to_literal(v: list) -> str:
+    """float list → pgvector 文本字面量 `[x,y,…]`（codec encoder）。"""
+    return "[" + ",".join(str(float(x)) for x in v) + "]"
+
+
+def _vector_from_literal(s: str) -> list[float]:
+    """pgvector 文本字面量 `[x,y,…]` → float list（codec decoder）。"""
+    if not s or s == "[]":
+        return []
+    return [float(x) for x in s.strip("[]").split(",")]
+
+
+async def _init_vector_codec(conn: asyncpg.Connection) -> None:
+    """每连接注册 pgvector codec——asyncpg 无内建 vector codec。
+
+    P15 e2e bug ③（2026-09-02）：此前 memory semantic recall（user_memory.py /
+    query_memory.py）把 float list 直接绑 `$1::vector`，asyncpg 无 vector codec →
+    每次 `DataError (expected str, got list)` → `ContextRuntime.build` 全断、
+    assembled_context 恒空。注册后 list ↔ vector 文本字面量互转，一处覆盖
+    全部向量绑定点（2 检索 + 2 INSERT），零新依赖（不装 pgvector python 包）。
+    """
+    await conn.set_type_codec(
+        "vector",
+        encoder=_vector_to_literal,
+        decoder=_vector_from_literal,
+        format="text",
+    )
+
+
 async def init_pool(dsn: str = POSTGRES_DSN) -> asyncpg.Pool:
     global _pool
     if _pool is not None:
         return _pool
-    _pool = await asyncpg.create_pool(dsn, min_size=2, max_size=_POOL_MAX_SIZE)
+    _pool = await asyncpg.create_pool(
+        dsn, min_size=2, max_size=_POOL_MAX_SIZE, init=_init_vector_codec,
+    )
     return _pool
 
 

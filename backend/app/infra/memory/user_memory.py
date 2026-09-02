@@ -58,6 +58,9 @@ class UserMemory:
         session_id: Optional[str] = None,
         expires_at: Optional[datetime.datetime] = None,
     ) -> int:
+        # user_id 归一 int：列是 integer；生产经 semantic_memory 传 str(user_id)（P15 e2e bug ③ 连带——
+        # codec 修好 embedding 绑定后，str 直绑 int 列会 DataError）。
+        user_id = int(user_id)
         pool = get_pool()
         is_new = False
         async with pool.acquire() as conn:
@@ -147,6 +150,8 @@ class UserMemory:
     async def search(
         self, user_id: str, query: str = "", top_k: Optional[int] = None
     ) -> list[RankedMemory]:
+        # user_id 归一 int：列是 integer；生产经 semantic_memory 传 str(user_id)。
+        user_id = int(user_id)
         # post-review fix：top_k=0 表达「禁止召回」语义（Selective Recall decision 短路）
         # ——原 `k = top_k or self._top_k` 把 0 当 falsy 兜底为默认 5，会让
         # semantic=False 的决策仍然走 SQL 查 + record_access 副作用，污染 LRU/LFU 排序。
