@@ -54,28 +54,43 @@ def test_error_code_has_exactly_the_ten_contract_codes():
 
 
 def test_sql_error_kinds_vocabulary():
-    assert set(SQL_ERROR_KINDS) == {"syntax", "object", "timeout", "connection", "permission", "other"}
+    # P15 prelude fix：8 kind（6 原 + object_not_found + object_ambiguous）；
+    # object_not_found 走 DiagnosePolicy retry_mcp_schema_retrieval，
+    # object_ambiguous 直接 clarify。
+    assert set(SQL_ERROR_KINDS) == {
+        "syntax", "object", "object_not_found", "object_ambiguous",
+        "timeout", "connection", "permission", "other",
+    }
 
 
 def test_agent_recoverable_table_matches_p8_verdict():
     # P8 DiagnosePolicy 拍板：timeout/connection/permission repair 无意义 → fail
-    assert set(AGENT_RECOVERABLE_KINDS) == {"syntax", "object", "other"}
+    # P15 prelude fix（方案 A）：加 object_not_found（走 retry_mcp_schema_retrieval）。
+    assert set(AGENT_RECOVERABLE_KINDS) == {"syntax", "object", "object_not_found", "other"}
     assert agent_recoverable("syntax") is True
     assert agent_recoverable("object") is True
+    assert agent_recoverable("object_not_found") is True
     assert agent_recoverable("other") is True
     assert agent_recoverable("timeout") is False
     assert agent_recoverable("connection") is False
     assert agent_recoverable("permission") is False
+    # object_ambiguous 故意不在 AGENT 表——列名歧义必须用户消歧
+    assert agent_recoverable("object_ambiguous") is False
     # 纯集合成员判断，不做隐藏 normalize
     assert agent_recoverable("weird") is False
 
 
 def test_user_recoverable_table_matches_sse_contract():
     # SSE canRetry 语义（前端 analysisReducer 已钉）：用户重试有意义
-    assert set(USER_RECOVERABLE_KINDS) == {"timeout", "connection", "object", "other"}
+    # P15 prelude fix：加 object_not_found（MCP 拿到新 schema 后用户可继续）+ object_ambiguous（消歧）。
+    assert set(USER_RECOVERABLE_KINDS) == {
+        "timeout", "connection", "object", "object_not_found", "object_ambiguous", "other",
+    }
     assert user_recoverable("timeout") is True
     assert user_recoverable("connection") is True
     assert user_recoverable("object") is True
+    assert user_recoverable("object_not_found") is True
+    assert user_recoverable("object_ambiguous") is True
     assert user_recoverable("other") is True
     assert user_recoverable("syntax") is False
     assert user_recoverable("permission") is False

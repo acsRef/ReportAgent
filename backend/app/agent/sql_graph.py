@@ -42,6 +42,20 @@ def _get_max_plan_retries() -> int:
         return 1
 
 
+def _get_max_mcp_retries() -> int:
+    """MCP retry 预算（P15 prelude）。与 SQL/plan retry 正交独立计数。
+
+    上限 = settings.MAX_MCP_REPAIR_RETRIES（默认 1；CLAUDE.md §11「Retry 固定预算
+    MCP 2」略缩——object_not_found 一次 schema retrieval 通常足够，无需 2 次）。
+
+    counter key "mcp_schema" 与 "sql_generation" / "plan" 三 key 正交。
+    """
+    try:
+        return int(os.getenv("MAX_MCP_REPAIR_RETRIES", "1"))
+    except (TypeError, ValueError):
+        return 1
+
+
 @dataclass
 class RepairContext:
     """P8 D4: 7 要素上下文回灌。plan §D4 alignment：
@@ -73,13 +87,16 @@ class EvaluateResult(BaseModel):
 
 class DiagnoseDecision(BaseModel):
     # F3: 加 "end" 表示成功 / pass-through；"fail" 只表示真实失败决策。
-    action: Literal["retry_sql", "replan", "clarify", "fail", "end"]
+    # P15 prelude: 加 "retry_mcp_schema_retrieval" 给 object_not_found 路径走 MCP schema。
+    action: Literal["retry_sql", "replan", "clarify", "fail", "end",
+                    "retry_mcp_schema_retrieval"]
     reason: str
     error_kind: str
     recoverable: bool
     # F2: retry_target 是 plan 早期伪代码字段，与 action 重复；
     # 当前路由由 action 直接驱动，retry_target 保留仅供 trace 用。
-    retry_target: Literal["generate_sql", "plan", "end"] = "end"
+    # P15 prelude: 加 "mcp_schema" 标识触发 MCP schema retrieval。
+    retry_target: Literal["generate_sql", "plan", "end", "mcp_schema"] = "end"
     hint: Optional[str] = None
     confidence: float = 0.5
 
@@ -96,8 +113,11 @@ class DiagnosePolicy:
         retry_counters = retry_counters or {}
         sql_retries = retry_counters.get("sql_generation", 0)
         plan_retries = retry_counters.get("plan", 0)
+        # P15 prelude: mcp_schema counter 与 sql_generation / plan 三 key 正交。
+        mcp_schema_retrievals = retry_counters.get("mcp_schema", 0)
         max_sql = _get_max_sql_retries()
         max_plan = _get_max_plan_retries()
+        max_mcp = _get_max_mcp_retries()
         kind = (error_kind or "other").lower()
         if kind not in SQL_ERROR_KINDS:
             kind = "other"
@@ -114,6 +134,29 @@ class DiagnosePolicy:
             if plan_retries < max_plan:
                 return DiagnoseDecision(action="replan", reason=f"{kind}: replan {plan_retries+1}/{max_plan} (validation)", error_kind=kind, recoverable=True, retry_target="plan", confidence=0.6)
             return DiagnoseDecision(action="clarify", reason=f"{kind}: budget exhausted after validation", error_kind=kind, recoverable=False, retry_target="end", confidence=0.5)
+        # P15 prelude fix（方案 A，用户 2026-09-02 拍板）：
+        # object_not_found 路径优先走 retry_mcp_schema_retrieval（拿到新 schema 再 generate_sql），
+        # budget 用尽后 escalate clarify 避免死循环。
+        if kind == "object_not_found":
+            if mcp_schema_retrievals < max_mcp:
+                return DiagnoseDecision(
+                    action="retry_mcp_schema_retrieval",
+                    reason=f"{kind}: retry MCP schema retrieval {mcp_schema_retrievals+1}/{max_mcp}",
+                    error_kind=kind, recoverable=True, retry_target="mcp_schema", confidence=0.8,
+                )
+            return DiagnoseDecision(
+                action="clarify",
+                reason=f"{kind}: schema retrieval budget exhausted",
+                error_kind=kind, recoverable=False, retry_target="end", confidence=0.7,
+            )
+        # P15 prelude fix: object_ambiguous（AmbiguousColumn 列名歧义）→ 必须用户消歧，
+        # 不进 MCP retry（MCP schema 不会消歧列名）。
+        if kind == "object_ambiguous":
+            return DiagnoseDecision(
+                action="clarify",
+                reason=f"{kind}: column ambiguous, user disambiguation required",
+                error_kind=kind, recoverable=False, retry_target="end", confidence=0.9,
+            )
         if not agent_recoverable(kind):
             return DiagnoseDecision(action="fail", reason=f"{kind}: non-recoverable", error_kind=kind, recoverable=False, retry_target="end", confidence=0.9)
         if sql_retries < max_sql:

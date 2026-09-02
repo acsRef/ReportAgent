@@ -50,10 +50,13 @@ def test_classify_syntax():
 
 
 def test_classify_undefined_column_is_object():
+    # P15 prelude fix：UndefinedColumn/Table/Function → 'object_not_found'（DiagnosePolicy
+    # 走 retry_mcp_schema_retrieval），不再归 'object' 兜底。其它精确子类见
+    # backend/tests/contracts/test_sql_error_classification.py（11 parametrize + 3 fallback）。
     from app.tools.sql_tools import _classify_psycopg2_error
     import psycopg2.errors
     e = psycopg2.errors.UndefinedColumn('column "x" does not exist')
-    assert _classify_psycopg2_error(e) == "object"
+    assert _classify_psycopg2_error(e) == "object_not_found"
 
 
 def test_classify_permission_in_programmingerror():
