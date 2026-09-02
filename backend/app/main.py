@@ -615,6 +615,7 @@ async def _chat_requirement_analysis(
                 "user_id": user["id"],
                 "session_id": session_id,
                 "trace_id": trace_id,
+                "mode": request.mode,  # P15 e2e T2: supplement 轮需求继承上一轮确认卡
                 "schema_context": None,
                 "requirement_card": None,
                 "draft_id": None,

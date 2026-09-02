@@ -58,12 +58,85 @@ def _schema_text(ctx: SchemaContext | None) -> str:
 MAX_DICTIONARY_CHARS = 4000
 
 
+def _format_prior_block(card: RequirementCard) -> str:
+    """把上一轮确认卡渲染成 prompt 的「已确认需求」块（P15 e2e T2）。
+
+    只列非空字段；granularity/comparison 不在卡体显式字段里，经 dimensions/
+    analysis_methods hint 传递。空行由调用方（parse_requirement）用空串短路。
+    """
+    from app.models.requirement import RequirementCard as _RC  # noqa: F401  # 类型已 import
+    rows = [f"- 上一轮需求目标（已确认）: {card.summary or ''}"]
+    if card.time_range:
+        rows.append(f"- 时间范围: {card.time_range}")
+    if card.scope:
+        rows.append(f"- 范围: {'/'.join(card.scope)}")
+    if card.target_metrics:
+        rows.append(f"- 指标: {'/'.join(card.target_metrics)}")
+    if card.dimensions:
+        rows.append(f"- 维度/粒度: {'/'.join(card.dimensions)}")
+    if card.analysis_methods:
+        rows.append(f"- 分析方法: {'/'.join(card.analysis_methods)}")
+    return "\n".join(rows)
+
+
+def _dim_kind(dim: str) -> str:
+    """dimensions hint 的 kind 标签：granularity / comparison / base。"""
+    if "粒度" in dim:
+        return "granularity"
+    if any(k in dim for k in ("对比", "比较", "同比", "环比")):
+        return "comparison"
+    return "base"
+
+
+def _merge_prior_card(card: RequirementCard, prior: RequirementCard) -> None:
+    """supplement 继承：presence（新值非空）覆盖 / absence（空）继承 prior。
+
+    P15 e2e T2 语义：第 1 轮已确认约束默认沿用，只有本轮明确改写才覆盖。
+    granularity/comparison 不在卡体显式字段，走 dimensions kind 标签并集（同 kind 覆盖）。
+    调用方随后重算 missing_fields + status。
+    """
+    if not card.target_metrics and prior.target_metrics:
+        card.target_metrics = list(prior.target_metrics)
+    if card.time_range is None and prior.time_range:
+        card.time_range = prior.time_range
+    if not card.scope and prior.scope:
+        card.scope = list(prior.scope)
+    if not card.analysis_methods and prior.analysis_methods:
+        card.analysis_methods = list(prior.analysis_methods)
+    # dimensions：base 维度并集去重（新 + prior 缺失的 base 都保留）；
+    # granularity/comparison hint 同 kind 被本轮表达时覆盖（不追加旧值）。
+    new_dims = list(card.dimensions)
+    prior_dims = list(prior.dimensions)
+    kind_new = {_dim_kind(d) for d in new_dims}
+    for d in prior_dims:
+        k = _dim_kind(d)
+        if d in new_dims:
+            continue
+        if k == "base" or k not in kind_new:
+            new_dims.append(d)
+    card.dimensions = new_dims
+    # missing_fields 重算：被继承/派生满足的 key 从 missing 移除
+    satisfied: set[str] = set()
+    if card.time_range:
+        satisfied.add("time_range")
+    if card.scope:
+        satisfied.add("scope")
+    if card.target_metrics:
+        satisfied.add("metric")
+    if any(_dim_kind(d) == "granularity" for d in card.dimensions):
+        satisfied.add("granularity")
+    if any(_dim_kind(d) == "comparison" for d in card.dimensions):
+        satisfied.add("comparison")
+    card.missing_fields = [mf for mf in card.missing_fields if mf.key not in satisfied]
+
+
 def _call_llm_for_parse(
     user_query: str,
     schema: SchemaContext | None,
     conversation_context: str | None = None,
     dictionary_context: str | None = None,
     assembled_context: str | None = None,  # P4c: 优先于 conversation_context，含 selective recall
+    prior_block: str = "",  # P15 e2e T2: 上一轮已确认约束块（空则行为不变）
 ) -> dict:
     """Call the LLM and parse the JSON response. Returns {} on parse failure."""
     dictionary_block = ""
@@ -74,6 +147,7 @@ def _call_llm_for_parse(
         user_query=user_query,
         schema_text=_schema_text(schema),
         dictionary_block=dictionary_block,
+        prior_block=prior_block,
     )
     # 分层对话上下文前置：让需求解析感知先前轮次（如「再按产品细分」隐含的范围）。
     # P4c 优先用 assembled_context（含 recall + conversation 全景），否则 fallback 到 conversation_context。
@@ -120,6 +194,7 @@ def parse_requirement(
         user_query, schema_context,
         conversation_context, dictionary_context,
         assembled_context,
+        prior_block=_format_prior_block(prior_card) if prior_card is not None else "",
     )
     if not parsed:
         # LLM gave nothing usable; fall back to a 'missing' card with all
@@ -209,6 +284,15 @@ def parse_requirement(
         confidence=confidence,
         confirmed_at=None,
     )
+    # P15 e2e T2：supplement 继承（presence 覆盖 / absence 继承 prior），随后重算
+    # missing_fields（_merge_prior_card 内按继承结果移除已满足 key）+ status。
+    if prior_card is not None:
+        _merge_prior_card(card, prior_card)
+    unresolved = [a for a in card.assumptions if a.accepted is None]
+    if card.missing_fields or unresolved:
+        card.status = "missing"
+    else:
+        card.status = "complete"
     return card
 
 

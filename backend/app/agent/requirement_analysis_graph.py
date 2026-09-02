@@ -47,6 +47,7 @@ class RequirementAnalysisState(TypedDict, total=False):
     user_id: int
     session_id: str
     trace_id: str
+    mode: Optional[str]  # P15 e2e T2: new | supplement——supplement 轮需求继承上一轮确认卡
     schema_context: Optional[SchemaContext]
     requirement_card: Optional[RequirementCard]
     draft_id: Optional[int]
@@ -242,12 +243,33 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
 
     dictionary_context = state.get("dict_context") or ""
 
+    # P15 e2e T2：supplement 轮把上一轮已确认（status=complete）卡作为 prior_card 传给
+    # parse_requirement——presence 覆盖 / absence 继承；读失败降级为 None（不阻塞）。
+    prior_card = None
+    if state.get("mode") == "supplement":
+        try:
+            from app.services.requirement_service import get_latest_card
+
+            _uid_raw = state.get("user_id")
+            try:
+                _uid = int(_uid_raw) if _uid_raw not in (None, "") else 0
+            except (TypeError, ValueError):
+                _uid = 0
+            _prior = await get_latest_card(
+                session_id=state["session_id"], user_id=_uid,
+            )
+            if _prior is not None and _prior.status == "complete":
+                prior_card = _prior
+        except Exception as exc:
+            logger.warning("supplement: prior card load failed: %s", exc)
+
     card = parse_requirement(
         user_query=state["user_query"],
         schema_context=state.get("schema_context"),
         conversation_context=conversation_context or None,
         assembled_context=assembled_context or None,  # P4c: 含 recall 的全景 context
         dictionary_context=dictionary_context or None,
+        prior_card=prior_card,
     )
     return {"requirement_card": card}
 

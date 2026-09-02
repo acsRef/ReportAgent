@@ -83,6 +83,7 @@ def build_requirement_parse_prompt(
     user_query: str,
     schema_text: str,
     dictionary_block: str,
+    prior_block: str = "",
 ) -> str:
     from app.infra.trace.sdk import record_prompt_version
 
@@ -95,8 +96,22 @@ def build_requirement_parse_prompt(
             schema_text=schema_text,
             dictionary_block=dictionary_block,
         ),
+    ]
+    # P15 e2e T2：supplement 轮把上一轮已确认约束作为第 4 输入槽。空（mode=new）不加
+    # 任何指令——行为与无 prior 完全一致。presence 语义：上轮已确认字段本轮未改写时
+    # 输出留空（absence=继承信号），仅真正改写的字段输出非空（presence=覆盖信号）。
+    if prior_block:
+        sections.append(
+            "【已确认需求（承上轮，mode=supplement）】\n"
+            f"{prior_block}"
+            "\n规则：以上已确认的维度字段默认沿用，本轮 query **未改写**时输出留空"
+            "（不要臆造、不要照抄），由系统继承；只有本轮**明确改写**的字段才输出新值。"
+            "缺失判定（missing_fields）只针对本轮新提出/改写的字段——上轮已确认且未改写的"
+            "字段一律不得标为 missing。"
+        )
+    sections.extend([
         REQUIREMENT_PARSE_V1["tool_policy"],
         REQUIREMENT_PARSE_V1["output_schema"],
         REQUIREMENT_PARSE_V1["safety_policy"],
-    ]
+    ])
     return "\n\n".join(s for s in sections if s)
