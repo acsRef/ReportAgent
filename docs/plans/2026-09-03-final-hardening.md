@@ -89,7 +89,7 @@ harness 三轮修复（都是实跑抓的，非离线可见）：① 漏 `BASE_U
 
 ### ⑧ SQL 语义评估层（P1）
 - 原理：不比较 SQL 文本——每个 gold case 配**canonical reference SQL**（对同一 DB 直接执行得基准 KPI），LLM 产物 SUCCESS 后与基准**数值比对**（相对容差 / 集合相等 / 单调序），随机 seed 数据下依然确定（两边同库同刻）。
-- 落地：`evaluation/tests/test_semantic_sql_accuracy.py`（env-gated live，REPORTAGENT_E2E=1 同款 skipif）+ 10 例覆盖矩阵（simple agg / group by / trend 12 月 / top-N 序 / multi-join fact+dim / payment+order / 空结果语义 / null 处理 / 日期区间 / 相对日期）；SUCCESS 则数值语义断言，非 SUCCESS 走 honest-terminal（诚实失败不绿）。跑一次出能力报告（如 8/10），记录于 plan 落地段；跑分不设 CI gate。
+- 落地：`evaluation/tests/test_semantic_sql_accuracy.py`（env-gated live，REPORTAGENT_E2E=1 同款 skipif）——**6 case 正式**（simple agg total / region group-by map / monthly trend 逐月键对齐 / top5 集合 / payment_method map / refund 集合等价；覆盖矩阵中 empty/null/date-boundary/相对日期 4 项因 seed 单年（2024）部分不可测、留作后续扩展，不在本轮虚标 10 例）。SUCCESS 则数值语义断言，非 SUCCESS 走 honest-terminal（诚实失败不绿）。跑一次出能力报告，记录于 plan 落地段；跑分不设 CI gate。
 - baseline_cases.json 结构不动（另有 P14 消费）。
 
 ### ⑨ 并发 confirm race 测试（P1）

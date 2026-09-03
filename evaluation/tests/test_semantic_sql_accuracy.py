@@ -142,17 +142,24 @@ _CANON = {
         "WHERE o.order_date >= '2024-01-01' AND o.order_date < '2025-01-01' "
         "GROUP BY s.region"
     ),
+    # Review 修正：canonical 必须显式限 2024——gold evaluator 的 ground truth
+    # 不能依赖「seed 只有 2024」这个隐含事实（未来加数据即静默失真）。
+    # monthly 直接返回 (月序号 int, 金额)，便于 map 级键对齐比较。
     "monthly_2024": (
-        "SELECT date_trunc('month', o.order_date) AS m, SUM(o.order_amount) AS v "
-        "FROM fact_orders o GROUP BY 1 ORDER BY 1"
+        "SELECT EXTRACT(MONTH FROM o.order_date)::int AS m, SUM(o.order_amount) AS v "
+        "FROM fact_orders o "
+        "WHERE o.order_date >= '2024-01-01' AND o.order_date < '2025-01-01' "
+        "GROUP BY 1 ORDER BY 1"
     ),
     "top5_qty_2024": (
         "SELECT pr.product_name AS product_name FROM fact_orders o "
         "JOIN dim_product pr ON o.product_id = pr.product_id "
+        "WHERE o.order_date >= '2024-01-01' AND o.order_date < '2025-01-01' "
         "GROUP BY pr.product_name ORDER BY SUM(o.quantity) DESC LIMIT 5"
     ),
     "by_paymethod_2024": (
         "SELECT o.payment_method AS pm, SUM(o.order_amount) AS v FROM fact_orders o "
+        "WHERE o.order_date >= '2024-01-01' AND o.order_date < '2025-01-01' "
         "GROUP BY o.payment_method ORDER BY v DESC"
     ),
     "refund_total_2024": (
@@ -163,6 +170,57 @@ _CANON = {
 }
 
 
+def _money_values(row_list: list[dict]) -> list[Decimal]:
+    """金额列识别：numeric 金额在 JSON transport 是精确字符串且必含小数点
+    （Decimal 全链，SUM(numeric(10,2)) 形如 "12345.67"）。int 维度列是 JSON
+    number 天然排除；str 形式的维度数字（如 store_id "1001"）因无小数点
+    同样排除——比「任意 str 数值」scan 严格，避免把维度误算进总额。"""
+    out = []
+    for r in row_list:
+        for v in r.values():
+            if isinstance(v, str) and "." in v and _dec(v) is not None:
+                out.append(_dec(v))
+    return out
+
+
+def _month_key(v) -> int | None:
+    """把 agent 的月份表示归一成 1..12：int / "1" / "2024-01" / "2024-01-01…"
+    / "1月" / "January" 之外的未知格式返回 None（宁缺勿纵：无法对齐即失败，
+    不允许 silent 漏判制造 false pass）。"""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if 1 <= v <= 12 else None
+    s = str(v).strip()
+    if not s:
+        return None
+    low = s.lower()
+    months = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+              "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+    if low.startswith(tuple(months)) and (len(s) == 3 or s[3] in " ."):
+        for name, num in months.items():
+            if low.startswith(name):
+                return num
+    # 数字前缀（"1月"/"1"）
+    head = ""
+    for ch in s:
+        if ch.isdigit():
+            head += ch
+        else:
+            break
+    if head:
+        n = int(head)
+        return n if 1 <= n <= 12 else None
+    # "2024-01" / "2024-01-01 00:00:00" 形态
+    if len(s) >= 7 and s[4:5] == "-":
+        try:
+            n = int(s[5:7])
+            return n if 1 <= n <= 12 else None
+        except ValueError:
+            return None
+    return None
+
+
 class TestSemanticSqlAccuracy:
     """6 例语义比对：SUCCESS 则数值必须等于 canonical；LLM 失败按能力失败记。"""
 
@@ -170,16 +228,12 @@ class TestSemanticSqlAccuracy:
         report = _run_agent(http_client, auth_token, "2024年总销售额是多少", metric="销售额")
         rows = _require_success(report, "2024 总销售额")
         # LLM plan 层有权按合理粒度分组（实测常按 12 月明细返回）——语义判定
-        # 用集合等价：全部金额列之和 == canonical 总额。金额在 JSON transport
-        # 是精确字符串（Decimal 全链），int 维度列（年份/月份）不会被误加。
-        total = sum(
-            (_dec(v) for r in rows for v in r.values()
-             if isinstance(v, str) and _dec(v) is not None),
-            Decimal(0),
-        )
+        # 用集合等价：全部金额列之和 == canonical 总额（金额列识别见
+        # _money_values：只收含小数点的精确金额串，str 维度数字不误入）。
+        total = sum(_money_values(rows), Decimal(0))
         canon_val = _run_canonical(_CANON["total_2024"])[0]["total"]
         assert _close(total, canon_val), (
-            f"总额语义不符：agent 全行和={total} canonical={canon_val}\n{_sql(report)[:300]}"
+            f"总额语义不符：agent 金额列和={total} canonical={canon_val}\n{_sql(report)[:300]}"
         )
 
     def test_region_sales_2024_map_matches_canonical(self, http_client, auth_token):
@@ -203,22 +257,33 @@ class TestSemanticSqlAccuracy:
     def test_monthly_trend_2024_series_matches_canonical(self, http_client, auth_token):
         report = _run_agent(http_client, auth_token, "2024年各月销售额趋势", metric="销售额")
         rows = _require_success(report, "月度趋势")
-        # 月度序列值集合相等（key 格式依赖 agent 分组函数，比较排序后的数值序列）。
-        # 只取金额列：金额在 JSON transport 是精确字符串，int 维度列（如月份 1..12）
-        # 会被 _dec 解析误并——与 total/refund 的 str-only 判定对齐。
-        def month_values(row_list):
-            vals = []
+        # 键对齐比较（Review 修正）：month → value map，逐月断言——sorted 值
+        # 比较允许「3 月值顶替 1 月」的错位 pass；map 级对齐才能验证「哪个月
+        # 对应哪个金额」。金额列=含小数点 str；月份键经 _month_key 归一
+        # （int/"1"/"2024-01"/"1月"），无法归一的格式宁缺勿纵直接失败。
+        def agent_month_map(row_list: list[dict]) -> dict[int, Decimal]:
+            out: dict[int, Decimal] = {}
             for r in row_list:
-                vals.extend(
-                    d for v in r.values()
-                    if isinstance(v, str) and (d := _dec(v)) is not None
-                )
-            return sorted(vals)
-        agent_vals = month_values(rows)
-        canon_vals = month_values(_run_canonical(_CANON["monthly_2024"]))
-        assert len(agent_vals) == len(canon_vals), f"序列长度不符 agent={len(agent_vals)} canon={len(canon_vals)}"
-        for a, c in zip(agent_vals, canon_vals):
-            assert _close(a, c), f"月度值不符 agent={a} canonical={c}"
+                money = _money_values([r])
+                assert len(money) == 1, f"行金额列不唯一/缺失: {r}"
+                keys = [_month_key(v) for k, v in r.items() if not (
+                    isinstance(v, str) and "." in v and _dec(v) is not None
+                )]
+                month = next((k for k in keys if k is not None), None)
+                assert month is not None, f"行无法归一月份键（格式不支持）: {r}"
+                assert month not in out, f"重复月份键 {month}: {r}"
+                out[month] = money[0]
+            return out
+
+        agent_map = agent_month_map(rows)
+        canon_map = {int(r["m"]): _dec(r["v"]) for r in _run_canonical(_CANON["monthly_2024"])}
+        assert set(agent_map) == set(canon_map), (
+            f"月份键集合不符 agent={sorted(agent_map)} canon={sorted(canon_map)}"
+        )
+        for m in sorted(canon_map):
+            assert _close(agent_map[m], canon_map[m]), (
+                f"{m} 月值不符 agent={agent_map[m]} canonical={canon_map[m]}"
+            )
 
     def test_top5_products_by_quantity_matches_canonical(self, http_client, auth_token):
         report = _run_agent(http_client, auth_token, "2024年销量最高的5个商品", metric="销量")
@@ -245,15 +310,11 @@ class TestSemanticSqlAccuracy:
     def test_refund_total_2024_matches_canonical(self, http_client, auth_token):
         report = _run_agent(http_client, auth_token, "2024年退款金额合计", metric="退款金额")
         rows = _require_success(report, "退款合计")
-        # plan 层可能按月明细返回（同 total case）——集合等价：金额串之和 == canonical
-        total = sum(
-            (_dec(v) for r in rows for v in r.values()
-             if isinstance(v, str) and _dec(v) is not None),
-            Decimal(0),
-        )
+        # plan 层可能按月明细返回（同 total case）——集合等价：金额列之和 == canonical
+        total = sum(_money_values(rows), Decimal(0))
         canon_val = _run_canonical(_CANON["refund_total_2024"])[0]["total"]
         assert _close(total, canon_val), (
-            f"退款合计不符 agent 全行和={total} canonical={canon_val}\n{_sql(report)[:300]}"
+            f"退款合计不符 agent 金额列和={total} canonical={canon_val}\n{_sql(report)[:300]}"
         )
 
 
