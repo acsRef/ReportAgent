@@ -7,11 +7,11 @@ from typing import Any
 import sqlglot
 from sqlglot import exp as sql_exp
 from sqlglot.tokens import TokenType
+from decimal import Decimal
+
 import psycopg2
 import psycopg2.errors
 import psycopg2.extras
-
-from decimal import Decimal
 
 PG_DSN = os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent")
 
@@ -308,9 +308,9 @@ def execute_sql(sql: str) -> str:
             rows: list[dict[str, Any]] = []
             for row in raw_rows:
                 row_dict = {k: v for k, v in dict(row).items() if k != "_total"}
-                for k, v in list(row_dict.items()):
-                    if isinstance(v, Decimal):
-                        row_dict[k] = float(v)
+                # Final Hardening ③：numeric 列保持 Decimal 不转 float——下方
+                # json.dumps(default=str) 会输出精确十进制字符串（"123456789012345678.91"），
+                # 绝不在第一跳丢精度。int 列仍是 JSON number。double 列原样 float。
                 rows.append(row_dict)
             truncated = total > MAX_RESULT_ROWS or len(rows) > MAX_RESULT_ROWS
             if truncated and len(rows) > MAX_RESULT_ROWS:
@@ -350,7 +350,11 @@ def chart_advisor(sql_result: str) -> str:
       - 1 个分类字段 + 1 个数值字段，行数 ≤ 8 → 饼图
       - 1 个分类字段 + 1 个数值字段，行数 > 8 → 柱状图
       - 无合适维度组合 → 纯表格
+    数值列识别兼容 numeric 字符串（Decimal 全链字符串化后 rows 值为 str——
+    裸 isinstance((int, float)) 会把金额列漏判成非数值）。
     不要用来：不执行 SQL 查询、不修改数据、不生成数值摘要（用 insight_analyst）。"""
+    from app.utils.numbers import is_numeric_value
+
     data = json.loads(sql_result)
     columns_raw = data.get("columns", [])
     rows = data.get("rows", [])
@@ -360,7 +364,7 @@ def chart_advisor(sql_result: str) -> str:
     # columns can be dicts or plain strings
     columns = [c["name"] if isinstance(c, dict) else c for c in columns_raw]
 
-    numeric_cols = [c for c in columns if isinstance(rows[0].get(c), (int, float))]
+    numeric_cols = [c for c in columns if is_numeric_value(rows[0].get(c))]
     categorical_cols = [c for c in columns if c not in numeric_cols]
 
     if categorical_cols and numeric_cols:
@@ -385,8 +389,11 @@ def insight_analyst(sql_result: str) -> str:
     用途：SQL 执行成功并返回数据后，提炼数值维度的核心指标。
     输入：sql_result（execute_sql 返回的完整 JSON，含 columns 和 rows）
     输出：多行文本，每行对应一个数值列的统计，如 "销售额: 合计=1,234,567.00, 平均=102,880.58, 最大=999,999.00, 最小=1.00"
-    处理方式：对前 3 个数值列分别计算。空数据返回提示文本。
+    处理方式：对前 3 个数值列分别计算（Decimal 精确算术，numeric 字符串同样可算）。
+    空数据返回提示文本。
     不要用来：不执行 SQL 查询、不生成图表配置（用 chart_advisor）、不做趋势预测。"""
+    from app.utils.numbers import to_decimal
+
     data = json.loads(sql_result)
     rows = data.get("rows", [])
     columns_raw = data.get("columns", [])
@@ -394,19 +401,18 @@ def insight_analyst(sql_result: str) -> str:
         return "查询结果为空，无法生成洞察。"
 
     columns = [c["name"] if isinstance(c, dict) else c for c in columns_raw]
-    numeric_cols = [c for c in columns if rows and isinstance(rows[0].get(c), (int, float))]
+    numeric_cols = [c for c in columns if to_decimal(rows[0].get(c)) is not None]
     if not numeric_cols:
         return f"共 {len(rows)} 条记录，包含维度: {', '.join(columns)}。"
 
     insights = []
     for col in numeric_cols[:3]:
-        values = [r[col] for r in rows if r.get(col) is not None]
+        values = [to_decimal(r[col]) for r in rows if r.get(col) is not None]
+        values = [v for v in values if v is not None]
         if not values:
             continue
-        total = sum(values)
+        total = sum(values, Decimal(0))
         avg = total / len(values)
-        max_val = max(values)
-        min_val = min(values)
-        insights.append(f"{col}: 合计={total:,.2f}, 平均={avg:,.2f}, 最大={max_val:,.2f}, 最小={min_val:,.2f}")
+        insights.append(f"{col}: 合计={total:,.2f}, 平均={avg:,.2f}, 最大={max(values):,.2f}, 最小={min(values):,.2f}")
 
     return "\n".join(insights)

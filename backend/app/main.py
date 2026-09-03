@@ -1253,7 +1253,15 @@ async def export_report_xlsx(
 
 
 def _build_xlsx_bytes(headers: list, rows: list) -> bytes:
-    """B-4: 同步构建 xlsx 并返回字节。仅供 `asyncio.to_thread` 调用。"""
+    """B-4: 同步构建 xlsx 并返回字节。仅供 `asyncio.to_thread` 调用。
+
+    Final Hardening ③：query_snapshot 里 numeric 列是精确字符串，openpyxl 不认
+    Decimal、字符串又会让单元格变文本——写出前把数值字符串还原成数值单元格
+    （整数 → int；带 scale 金额 → float，xlsx 单元格格式本身无 Decimal 概念，
+    这是展示层转换，transport/存储层仍保持精确字符串）。
+    """
+    from app.utils.numbers import to_decimal
+
     import io
     from openpyxl import Workbook
 
@@ -1262,7 +1270,15 @@ def _build_xlsx_bytes(headers: list, rows: list) -> bytes:
     ws.title = "data"
     ws.append(headers)
     for row in rows:
-        ws.append([row.get(h) for h in headers])
+        cells = []
+        for h in headers:
+            v = row.get(h)
+            d = to_decimal(v) if isinstance(v, str) else None
+            if d is not None and v not in ("", None):
+                cells.append(int(d) if d == d.to_integral_value() else float(d))
+            else:
+                cells.append(v)
+        ws.append(cells)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

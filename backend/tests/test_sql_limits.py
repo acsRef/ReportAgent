@@ -176,6 +176,39 @@ def test_execute_sql_connection_error_classified(monkeypatch):
     assert result["error_kind"] == "connection"
 
 
+# ── Final Hardening ③：Decimal 不转 float，JSON 输出精确字符串 ──────────
+
+
+def test_execute_sql_keeps_decimal_exact_as_string(monkeypatch):
+    """numeric 列必须是精确十进制字符串——绝不在 execute_sql 里 float 化丢精度。"""
+    from decimal import Decimal
+    from app.tools import sql_tools
+
+    class FakeCursor:
+        description = [SimpleNamespace(name="amount", type_code=1700)]
+
+        def execute(self, sql):
+            pass
+
+        def fetchall(self):
+            return [{"amount": Decimal("123456789012345678.91"), "_total": 1}]
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class FakeConn:
+        def cursor(self, cursor_factory=None): return FakeCursor()
+        def close(self): pass
+
+    monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
+    result = json.loads(sql_tools.execute_sql("SELECT amount FROM fact_orders LIMIT 1"))
+    assert result["truncated"] is False
+    value = result["rows"][0]["amount"]
+    assert isinstance(value, str), f"numeric 列必须是精确字符串，实际 {type(value).__name__}: {value!r}"
+    assert value == "123456789012345678.91"
+    assert "_total" not in result["rows"][0]  # 截断计数列不进业务行
+
+
 def test_validate_sql_sets_error_kind_too(monkeypatch):
     from app.tools import sql_tools
     import psycopg2.errors

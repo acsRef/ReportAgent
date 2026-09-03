@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import json
 import statistics
+from decimal import Decimal
+
+from app.utils.numbers import is_numeric_value, to_decimal
+
+
+def _numeric_keys(row: dict) -> list:
+    """数值列识别：int/float/Decimal/数值字符串都算（numeric 列 JSON 后是 str）。"""
+    return [k for k, v in row.items() if is_numeric_value(v)]
 
 
 def trend_analysis(data_json: str) -> str:
@@ -20,19 +28,20 @@ def trend_analysis(data_json: str) -> str:
         return "数据量不足，无法进行趋势分析"
 
     first = rows[0]
-    numeric_keys = [k for k, v in first.items() if isinstance(v, (int, float))]
+    numeric_keys = _numeric_keys(first)
     if not numeric_keys:
         return "没有数值列，无法分析趋势"
 
     val_col = numeric_keys[0]
-    values = [r[val_col] for r in rows if r.get(val_col) is not None]
+    values = [to_decimal(r[val_col]) for r in rows if r.get(val_col) is not None]
+    values = [v for v in values if v is not None]
     if len(values) >= 2:
         half = len(values) // 2
-        first_avg = sum(values[:half]) / half
-        second_avg = sum(values[half:]) / (len(values) - half)
-        if second_avg > first_avg * 1.1:
+        first_avg = sum(values[:half], Decimal(0)) / half
+        second_avg = sum(values[half:], Decimal(0)) / (len(values) - half)
+        if second_avg > first_avg * Decimal("1.1"):
             return f"整体呈上升趋势，后半段增长 {((second_avg / first_avg) - 1) * 100:.1f}%"
-        elif first_avg > second_avg * 1.1:
+        elif first_avg > second_avg * Decimal("1.1"):
             return f"整体呈下降趋势，后半段下降 {((first_avg / second_avg) - 1) * 100:.1f}%"
         else:
             return "整体趋势平稳"
@@ -48,7 +57,7 @@ def group_compare(data_json: str, group_col: str = "", value_col: str = "") -> s
       value_col（数值字段，可选。不指定时自动选第一个数值列）
     输出：多行文本，每行 "分组名: 合计=数值"，按合计降序排列
     示例输入：
-      group_col='region_name', value_col='total_amount'
+      group_col='region', value_col='order_amount'
       → 返回 "华东: 合计=1,234,567.00\n华南: 合计=987,654.00"
     不要用来：不执行 SQL 查询。不需要分组对比时不用。需要图表可视化时用 chart_advisor。"""
     data = json.loads(data_json)
@@ -58,20 +67,20 @@ def group_compare(data_json: str, group_col: str = "", value_col: str = "") -> s
 
     first = rows[0]
     if not group_col or group_col not in first:
-        cat_keys = [k for k in first if not isinstance(first[k], (int, float))]
+        cat_keys = [k for k in first if not is_numeric_value(first[k])]
         group_col = cat_keys[0] if cat_keys else list(first.keys())[0]
     if not value_col or value_col not in first:
-        num_keys = [k for k in first if isinstance(first[k], (int, float))]
+        num_keys = _numeric_keys(first)
         value_col = num_keys[0] if num_keys else list(first.keys())[-1]
 
-    groups: dict[str, list[float]] = {}
+    groups: dict[str, list[Decimal]] = {}
     for r in rows:
         g = str(r.get(group_col, "未知"))
-        v = r.get(value_col, 0) or 0
-        groups.setdefault(g, []).append(float(v))
+        v = to_decimal(r.get(value_col))
+        groups.setdefault(g, []).append(v if v is not None else Decimal(0))
 
     summary = [
-        f"{g}: 合计={sum(vals):,.2f}"
+        f"{g}: 合计={sum(vals, Decimal(0)):,.2f}"
         for g, vals in sorted(groups.items(), key=lambda x: sum(x[1]), reverse=True)
     ]
     return "\n".join(summary)
@@ -96,24 +105,30 @@ def detect_anomaly(data_json: str, value_col: str = "") -> str:
 
     first = rows[0]
     if not value_col or value_col not in first:
-        num_keys = [k for k in first if isinstance(first[k], (int, float))]
+        num_keys = _numeric_keys(first)
         value_col = num_keys[0] if num_keys else ""
     if not value_col:
         return "没有数值列"
 
-    values = [r[value_col] for r in rows if r.get(value_col) is not None]
+    values = [to_decimal(r[value_col]) for r in rows if r.get(value_col) is not None]
+    values = [v for v in values if v is not None]
     if len(values) < 3:
         return "数据量不足"
 
     try:
-        mean = statistics.mean(values)
-        stdev = statistics.stdev(values)
+        # 统计口径用 float（Decimal 的 stdev 语义复杂度不值当）；仅在此处转换，
+        # 展示格式 {:,.2f} 仍基于 Decimal 原值，避免摘要级精度损失。
+        flts = [float(v) for v in values]
+        mean = sum(flts) / len(flts)
+        stdev = statistics.stdev(flts)
         threshold = 2 * stdev
         anomalies = []
         for r in rows:
-            v = r.get(value_col, 0) or 0
-            if abs(v - mean) > threshold:
-                cat_keys = [k for k in first if not isinstance(first[k], (int, float))]
+            v = to_decimal(r.get(value_col))
+            if v is None:
+                continue
+            if abs(float(v) - mean) > threshold:
+                cat_keys = [k for k in first if not is_numeric_value(first[k])]
                 label = str(r.get(cat_keys[0], "")) if cat_keys else ""
                 anomalies.append(f"{label}: {v:,.2f}")
         if anomalies:

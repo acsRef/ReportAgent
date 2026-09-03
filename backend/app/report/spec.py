@@ -13,18 +13,25 @@ payload 形状仍可 parse；``app.models.contracts`` 为 re-export shim。
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 class KpiSpec(BaseModel):
-    """KPI 数值块——value 必须等于 aggregation(field) 重算（validator 数值层）。"""
+    """KPI 数值块——value 必须等于 aggregation(field) 重算（validator 数值层）。
+
+    Final Hardening ③：value 用 Decimal——PostgreSQL numeric 语义精确到 decimal，
+    用 float 承载会丢精度（大额 SUM / 高 scale 场景）。pydantic JSON 模式把
+    Decimal 序列化为精确字符串（"123456789012345678.91"），与 rows 的
+    numeric 字符串表示同构。
+    """
 
     label: str
     field: str  # QueryResult 列名（来源锚点）
     aggregation: Literal["sum", "avg", "min", "max", "count"] = "sum"
-    value: Optional[float] = None
+    value: Optional[Decimal] = None
 
 
 class TableSpec(BaseModel):

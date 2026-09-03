@@ -164,6 +164,88 @@ def test_numeric_kpi_aggregation_variants():
         assert validate_report_spec(spec, qr).ok is True, agg
 
 
+# --- Final Hardening ③：Decimal 精确算术 / numeric 字符串容忍 -------------------
+
+
+def test_numeric_string_rows_are_numeric_for_aggregation():
+    """QueryResult 行里 numeric 列是精确字符串——不能被当成非数值列。"""
+    qr = {
+        "sql": "s",
+        "columns": [{"name": "region"}, {"name": "amount"}],
+        "rows": [{"region": "华东", "amount": "100"}, {"region": "华北", "amount": "200"}],
+        "row_count": 2,
+        "status": "SUCCESS",
+    }
+    spec = _spec(
+        kpi=[KpiSpec(label="总销售额", field="amount", aggregation="sum", value=300)],
+        components=[ComponentSpec(
+            id="c1", type="bar", title="数据分析",
+            data_binding=DataBinding(
+                fields=["region", "amount"],
+                rows=[{"region": "华东", "amount": "100"}, {"region": "华北", "amount": "200"}],
+            ),
+        )],
+    )
+    assert validate_report_spec(spec, qr).ok is True
+
+
+def test_numeric_kpi_exact_large_decimal_sum():
+    """大额小数 SUM 精确比对：float 化（~16 位有效）会产生假 diff，
+    Decimal 直比不假违规。"""
+    qr = {
+        "sql": "s",
+        "columns": [{"name": "amount"}],
+        "rows": [
+            {"amount": "123456789012345678.91"},
+            {"amount": "123456789012345678.91"},
+        ],
+        "row_count": 2,
+        "status": "SUCCESS",
+    }
+    binding_rows = [
+        {"amount": "123456789012345678.91"},
+        {"amount": "123456789012345678.91"},
+    ]
+    ok_spec = _spec(
+        table=TableSpec(columns=["amount"]),
+        components=[ComponentSpec(
+            id="c1", type="bar", title="数据分析",
+            data_binding=DataBinding(fields=["amount"], rows=binding_rows),
+        )],
+        kpi=[KpiSpec(
+            label="总销售额", field="amount", aggregation="sum",
+            value="246913578024691357.82",
+        )],
+    )
+    assert validate_report_spec(ok_spec, qr).ok is True
+
+
+def test_numeric_kpi_cent_mismatch_detected():
+    """小数位撒谎（0.30 vs 0.31）在普通量级必须被 numeric 层抓住。"""
+    qr = {
+        "sql": "s",
+        "columns": [{"name": "amount"}],
+        "rows": [{"amount": "0.10"}, {"amount": "0.20"}],
+        "row_count": 2,
+        "status": "SUCCESS",
+    }
+    bad_spec = _spec(
+        table=TableSpec(columns=["amount"]),
+        kpi=[KpiSpec(
+            label="总销售额", field="amount", aggregation="sum", value="0.31",
+        )],
+    )
+    result = validate_report_spec(bad_spec, qr)
+    assert any(v.layer == "numeric" and v.block == "kpi[0]" for v in result.violations)
+
+
+def test_kpi_value_float_type_still_accepted():
+    """KpiSpec.value 兼容 int/float 旧 payload（pydantic 收敛 Decimal）。"""
+    spec = _spec(kpi=[KpiSpec(label="总销售额", field="amount", aggregation="sum", value=300)])
+    assert spec.kpi[0].value == 300
+    assert validate_report_spec(spec, QR).ok is True
+
+
 def test_numeric_kpi_non_numeric_column():
     spec = _spec(kpi=[KpiSpec(label="x", field="region", aggregation="sum", value=1)])
     result = validate_report_spec(spec, QR)

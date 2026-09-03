@@ -7,20 +7,26 @@
 
 明确不做文本（insight/HTML）正则数字审计——伞形 §十二：`12345 / 12,345 / 1.23万`
 会大量误报。EMPTY / qr=None 短路 ok=True：三态中只有 SUCCESS 进三层。
+
+Final Hardening ③：数值重算走 Decimal——QueryResult 数值行是精确字符串（numeric
+JSON transport），kpi.value 也是 Decimal；一律 Decimal 算术比较，不在 validator
+层 float 化（大额 SUM 场景 float 容差会掩盖/制造假 diff）。
 """
 from __future__ import annotations
 
-import math
+from decimal import Decimal, InvalidOperation
 from typing import Literal, Optional
 
 from pydantic import BaseModel
 
 from app.models.contracts import QueryResult
 from app.report.spec import ReportSpec
+from app.utils.numbers import to_decimal
 
 _ViolationLayer = Literal["structure", "numeric", "fabrication"]
 
-_REL_TOL = 1e-9
+_REL_TOL = Decimal("1E-9")
+_ABS_TOL = Decimal("1E-9")
 
 
 class SpecViolation(BaseModel):
@@ -35,20 +41,40 @@ class SpecValidationResult(BaseModel):
     violations: list[SpecViolation] = []
 
 
-def _aggregate(values: list, aggregation: str) -> Optional[float]:
-    """对列值做聚合重算；非数值列（count 除外）返回 None。"""
+def _decimal_close(a: Decimal, b: Decimal) -> bool:
+    """Decimal 容差比较（语义对齐 math.isclose，避免 float 化）。
+
+    float 化比较在 1e17 量级会引入 ~16 的舍入噪声，容差却按 1e-9 相对算——
+    大额 KPI 会假性 violation；Decimal 直比无此问题。
+    """
+    diff = abs(a - b)
+    bound = _ABS_TOL + _REL_TOL * max(abs(a), abs(b))
+    return diff <= bound
+
+
+def _aggregate(values: list, aggregation: str) -> Optional[Decimal]:
+    """对列值做聚合重算（Decimal 精确算术）；非数值列（count 除外）返回 None。
+
+    values 可能混 int / float / Decimal / 数值字符串（numeric 列 JSON transport
+    是 str）——统一经 to_decimal 收敛。
+    """
     if aggregation == "count":
-        return float(len(values))
-    numeric = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
-    if not values or len(numeric) != len(values):
+        return Decimal(len(values))
+    numeric: list[Decimal] = []
+    for v in values:
+        d = to_decimal(v)
+        if d is None:
+            return None
+        numeric.append(d)
+    if not numeric:
         return None
     if aggregation == "sum":
-        return float(sum(numeric))
+        return sum(numeric, Decimal(0))
     if aggregation == "avg":
-        return float(sum(numeric)) / len(numeric)
+        return sum(numeric, Decimal(0)) / len(numeric)
     if aggregation == "min":
-        return float(min(numeric))
-    return float(max(numeric))
+        return min(numeric)
+    return max(numeric)
 
 
 def _row_matches(row: dict, qr_rows: list[dict]) -> bool:
@@ -141,7 +167,15 @@ def validate_report_spec(spec, query_result) -> SpecValidationResult:
                 detail=f"列 {kpi.field} 含非数值，无法 {kpi.aggregation} 聚合",
             ))
             continue
-        if not math.isclose(float(kpi.value), expected, rel_tol=_REL_TOL, abs_tol=_REL_TOL):
+        try:
+            actual = kpi.value if isinstance(kpi.value, Decimal) else Decimal(kpi.value)
+        except (InvalidOperation, TypeError, ValueError):
+            violations.append(SpecViolation(
+                layer="numeric", block=f"kpi[{i}]", field=kpi.field,
+                detail=f"KPI 值 {kpi.value!r} 不是数值",
+            ))
+            continue
+        if not _decimal_close(actual, expected):
             violations.append(SpecViolation(
                 layer="numeric", block=f"kpi[{i}]", field=kpi.field,
                 detail=f"{kpi.aggregation}={kpi.value} 与 QueryResult 重算值 {expected} 不符",
