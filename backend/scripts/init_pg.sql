@@ -3,6 +3,12 @@
 -- This file is idempotent; safe to re-run.
 
 -- ============================================================
+-- pgvector（memory.query_template.intent_embedding 等 VECTOR 列依赖；
+-- CI 全新 pgvector 容器首跑必须有 extension——2026-09-04 CI 首绿暴露）
+-- ============================================================
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- ============================================================
 -- Schemas
 -- ============================================================
 CREATE SCHEMA IF NOT EXISTS agent;

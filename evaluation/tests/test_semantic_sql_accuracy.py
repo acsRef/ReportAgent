@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import uuid
 from decimal import Decimal
@@ -170,23 +171,51 @@ _CANON = {
 }
 
 
+def _single_measure(row: dict) -> tuple[str, Decimal]:
+    """结构驱动 measure 列提取（Review-3，宁缺勿纵）。
+
+    不再假设「金额一定有小数点」：候选 = 行内 str 数值列（金额在 JSON
+    transport 是精确字符串；int 维度列是 JSON number，天然排除）。
+    - 恰一候选 → 即 measure（含整数金额 "100"——合法产物不再 false negative）；
+    - 多候选 → 仅当含小数点的候选唯一时取它（消歧：如 {月份:"1", 销售额:"100.5"}）；
+    - 否则 ambiguous，直接失败（不允许静默猜列制造 false pass/false negative）。
+    返回 (列名, Decimal)，调用方可据此把该列从维度 key 提取中排除。
+    """
+    cand_cols = [k for k, v in row.items() if isinstance(v, str) and _dec(v) is not None]
+    if len(cand_cols) == 1:
+        col = cand_cols[0]
+        return col, _dec(row[col])
+    dotted = [k for k in cand_cols if "." in row[k]]
+    if len(dotted) == 1:
+        col = dotted[0]
+        return col, _dec(row[col])
+    raise AssertionError(f"行无法确定唯一 measure 列（ambiguous numeric）: {row}")
+
+
 def _money_values(row_list: list[dict]) -> list[Decimal]:
-    """金额列识别：numeric 金额在 JSON transport 是精确字符串且必含小数点
-    （Decimal 全链，SUM(numeric(10,2)) 形如 "12345.67"）。int 维度列是 JSON
-    number 天然排除；str 形式的维度数字（如 store_id "1001"）因无小数点
-    同样排除——比「任意 str 数值」scan 严格，避免把维度误算进总额。"""
-    out = []
-    for r in row_list:
-        for v in r.values():
-            if isinstance(v, str) and "." in v and _dec(v) is not None:
-                out.append(_dec(v))
-    return out
+    """逐行提取 measure 金额（total/refund 集合等价用）——见 _single_measure。"""
+    return [m for _, m in (_single_measure(r) for r in row_list)]
+
+
+_MONTH_NAMES = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
+    "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
 
 
 def _month_key(v) -> int | None:
-    """把 agent 的月份表示归一成 1..12：int / "1" / "2024-01" / "2024-01-01…"
-    / "1月" / "January" 之外的未知格式返回 None（宁缺勿纵：无法对齐即失败，
-    不允许 silent 漏判制造 false pass）。"""
+    """把 agent 的月份表示归一成 1..12。
+
+    承诺支持（Review-3 修正，实现与文档一致）：
+      int 1..12 / "1" / "1月" / "2024-01" / "2024-01-01" / "2024-01-01 00:00:00"
+      / "January"/"jan"（全称或 3 字母缩写，可带 . 或空格后缀）。
+    解析顺序：ISO 日期形态先于纯数字（"2024-01" 若先走数字前缀会把 "2024"
+    吞掉——此前实现因此从未到达 ISO 分支，返回 None）；其余未知格式返回 None
+    （宁缺勿纵：无法对齐即失败，不允许 silent 漏判制造 false pass）。
+    """
     if v is None or isinstance(v, bool):
         return None
     if isinstance(v, int):
@@ -195,13 +224,20 @@ def _month_key(v) -> int | None:
     if not s:
         return None
     low = s.lower()
-    months = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-              "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
-    if low.startswith(tuple(months)) and (len(s) == 3 or s[3] in " ."):
-        for name, num in months.items():
-            if low.startswith(name):
-                return num
-    # 数字前缀（"1月"/"1"）
+    # ISO：2024-01 / 2024-01-01 / 2024-01-01 00:00:00 / 2024-01T…
+    if re.fullmatch(r"\d{4}-\d{2}(?:-\d{2})?(?:[ T].*)?", s):
+        n = int(s[5:7])
+        return n if 1 <= n <= 12 else None
+    # 英文月份（先长后短：january 在 jan 之前匹配）
+    for name, n in sorted(_MONTH_NAMES.items(), key=lambda x: -len(x[0])):
+        if (
+            low == name
+            or low.startswith(name + " ")
+            or low.startswith(name + ".")
+            or low.startswith(name + "月")
+        ):
+            return n
+    # 纯数字 "1" / 数字前缀 "1月"（整串以数字开头）
     head = ""
     for ch in s:
         if ch.isdigit():
@@ -211,13 +247,6 @@ def _month_key(v) -> int | None:
     if head:
         n = int(head)
         return n if 1 <= n <= 12 else None
-    # "2024-01" / "2024-01-01 00:00:00" 形态
-    if len(s) >= 7 and s[4:5] == "-":
-        try:
-            n = int(s[5:7])
-            return n if 1 <= n <= 12 else None
-        except ValueError:
-            return None
     return None
 
 
@@ -259,16 +288,14 @@ class TestSemanticSqlAccuracy:
         rows = _require_success(report, "月度趋势")
         # 键对齐比较（Review 修正）：month → value map，逐月断言——sorted 值
         # 比较允许「3 月值顶替 1 月」的错位 pass；map 级对齐才能验证「哪个月
-        # 对应哪个金额」。金额列=含小数点 str；月份键经 _month_key 归一
-        # （int/"1"/"2024-01"/"1月"），无法归一的格式宁缺勿纵直接失败。
+        # 对应哪个金额」。measure 列经 _single_measure 结构提取（整数金额
+        # 同样支持）；月份键经 _month_key 归一（int/"1"/"2024-01"/"1月"/
+        # "January"），无法归一的格式宁缺勿纵直接失败。
         def agent_month_map(row_list: list[dict]) -> dict[int, Decimal]:
             out: dict[int, Decimal] = {}
             for r in row_list:
-                money = _money_values([r])
-                assert len(money) == 1, f"行金额列不唯一/缺失: {r}"
-                keys = [_month_key(v) for k, v in r.items() if not (
-                    isinstance(v, str) and "." in v and _dec(v) is not None
-                )]
+                mcol, mval = _single_measure(r)
+                keys = [_month_key(v) for k, v in r.items() if k != mcol]
                 month = next((k for k in keys if k is not None), None)
                 assert month is not None, f"行无法归一月份键（格式不支持）: {r}"
                 assert month not in out, f"重复月份键 {month}: {r}"
