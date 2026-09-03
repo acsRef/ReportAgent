@@ -51,6 +51,42 @@ async def test_busy_rejects_second_task():
     assert t1.finished
 
 
+async def test_two_concurrent_confirms_one_wins_one_busy():
+    """Final Hardening ⑨：两个并发 confirm 同时到达同一 session——恰一个成功、
+    另一个 BusyError（409 语义）。deterministic：barrier 保证 A 在途时 B 才到达，
+    结果不依赖调度时序。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow(task: ConfirmedTask) -> None:
+        started.set()
+        await release.wait()
+        complete(task, [DONE])
+
+    outcomes: list[str] = []
+
+    async def confirm_a():
+        t = start_confirmed_task("race-1", 1, "confirm", slow)
+        outcomes.append("a:started")
+        await asyncio.wait_for(t.events.get(), timeout=1)
+        outcomes.append("a:done")
+
+    async def confirm_b():
+        # 与 A 同时被调度：A 由 barrier 保持在途，B 的 start 必然落在
+        # 「session 忙碌」窗口内 → BusyError（与 API 409 SESSION_BUSY 同源）
+        await started.wait()
+        try:
+            start_confirmed_task("race-1", 1, "confirm", _noop_runner)
+            outcomes.append("b:accepted")
+        except BusyError:
+            outcomes.append("b:busy")
+        finally:
+            release.set()  # 放行 A 收尾
+
+    await asyncio.gather(confirm_a(), confirm_b())
+    assert outcomes == ["a:started", "b:busy", "a:done"], outcomes
+
+
 async def test_finished_task_can_be_replaced():
     t1 = start_confirmed_task("s3", 1, "confirm", _noop_runner)
     await asyncio.wait_for(t1.events.get(), timeout=1)
