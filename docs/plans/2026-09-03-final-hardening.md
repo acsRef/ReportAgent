@@ -20,6 +20,17 @@ commit 链：`bb2b197` plan → `abfedb2` ① → `958bff0` ②⑥ → `e92a7e4`
 
 live 未跑项（留手动门，结构与 README/计划同步就位）：⑧ 语义评估首跑跑分、真 LLM repair/fail seam 冒烟、CI workflow 首次绿（仓库推 GitHub 后触发）。
 
+## Review-2 修正（用户 2026-09-04 复查 5471efa 基线，5 项全落地）
+
+1. **semantic canonical 补 2024 显式区间**：monthly/top5/payment 三个 canonical 此前无 WHERE（依赖「seed 只有 2024」隐含事实——gold evaluator 不能定义成「全历史」，未来加数据即静默失真）→ 全部补 order_date 区间；monthly canonical 改返 (月序号 int, 金额) 支持键对齐。
+2. **evaluator comparator 语义化**：monthly 从 sorted 值集（允许 3 月值顶替 1 月的错位 pass）改为 **month → value 逐键 map 对齐**（_month_key 归一 int/"1"/"2024-01"/"1月"，无法归一宁缺勿纵直接 fail）；total/refund 金额列识别收窄为「含小数点精确串」（str 维度数字如 store_id "1001" 不再误入总额）；region/payment 保持 key→value map。真实产物演练验证通过。
+3. **case 口径统一 6 例**：plan 原写「10 例覆盖矩阵」实为 6 case——文档如实改 6 + 矩阵缺口 4 项（empty/null/date-boundary/相对日期，部分因单年 seed 不可测）标注为扩展方向，不虚标。
+4. **ANALYSIS_DSN fail-closed**：`_analysis_dsn` production/未设 APP_ENV 缺失即 raise（不再退回普通 DATABASE_URL 取消 ragent_readonly 深度防御层）；仅 development 允许回退 PG_DSN（与 auth 启动闸同哲学）+ dev/prod 双侧契约测试。
+5. **危险函数族补齐**：pg_advisory_lock 系列 / nextval / setval / pg_notify 入黑名单（SELECT-only ≠ side-effect-free 的其余缺口）+ 安全矩阵 8 例。
+6. **Contract 05 修复 → 10/10**（P13 起挂起）：根因 = FAILED 版本落库后 confirm/retry 流只发 error 事件、前端从不刷新版本列表 → ReportPaper error band 永不渲染。修复：confirmStream 增 `onFailed` 钩子（页面注入 refreshVersionsAndSelectLatest）+ chat error 分支同款刷新，选中 status=error 版本 → band 渲染；CI 恢复全 01-10 per-PR 面。
+
+Review-2 后最终数字：backend **1124 passed / 1 skipped**；frontend vitest **302 passed** + tsc 干净；**Playwright Contract 10/10 绿**（全套实测 4.3m）；CI 真实绿跑于推送 `4d1a9dc` 后在 GitHub Actions 执行（gh CLI 本机未装，结果以 Actions 页为准）。commit：`c342506`(1-3) / `baf513e`(4) / `5ec5128`(5) / `4d1a9dc`(6)。
+
 ## ⑧ live 实跑记录（2026-09-03 夜，真 MiniMax LLM + ragent-py MCP + 零售 PG）
 
 harness 三轮修复（都是实跑抓的，非离线可见）：① 漏 `BASE_URL` 常量（模块级 fixture 引用）；② `_run_canonical` 的 `from app.tools...` 在 pytest 进程缺 backend sys.path——此前 LLM 全败根本没走到该行，掩盖成潜在 bug；③ P15 `_patch_fill_all` 对语义比对是灾难（自动补 granularity=月把单维 case 变二维、全盘接受「销售额=fact_payments.payment_amount」等 LLM/字典假设→口径改写）——改为**权威卡**（runner 以用户身份只留 case 真实约束，清空发明的 missing/assumptions）。另：total/refund 判定从「单行标量」放宽为**集合等价**（LLM plan 层有权按合理粒度如 12 月明细返回，判全行金额串之和 == canonical；double_fact/错口径仍会翻倍被抓）。
