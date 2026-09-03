@@ -25,7 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
-| [2026-08-31-p12-review-prep.md](2026-08-31-p12-review-prep.md) | P12 review-prep 修复：4 项加固（高：`get_chat_llm` fail-closed 防 mock 旁路 + spec 07 background-execution 加 session phase/report 落库断言；中：spec 03 retry 加 `execution_status=SUCCESS` 显式修复证据；低：mock fixture key 格式校验防 typo 静默） | 接 P12 已落地（48222f2 等 6 commit）+ review 反馈 6 项中 4 项落实，独立 4 个 fix commit + 1 个 docs commit，不动 P12 已落地主 commit |
+| [2026-09-03-p15-reliability-convergence.md](2026-09-03-p15-reliability-convergence.md) | P15 reliability 收口（用户 review `p15-e2e-live` 指令）：① E2E gate `!= "1"` 统一 ② mcp_down ContextVar→create_task 继承契约 ③ MCP-down live seam 激活证明（obscure-table 确定性对比）④ `_patch_fill_all` 吞错误 ⑤ double_fact flaky 稳定性 ⑥ MCP 三码业务层 matrix ⑦ `test_timeout_policy.py`（timeout→classification→retry→terminal）⑧ background-task timeout E2E（低 MAX_TASK_DURATION 第二实例）⑨ DB timeout contract | 分支 `p15-e2e-live`；不再扩业务 case；按用户顺序 ①→⑨ 逐 commit |
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
 ## 已完成

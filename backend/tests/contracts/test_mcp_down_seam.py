@@ -7,6 +7,7 @@ MCP **之前** raise MCPBoundaryError(MCP_UNAVAILABLE)——走既有 graceful �
 """
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -85,3 +86,53 @@ def test_fail_closed_keeps_real_path(monkeypatch):
     rows = rag_schema.search_tables_from_rag("销售额")
     assert len(rows) == 1 and rows[0]["table_name"] == "fact_sales"
     assert fake.call_tool.called, "非 seam 请求必须真调 MCP"
+
+
+# --- 后台任务继承（main 的 scoped 在 create_task 之前生效 → child 必须继承）----
+
+
+async def test_contextvar_propagates_to_child_task(monkeypatch):
+    """scoped(True) 内 create_task → child 继承 MCP-down 状态。
+
+    这正是 confirm/adjust 的机制：main 在 `_start_confirmed_stream`（内部
+    `asyncio.create_task`）之前 `scoped(header)`，后台图任务必须看到 seam。
+    contextvar 在 create_task 时拷贝——parent scoped 退出不影响 child。
+    """
+    monkeypatch.setenv("REPORTAGENT_E2E", "1")
+
+    async def _child() -> bool:
+        return mcp_down.active()
+
+    with mcp_down.scoped(True):
+        task = asyncio.create_task(_child())
+    assert await task is True, "create_task 派生的 child 必须继承 parent 的 MCP-down 状态"
+
+
+async def test_no_scoped_child_is_not_down(monkeypatch):
+    """无 scoped 时 create_task → child 也 inactive（生产并发请求互不泄漏）。"""
+    monkeypatch.setenv("REPORTAGENT_E2E", "1")
+
+    async def _child() -> bool:
+        return mcp_down.active()
+
+    task = asyncio.create_task(_child())
+    assert await task is False
+
+
+async def test_scoped_does_not_leak_across_tasks(monkeypatch):
+    """一个 task 里 scoped 不影响另一个 task（不串）。"""
+    monkeypatch.setenv("REPORTAGENT_E2E", "1")
+
+    async def _down() -> bool:
+        with mcp_down.scoped(True):
+            await asyncio.sleep(0)
+            return mcp_down.active()
+
+    async def _other() -> bool:
+        await asyncio.sleep(0)
+        return mcp_down.active()
+
+    down_task = asyncio.create_task(_down())
+    other_task = asyncio.create_task(_other())
+    assert await down_task is True
+    assert await other_task is False, "未 scoped 的任务不得被旁任务污染"

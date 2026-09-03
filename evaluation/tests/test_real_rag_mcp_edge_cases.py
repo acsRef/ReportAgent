@@ -40,8 +40,8 @@ from evaluation.tests.test_real_rag_mcp_e2e import (
 )
 
 pytestmark = pytest.mark.skipif(
-    not os.getenv("REPORTAGENT_E2E"),
-    reason="REPORTAGENT_E2E not set; skipping real backend e2e test",
+    os.getenv("REPORTAGENT_E2E") != "1",
+    reason="REPORTAGENT_E2E != 1; skipping real backend e2e test",
 )
 
 

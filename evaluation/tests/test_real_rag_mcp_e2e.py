@@ -32,8 +32,8 @@ import httpx
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    not os.getenv("REPORTAGENT_E2E"),
-    reason="REPORTAGENT_E2E not set; skipping real backend e2e test",
+    os.getenv("REPORTAGENT_E2E") != "1",
+    reason="REPORTAGENT_E2E != 1; skipping real backend e2e test",
 )
 
 BASE_URL = os.getenv("REPORTAGENT_E2E_BASE_URL", "http://127.0.0.1:8100")
@@ -129,15 +129,15 @@ def _drive_chat(
     ))
 
 
-def _patch_fill_all(client: httpx.Client, token: str, sid: str, card: dict) -> dict | None:
+def _patch_fill_all(client: httpx.Client, token: str, sid: str, card: dict) -> dict:
+    """PATCH 已补全的 requirement；PATCH 失败立即 raise（不吞错、不让 confirm 时才爆）。"""
     pr = client.patch(
         f"/api/v1/sessions/{sid}/requirement",
         json={"requirement": _fill_all(card)},
         headers={"Authorization": f"Bearer {token}"},
     )
-    if pr.status_code == 200:
-        return pr.json().get("requirement", _fill_all(card))
-    return card
+    pr.raise_for_status()
+    return pr.json()["requirement"]
 
 
 def _confirm(client: httpx.Client, token: str, sid: str, fault_header: str | None = None) -> list[dict]:
