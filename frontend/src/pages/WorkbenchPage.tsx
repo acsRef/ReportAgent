@@ -323,6 +323,11 @@ export default function WorkbenchPage() {
               void refreshVersionsAndSelectLatest(activeSessionId)
               toast.success(`报告 v${version ?? ''} 已生成并保留在当前会话`)
             },
+            // Review-2 / spec05：FAILED 版本落库后仅发 error 事件——刷新并选中
+            // 最新版本，ReportPaper error band 才能渲染（纯拒绝错误无副作用）
+            onFailed: () => {
+              void refreshVersionsAndSelectLatest(activeSessionId)
+            },
           },
           'confirm',
           controller.signal,
@@ -359,6 +364,9 @@ export default function WorkbenchPage() {
           onReport: (version) => {
             void refreshVersionsAndSelectLatest(activeSessionId)
             toast.success(`报告 v${version ?? ''} 已生成并保留在当前会话`)
+          },
+          onFailed: () => {
+            void refreshVersionsAndSelectLatest(activeSessionId)
           },
         },
         'retry',

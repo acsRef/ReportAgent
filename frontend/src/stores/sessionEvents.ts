@@ -51,6 +51,12 @@ export function handleSSEEvent(evt: AnalysisStreamEvent, ctx: StreamEventCtx): v
       ctx.msgApi.error(evt.error.message ?? '处理失败')
       dispatch({ type: 'analysis/failed', error: evt.error })
       ctx.setSending(false)
+      // Review-2 / 历史 known-red 修复：FAILED 版本落库后后端只发 error 事件
+      // （P9/P10 出口收编），前端此前从不刷新版本列表 → ReportPaper 的
+      // error band 永不渲染（spec 05）。宪法 §11 顺序 = persist state →
+      // user-visible error，此处 error 到达时 FAILED 版本已在库——刷新并
+      // 选中最新即可渲染 error band；纯拒绝类错误（无版本落库）刷新无副作用。
+      if (ctx.sessionId) void refreshVersionsAndSelectLatest(ctx.sessionId)
       break
     case 'done':
       ctx.setSending(false)

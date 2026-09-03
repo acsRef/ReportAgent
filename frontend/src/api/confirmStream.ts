@@ -26,6 +26,13 @@ export interface ConfirmStreamCtx {
   onReport: (version?: number) => void | Promise<void>
   /** P11：trace progress 帧实时回调——ProgressCard 由真信号驱动。 */
   onTrace?: (entry: TimelineEntry) => void
+  /**
+   * Review-2 / spec05 known-red 修复钩子：error 事件到达时调用（FAILED 版本
+   * 已落库——宪法 §11 顺序 persist state → user-visible error）。页面在此
+   * 刷新版本列表并选中最新 status=error 版本 → ReportPaper error band 渲染；
+   * 纯拒绝类错误无版本落库则回调内刷新无副作用。
+   */
+  onFailed?: () => void | Promise<void>
 }
 
 export async function postConfirmStream(
@@ -109,6 +116,9 @@ export async function postConfirmStream(
           case 'error':
             ctx.toast.error(evt.error.message ?? '执行失败')
             ctx.dispatch({ type: 'analysis/failed', error: evt.error })
+            // FAILED 版本已落库（persist → error 顺序）——页面钩子刷新并选中
+            // 最新版本，ReportPaper error band 才能渲染。
+            await ctx.onFailed?.()
             break
           case 'trace':
             ctx.onTrace?.(evt.entry)

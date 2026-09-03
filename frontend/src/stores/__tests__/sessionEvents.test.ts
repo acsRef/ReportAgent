@@ -109,4 +109,21 @@ describe('handleSSEEvent（sessionEvents 版）', () => {
     expect(msgApi.success).toHaveBeenCalledWith('报告 v2 已生成')
     await waitFor(() => expect(useAnalysisStore.getState().selectedReportVersion).toBe(2))
   })
+
+  it('error 事件 → 刷新版本列表（FAILED 版本落库后 ReportPaper error band 才能渲染）', async () => {
+    // Review-2 / spec05 known-red 修复：FAILED 落库后后端只发 error 事件，
+    // 前端必须拉最新版本态并选中（status=error 的版本 → ReportPaper band）。
+    fetchSessionMock.mockResolvedValue(snapshot('error', [
+      { version: 1, title: 'r1', status: 'error', created_at: 'a', favorite: false },
+    ]))
+    const msgApi = { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() }
+    handleSSEEvent(
+      { type: 'error', error: { code: 'SQL_EXECUTION_ERROR', message: '查询执行失败', recoverable: false, failed_action: 'confirm' } },
+      { msgApi: msgApi as any, sessionId: 's1', setSending: vi.fn(), setCasualReply: vi.fn() },
+    )
+    expect(msgApi.error).toHaveBeenCalled()
+    expect(fetchSessionMock).toHaveBeenCalled()
+    await waitFor(() => expect(useAnalysisStore.getState().selectedReportVersion).toBe(1))
+    expect(useAnalysisStore.getState().reportVersions[0]?.status).toBe('error')
+  })
 })

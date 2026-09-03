@@ -116,10 +116,9 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: frontend
       - name: Contract E2E (mock LLM + real PG)
-        # 09/10 绿；05-failed-result 为 P13 记录在案的已知红（FAILED 版本落库正常，
-        # 前端 ReportPaper error band 渲染时序未修，见 docs/plans/2026-09-01-p13-langfuse.md
-        # 落地记录）——修复前从 per-PR 面排除，避免全红噪音
-        run: npm run e2e:contract:ci
+        # 10/10 绿（Review-2 修掉 05：confirm error 事件后 onFailed 刷新版本 →
+        # ReportPaper error band 渲染；详见 plan 落地记录）
+        run: npm run e2e:contract
         working-directory: frontend
         env:
           LLM_PROVIDER: mock

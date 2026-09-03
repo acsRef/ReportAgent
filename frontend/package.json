@@ -12,7 +12,6 @@
     "test:run": "vitest --run",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "e2e:contract": "playwright test --config e2e/playwright.config.ts e2e/specs/0[1-9]-*.spec.ts e2e/specs/10-*.spec.ts",
-    "e2e:contract:ci": "playwright test --config e2e/playwright.config.ts e2e/specs/0[1-4]-*.spec.ts e2e/specs/0[6-9]-*.spec.ts e2e/specs/10-*.spec.ts",
     "e2e:full": "playwright test --config e2e/playwright.config.ts e2e/specs/1[1-2]-*.spec.ts"
   },
   "dependencies": {
