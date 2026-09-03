@@ -8,14 +8,18 @@
   adjust_v2           report_ready 后 adjust → v2 报告迭代
   clarify_loop        模糊 query → awaiting_missing → fill → confirm SUCCESS
   sse_disconnect      confirm SSE 断连 → 后台跑完 → 轮询见 SUCCESS（宪法 §11 断连≠失败）
-  mcp_down_req        /chat 时 schema MCP 不可用（X-E2E-McpDown）→ 不产可执行 complete 卡
   mcp_down_exec       /confirm 时 schema MCP 中断 → 优雅降级（有界收尾、不伪造）
+                      + 日志 marker 直证 seam 真激活（REPORTAGENT_BACKEND_LOG 指向
+                      backend 启动日志，marker 增量 = MCP_UNAVAILABLE 真走边界）
                       + MCP 恢复后同 session 再 confirm → 真 SUCCESS（回滚恢复）
 
 gate：REPORTAGENT_E2E=1（backend 亦需同 env 启动才能激活 fault / MCP-down seam）。
 逐 case 真跑验证。schema MCP 中断 seam：请求级 `X-E2E-McpDown: on`（contextvar，
 confirm/adjust 后台任务继承），`rag_schema._retrieve_dict_via_mcp` 调 MCP 前 raise
 MCP_UNAVAILABLE——与真实中断同分类，走既有 graceful 降级（search_tables→[]/ddl→None）。
+
+注：requirement 阶段 MCP-down 的「卡非 complete」断言已弃（control 证明同 query 无 seam
+也产 missing——是正常需求澄清行为，与 schema 无关，case 空洞）。
 
 """
 from __future__ import annotations
@@ -74,13 +78,20 @@ def _answer_rows(report) -> int:
     return len(table.get("rows") or [])
 
 
-def _chat_mcp_down(client, token, sid, query):
-    """/chat 带 X-E2E-McpDown（requirement 阶段 schema MCP 不可用）。"""
-    return list(_stream_sse(
-        client, "POST", "/api/v1/chat", token,
-        json_body={"user_query": query, "mode": "new", "session_id": sid},
-        extra_headers={"X-E2E-McpDown": "on"},
-    ))
+_MCP_DOWN_LOG_MARKER = "E2E seam: schema MCP unavailable"
+_SEAM_EVIDENCE_LOG = os.getenv("REPORTAGENT_BACKEND_LOG")
+
+
+def _count_seam_marker() -> int:
+    """读 backend 启动日志，数 seam marker 出现次数（rag_schema 吞 MCP_UNAVAILABLE 时落 WARNING）。"""
+    with open(_SEAM_EVIDENCE_LOG, encoding="utf-8", errors="ignore") as f:
+        return f.read().count(_MCP_DOWN_LOG_MARKER)
+
+
+needs_seam_log = pytest.mark.skipif(
+    not _SEAM_EVIDENCE_LOG,
+    reason="REPORTAGENT_BACKEND_LOG not set; seam-activation log proof unavailable",
+)
 
 
 class TestEdgeCases:
@@ -226,42 +237,29 @@ class TestEdgeCases:
             f"断连后后台应跑完并落 SUCCESS 报告: {_report_status(report)}"
         )
 
-    def test_mcp_down_requirement_degrades(self, http_client, token):
-        """/chat 时 schema MCP 不可用 → 需求解析无 schema grounding → 不得产可执行 complete 卡。
-
-        X-E2E-McpDown 让 data_graph.search_tables 降级 [] → schema_context FAILED 空 → parse
-        prompt 无表结构。诚实降级 = 卡 status 非 complete（missing/待确认 assumption），绝不
-        假装已经 know 数据在哪个表、直接可 confirm。live 2/2 → missing（机制：schema 空时
-        parse 无法把 metric 落到真实字段，assumption 必留 unresolved）。
-        """
-        sid = f"e2e-mcpdown-req-{uuid.uuid4().hex[:8]}"
-        events = _chat_mcp_down(http_client, token, sid, "2024年各区域销售额")
-        err = _data_of(events, "error")
-        assert err is None, f"requirement 阶段 MCP down 不应 error（应降级为澄清）: {err}"
-        card = _data_of(events, "requirement")
-        assert card is not None, "MCP down 也应有 requirement card（降级澄清而非裸崩）"
-        assert card.get("status") != "complete", (
-            "schema MCP down 时不得产出可直接执行的 complete 卡（无 grounding 不得假装 know）: "
-            f"{card.get('status')}"
-        )
-        # 不确认 → 无 SUCCESS report
-        assert _report_status(_get_latest_report(http_client, token, sid)) != "SUCCESS"
-
+    @needs_seam_log
     def test_mcp_down_execution_degrade_and_recover(self, http_client, token):
         """/confirm 时 schema MCP 中断 → 优雅降级有界收尾（不崩/不伪造）+ 恢复后回滚出真报告。
+
+        **seam 激活证明（结构化证据，与 SUCCESS/FAILED 终态解耦）**：seam 抛的
+        MCP_UNAVAILABLE 在 rag_schema 吞成 [] 前落 WARNING（marker `E2E seam: schema
+        MCP unavailable`）。本 case 在 seam confirm 前后读 backend 日志（env
+        REPORTAGENT_BACKEND_LOG），断言 marker 计数**增加**——直接证明该 live run 的
+        schema 检索真走到 MCP_UNAVAILABLE 边界，而非 seam 没传播、只是 query 正常跑。
 
         confirmed_data_agent 每轮 confirm 都真调 search_tables；MCP down → schema 空，SQL 只能靠
         memory/FAQ 兜底：first-try 对 → 真 SUCCESS（真行真 SQL，不伪造）；错 → repair 需 MCP
         DDL（down 取不到）→ 预算收敛 → 显式 QUERY_FAILED + FAILED 落库。断言收敛到 honest
-        terminal 不变量（live 观察：一轮 FAILED/一轮 SUCCESS 均诚实，见 probe）：终态合法、
-        SUCCESS 必有真行、FAILED/error 必带 error 事件且 0 行。随后 MCP 恢复同 session 再
-        confirm → 真 SUCCESS（中断不污染卡/会话，正常回滚）。
+        terminal 不变量（live 观察：一轮 FAILED/一轮 SUCCESS 均诚实）：终态合法、SUCCESS 必有
+        真行、FAILED/error 必带 error 事件且 0 行。随后 MCP 恢复同 session 再 confirm → 真
+        SUCCESS（中断不污染卡/会话，正常回滚）。
         """
         sid = f"e2e-mcpdown-exec-{uuid.uuid4().hex[:8]}"
         # chat 正常（MCP up）→ 卡 → fill → confirm 带 MCP-down
         events = _drive_chat(http_client, token, sid, "2024年华东销售额")
         card = _data_of(events, "requirement")
         card = _patch_fill_all(http_client, token, sid, card)
+        seam_before = _count_seam_marker()
         ev_down = list(_stream_sse(
             http_client, "POST", f"/api/v1/sessions/{sid}/confirm", token,
             extra_headers={"X-E2E-McpDown": "on"},
@@ -269,6 +267,15 @@ class TestEdgeCases:
         # 有界收尾：done 事件必达（不 hang 不裸崩）
         done = [e["data"] for e in ev_down if e["event"] == "done"]
         assert done, "MCP down confirm 必须有 done 事件（图有界收敛）"
+        # seam 激活证明：日志 marker 必须增加（MCP_UNAVAILABLE 真被 rag_schema 吞过）。
+        for _ in range(10):  # 日志 flush 有极短延迟，轮询至多 ~5s
+            if _count_seam_marker() > seam_before:
+                break
+            time.sleep(0.5)
+        assert _count_seam_marker() > seam_before, (
+            "seam 未真激活：backend 日志无 MCP_UNAVAILABLE marker（X-E2E-McpDown 未生效或 "
+            "backend 未以 REPORTAGENT_E2E=1 启动 / REPORTAGENT_BACKEND_LOG 指向非本次 backend）"
+        )
         report = _get_latest_report(http_client, token, sid)
         assert report is not None, "MCP down confirm 也必须有报告行（SUCCESS 或 FAILED 落库）"
         status = _report_status(report)

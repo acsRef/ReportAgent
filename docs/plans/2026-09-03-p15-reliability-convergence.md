@@ -33,16 +33,18 @@ classification→retry→terminal 契约」这些可靠性缺口补上，**不�
 ### ③ MCP-down live case 证明 seam 真激活（P1，test + live 收敛）
 
 现状缺陷：`mcp_down_execution_degrade_and_recover` 允许 SUCCESS → seam 没传播也可能 PASS
-（memory 兜住 schema 照样真 SUCCESS，已实测 A1）。改法：**obscure-table 确定性对比**——
-执行 MCP-down 腿改用「memory/FAQ 从未含 SQL 的真实表组合」（dim_promotion/dim_customer 等，
-KB 有、历次 e2e 从未执行过 → 无 schema 时 LLM 无法凭记忆写对精确列名）：
-- leg1 confirm + `X-E2E-McpDown: on` → schema refresh 空 → LLM 只能瞎猜列名 → 真实
-  object_not_found → repair 需 MCP（down 取不到 DDL）→ budget 耗尽 → **确定性 NOT SUCCESS**
-  （若 seam 未传播，schema 在 → 同卡应 SUCCESS → 断言红，故非空）。
-- leg2 同 session 再 confirm 无 header（MCP 恢复）→ schema 真取到 → SUCCESS（回滚恢复）。
-- 硬断言 leg1 `NOT(SUCCESS)` ∧ 显式 error/FAILED；leg2 `SUCCESS` + 真行。
-- 收敛：obscure 组合 live 2× 稳定后定案；若仍 LLM 漂移，回退方案 = 后端日志 marker 断言
-  （`REPORTAGENT_BACKEND_LOG` 指向启动日志，grep `E2E seam: schema MCP unavailable`）。
+（memory 兜住 schema 照样真 SUCCESS，已实测 A1）。改法（live 收敛后定案）：**日志 marker
+直证**——seam 抛的 MCP_UNAVAILABLE 在 rag_schema 吞成 [] 前落 WARNING（detail 含
+`E2E seam: schema MCP unavailable`）。执行 MCP-down case 在 seam confirm 前后读 backend 启动
+日志（env `REPORTAGENT_BACKEND_LOG`），断言 marker 计数**增加** = 该 live run 的 schema 检索
+真走到 MCP_UNAVAILABLE 边界。与 SUCCESS/FAILED 终态解耦（不变动产品语义，保留
+memory-兜底-SUCCESS 的合法诚实终态）。`REPORTAGENT_BACKEND_LOG` 未设 → 本 case skip
+（`needs_seam_log`）。
+
+**弃空洞 requirement case**：原 `mcp_down_requirement_degrades` 断言「seam 下卡 !=
+complete」——control（同 query、无 seam）实测也产 missing（正常需求澄清行为，与 schema 无
+关）→ case 不测 seam、空洞，删除。requirement 阶段无稳定可观测的 seam 差异，不在 Layer 4
+需求内（用户 Layer 4 只要 execution proof），如实从 suite 移除。
 
 ### ④ `_patch_fill_all` 吞错误（P2，test util）
 
@@ -106,7 +108,7 @@ recoverable）→ 无假行。另钉 connection timeout 覆盖路径（若可低
 | 文件 | 变更 | 项 |
 |---|---|---|
 | `evaluation/tests/test_real_rag_mcp_e2e.py` | gate `!= "1"`；`_patch_fill_all` raise_for_status | ①④ |
-| `evaluation/tests/test_real_rag_mcp_edge_cases.py` | gate `!= "1"`；mcp_down_execution 改 obscure 对比 + 收敛 | ①③⑤ |
+| `evaluation/tests/test_real_rag_mcp_edge_cases.py` | gate `!= "1"`；mcp_down_execution 日志 marker 直证；删空洞 requirement case | ①③⑤ |
 | `backend/tests/contracts/test_mcp_down_seam.py` | async create_task 继承契约（正/反） | ② |
 | `backend/tests/contracts/test_timeout_policy.py` | 新：timeout→classification→retry→terminal matrix（LLM/MCP/DB/background） | ⑦ |
 | `backend/tests/contracts/test_mcp_error_business_matrix.py` | 新：MCP 三码业务层 matrix（分类/dispatcher/no-match 独立） | ⑥ |
