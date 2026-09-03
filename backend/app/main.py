@@ -469,9 +469,32 @@ app = FastAPI(
 app.include_router(templates_router)
 app.include_router(observability_router)
 
+def _cors_allowed_origins() -> list[str]:
+    """CORS 显式来源白名单（Final Hardening ⑫）。
+
+    规则（fail-closed，与 auth 启动闸同哲学）：
+      - `CORS_ALLOWED_ORIGINS`（逗号分隔）显式设置时优先——生产部署必须走这条；
+      - 未设置：development → `http://localhost:3000` / `http://127.0.0.1:3000`
+        （显式 origin，不再用 `*`——`allow_origins=["*"]` + credentials=True 在
+        starlette 下会被浏览器整体拒掉，等于隐性 bug）；
+      - 未设置：其它/未配置 APP_ENV（按 production 处理）→ 空列表，仅同源
+        （前端同走 /api 反代时 CORS 本就不需要）。
+
+    注意：中间件在 import 期构建，helper 每次读 env 便于测试注入。
+    """
+    from app.infra.auth.startup_guard import is_development
+
+    raw = os.getenv("CORS_ALLOWED_ORIGINS")
+    if raw and raw.strip():
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    if is_development():
+        return ["http://localhost:3000", "http://127.0.0.1:3000"]
+    return []
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
