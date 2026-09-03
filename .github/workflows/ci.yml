@@ -53,13 +53,16 @@ jobs:
           psql -h localhost -U ragent -d ragent -f backend/scripts/seed_business_p15prelude.sql
           psql -h localhost -U ragent -d ragent -f backend/scripts/setup_app_role.sql
       - name: Backend offline suite (incl. persistence on real PG)
-        # 失败详情进 step summary（check-runs API 可读），诊断用；exit code 保持真实
+        # 失败详情经 ::error:: 进 job annotations（check-runs API 匿名可读，诊断用）
         run: |
           set +e
           python -m pytest -q --tb=short > /tmp/pytest.log 2>&1
           code=$?
-          tail -60 /tmp/pytest.log >> "$GITHUB_STEP_SUMMARY"
-          echo "pytest exit=$code" >> "$GITHUB_STEP_SUMMARY"
+          if [ $code -ne 0 ]; then
+            tail -50 /tmp/pytest.log | while IFS= read -r line; do
+              echo "::error file=backend-suite::$line"
+            done
+          fi
           exit $code
   frontend-gate:
     runs-on: ubuntu-latest
@@ -122,8 +125,18 @@ jobs:
         working-directory: frontend
       - name: Contract E2E (mock LLM + real PG)
         # 10/10 绿（Review-2 修掉 05：confirm error 事件后 onFailed 刷新版本 →
-        # ReportPaper error band 渲染；详见 plan 落地记录）
-        run: npm run e2e:contract
+        # ReportPaper error band 渲染；详见 plan 落地记录）。失败详情经
+        # ::error:: 进 annotations（check-runs API 匿名可读，诊断用）
+        run: |
+          set +e
+          npm run e2e:contract > /tmp/contract.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            sed 's/\x1b\[[0-9;]*m//g' /tmp/contract.log | tail -40 | while IFS= read -r line; do
+              echo "::error file=contract-e2e::$line"
+            done
+          fi
+          exit $code
         working-directory: frontend
         env:
           LLM_PROVIDER: mock
