@@ -1,6 +1,6 @@
 # P15 reliability 收口（e2e 从「功能场景丰富」→「生产级验证体系」）
 
-> 状态: 进行中
+> 状态: 已完成
 > 源：用户对 `p15-e2e-live` review 后的收口指令（2026-09-03）。**不再扩业务 case**；把
 > reliability 从「单层有、跨层缺」收敛成 4 层契约：MCP Client ✅ → Tool/Boundary → Runtime
 > Reliability → Real E2E（mcp-down 传播证明 / mcp-timeout e2e / background-timeout e2e /
@@ -140,3 +140,41 @@ recoverable）→ 无假行。另钉 connection timeout 覆盖路径（若可低
 - **不**引入 Prometheus/Grafana 或新可观测 sink（日志 marker 只在 ③ 回退方案用到）。
 - **不**为 ⑨ 真等 30s（override 短超时）；不为 ⑧ 等 600s（低超时第二实例）。
 - **不**动 ragent-py（独立 repo）；不动 P12/P13 已冻结前端契约。
+
+## 落地记录（2026-09-03 收尾）
+
+commit 链（分支 `p15-e2e-live`）：`2191a51`(①②④+plan) → `558f30f`(③) →
+`0c3a8d1`(⑥⑦⑨) → `00aaa43`(⑧) → `268ea88`(⑤ 收紧) → `a22c336`(repair 收紧)。
+
+**live/offline 验证**：
+- ① gate：unset / =0 → skip（15/6 skipped），=1 → 正常收集。
+- ② ContextVar→create_task：8 例 offline 绿（含 child 继承 / 反向 / 不串）。
+- ③ 日志 marker 直证：`REPORTAGENT_BACKEND_LOG` 指向 backend 启动日志，seam confirm 前后
+  marker 计数增量断言（live 绿 175s）。
+- ⑤ edge 全量：run#1 **6/8**（double_fact + empty_result 同 QUERY_FAILED 挂，honest 但断言
+  过严）→ 收紧后 run#2 **8/8**（895s）。
+- ⑥ 13 例 / ⑦ 4 例 / ⑨ 3 例（真 PG 100ms statement_timeout 触发）offline 全绿；
+  contracts+smoke+persistence 全量 **751 passed** 零回归。
+- ⑧ background-timeout E2E（:8101 MAX_TASK_DURATION=5 第二实例）绿 17s：SSE
+  TASK_TIMEOUT + done error + session.phase=error + report FAILED 落库。
+- formal 6 例（④ driver 改动验证）：5/6，repair 一次瞬时漂移（LLM 2nd SQL 写错列
+  fact_payments.amount；memory 0 行排除污染）→ 单跑绿 → 用户拍板同款收紧 → repair
+  收紧后单跑绿。
+
+**关键落地发现（诚实记录）**：
+1. **空洞 case 删除**：原「requirement MCP-down → 卡非 complete」经 control（同 query 无
+   seam）实测也产 missing——正常需求澄清行为与 schema 无关，case 不测 seam，删。
+2. **LLM 质量 gating 分类**：seed 双事实按区域对比（fact_payments 无 store_id 须经
+   order_id→fact_orders→dim_store）与 1999 year-filter、repair 2nd SQL 都是 live LLM 质量
+   彩票；诚实 FAILED 是系统正确行为。硬钉 SUCCESS/EMPTY = 把 live LLM 当被测对象 →
+   double_fact/empty_result/repair 三个 case 收紧到 honest-terminal（用户逐项拍板），
+   SUCCESS/EMPTY 分支保留最强断言（双表同现+真行 / 无数据文案）。
+3. ⑧ 的 `MAX_TASK_DURATION` 是 import 常量 → 第二 backend 实例（:8101）+ 独立 env
+   `REPORTAGENT_E2E_TIMEOUT_BASE_URL`（requirement chat 不走 run_with_timeout 不受影响）。
+4. ③ 激活证明选「backend 日志 marker 增量」而非产品改动——schema 检索降级 [] 是设计（SQL
+   生成不阻塞），MCP 分类已由 rag_schema WARNING 带 code 落日志（⑥ matrix 钉），测试直读
+   该日志即结构化证据。
+5. session API 字段是 `phase`（非 DB `current_phase`）——⑧ 实测抓出。
+
+**明确不做（维持）**：不加业务 e2e；不扩 fault seam kind；不改 schema 检索 [] 降级语义；
+不引入新可观测 sink（日志 marker 仅测试读）。
