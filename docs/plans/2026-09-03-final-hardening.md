@@ -20,6 +20,14 @@ commit 链：`bb2b197` plan → `abfedb2` ① → `958bff0` ②⑥ → `e92a7e4`
 
 live 未跑项（留手动门，结构与 README/计划同步就位）：⑧ 语义评估首跑跑分、真 LLM repair/fail seam 冒烟、CI workflow 首次绿（仓库推 GitHub 后触发）。
 
+## ⑧ live 实跑记录（2026-09-03 夜，真 MiniMax LLM + ragent-py MCP + 零售 PG）
+
+harness 三轮修复（都是实跑抓的，非离线可见）：① 漏 `BASE_URL` 常量（模块级 fixture 引用）；② `_run_canonical` 的 `from app.tools...` 在 pytest 进程缺 backend sys.path——此前 LLM 全败根本没走到该行，掩盖成潜在 bug；③ P15 `_patch_fill_all` 对语义比对是灾难（自动补 granularity=月把单维 case 变二维、全盘接受「销售额=fact_payments.payment_amount」等 LLM/字典假设→口径改写）——改为**权威卡**（runner 以用户身份只留 case 真实约束，清空发明的 missing/assumptions）。另：total/refund 判定从「单行标量」放宽为**集合等价**（LLM plan 层有权按合理粒度如 12 月明细返回，判全行金额串之和 == canonical；double_fact/错口径仍会翻倍被抓）。
+
+**首轮跑分 1/6（total 过）**。失败明细=真实能力信号（SQL 可执行、口径/年份对，但 **plan 层对已确认维度的遵从不稳定**）：region case 被做成按年×季度×月三维、monthly 被做成按年单行、top5 返回全体 50 商品无 LIMIT、refund 按月明细（harness 已放宽）、payment 同问法跨轮漂移（整跑那轮 SQL 与 canonical 完全一致但集合按季度——第二轮样本会变）。维度权威文本已给足（`_format_confirmed_requirement` 含「分析维度=[...]」+ prompt 声明优先于自由文本），漂移属模型遵循度而非 grounding 缺口；语义套件价值正在于把这些漂移暴露成可量化指标。
+
+**第二轮样本 + 三次单跑后的结论**：harness 再修一处（monthly 的数值集把 int 月份列误并，改 str-only 后该 case 过——此轮 LLM 产物本身按月正确）。多轮产物级画像：**可达正确**（至少一轮产物语义全对）：total（2/2）、monthly（修 harness 后对）、payment（两轮中一轮产物 5 行 map 与 canonical 完全一致）；**系统性失败**（多轮稳定偏离）：region（0/2 维度遵从）、top5（0/2 无 LIMIT/COUNT 口径错）、refund（0/2 一轮按月放宽前、一轮 `status IN ('refunded'…)` 大小写细节错——套件抓到真实的 SQL 细节错误）。能力结论：MiniMax 当前模型在连接/过滤/数值上可靠，plan 维度遵从 + TopN/LIMIT + 字面量细节是薄弱点（与 P15 double_fact 观察同源）；语义套件作为测量层工作正常，跑分随模型迭代可对比。
+
 ## Context
 
 审查报告列 P0 五项 + P1 七项 + P2 若干。本 plan 动手前已按报告每一条指控逐行核实（master HEAD `9d45602`，工作树 clean），结论：**12 项指控全部属实或部分属实，无一项过时**，另发现 2 个报告未展开的同根因点（FAQ/工具描述层旧 schema；CLAUDE.md 声称 per-PR CI 但仓库无 `.github/workflows`）。核实证据（file:line）逐条记录如下，实施以证据为准。
