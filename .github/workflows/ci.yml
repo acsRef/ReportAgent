@@ -53,9 +53,14 @@ jobs:
           psql -h localhost -U ragent -d ragent -f backend/scripts/seed_business_p15prelude.sql
           psql -h localhost -U ragent -d ragent -f backend/scripts/setup_app_role.sql
       - name: Backend offline suite (incl. persistence on real PG)
+        # 失败详情进 step summary（check-runs API 可读），诊断用；exit code 保持真实
         run: |
-          cd backend
-          python -m pytest -q
+          set +e
+          python -m pytest -q --tb=short > /tmp/pytest.log 2>&1
+          code=$?
+          tail -60 /tmp/pytest.log >> "$GITHUB_STEP_SUMMARY"
+          echo "pytest exit=$code" >> "$GITHUB_STEP_SUMMARY"
+          exit $code
   frontend-gate:
     runs-on: ubuntu-latest
     steps:
