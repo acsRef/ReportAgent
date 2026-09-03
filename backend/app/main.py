@@ -494,9 +494,8 @@ async def login(request: LoginRequest):
 
 @app.post("/api/v1/auth/register")
 async def register(request: RegisterRequest):
-    from app.infra.auth.repository import verify_user, get_user_by_id
+    from app.infra.auth.repository import hash_password, verify_user, get_user_by_id
     from app.infra.db.postgres import get_pool
-    import hashlib
     pool = get_pool()
     async with pool.acquire() as conn:
         existing = await conn.fetchrow(
@@ -504,7 +503,7 @@ async def register(request: RegisterRequest):
         )
         if existing:
             raise HTTPException(status_code=409, detail="Username already exists")
-        pw_hash = hashlib.sha256(request.password.encode()).hexdigest()
+        pw_hash = hash_password(request.password)
         row = await conn.fetchrow(
             "INSERT INTO app.users (username, password_hash) VALUES ($1, $2) RETURNING id",
             request.username, pw_hash,
