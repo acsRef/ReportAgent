@@ -299,16 +299,35 @@ def test_execute_validated_skips_explain(monkeypatch):
 # docs/plans/2026-08-05-pg-role-least-privilege.md
 
 
-def test_analysis_dsn_falls_back_to_pg_dsn(monkeypatch):
-    """ANALYSIS_DSN 未设置 → 回退到 PG_DSN，向后兼容。"""
+def test_analysis_dsn_falls_back_to_pg_dsn_in_development(monkeypatch):
+    """Review-2 fail-closed：仅 development 允许省略 ANALYSIS_DSN 回退 PG_DSN。"""
     monkeypatch.delenv("ANALYSIS_DSN", raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://only-via-dsn@host/db")
+    monkeypatch.setenv("APP_ENV", "development")
     # 重新加载模块以触发常量重读
     import importlib
     import app.tools.sql_tools as sql_tools_mod
     importlib.reload(sql_tools_mod)
     assert sql_tools_mod._analysis_dsn() == "postgresql://only-via-dsn@host/db"
     importlib.reload(sql_tools_mod)  # 还原
+
+
+def test_analysis_dsn_required_outside_development(monkeypatch):
+    """Review-2 fail-closed：production / APP_ENV 未设时缺 ANALYSIS_DSN 必须
+    raise——不允许退回普通 DATABASE_URL 取消只读角色这层深度防御。"""
+    import pytest
+    import importlib
+    import app.tools.sql_tools as sql_tools_mod
+
+    monkeypatch.delenv("ANALYSIS_DSN", raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)  # 未设 = production（fail-closed）
+    monkeypatch.setenv("DATABASE_URL", "postgresql://ragent:super@host/db")
+    importlib.reload(sql_tools_mod)
+    try:
+        with pytest.raises(RuntimeError, match="ANALYSIS_DSN"):
+            sql_tools_mod._analysis_dsn()
+    finally:
+        importlib.reload(sql_tools_mod)  # 还原
 
 
 def test_analysis_dsn_overrides_when_set(monkeypatch):

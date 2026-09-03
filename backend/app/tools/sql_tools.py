@@ -19,10 +19,25 @@ PG_DSN = os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ra
 def _analysis_dsn() -> str:
     """A-7 后半段（ragent 降权）：分析路径专用 DSN。
 
-    走非超级用户执行 LLM 生成的 SELECT；未配置时回退到 `PG_DSN`（向后兼容）。
-    配置见 `backend/scripts/setup_app_role.sql` 与 `ANALYSIS_DSN` 环境变量。
+    LLM 生成的 SQL 必须走非超级用户 `ragent_readonly`（深度防御最后一环）：
+    check_sql_safety 即使漏判，DB 层权限也拒绝服务端函数/系统表/写操作。
+    Review-2 修正（fail-closed）：**ANALYSIS_DSN 是安全关键配置**——生产/未设
+    APP_ENV 时缺失直接 raise（不允许退回普通 DATABASE_URL 取消第二层防线）；
+    仅 `APP_ENV=development` 允许省略回退 PG_DSN（本地便捷，与 auth 启动闸
+    dev-escape 同哲学）。
     """
-    return os.getenv("ANALYSIS_DSN") or PG_DSN
+    dsn = os.getenv("ANALYSIS_DSN")
+    if dsn:
+        return dsn
+    from app.infra.auth.startup_guard import is_development
+
+    if is_development():
+        return PG_DSN
+    raise RuntimeError(
+        "ANALYSIS_DSN is required outside development: SQL 执行必须走只读角色 "
+        "ragent_readonly（backend/scripts/setup_app_role.sql）——安全关键配置缺失 "
+        "时系统 fail-closed，不退回普通 DATABASE_URL。"
+    )
 
 
 # 硬上限：单条 SQL 最多返回 5000 行；超出时通过 total_rows + truncated 字段告知 LLM。
@@ -101,6 +116,9 @@ DANGEROUS_KEYWORDS = [
 
 # A-1：危险函数黑名单——服务端文件读写 / 目录列举 / 大对象导入导出 / 进程操控 /
 # 配置篡改。这些函数即使是 SELECT 调用也有真实副作用（读服务器文件、杀其它会话）。
+# Review-2 增补：咨询锁（pg_advisory_*）、序列推进（nextval/setval）、异步通知
+# （pg_notify）——SELECT-only ≠ side-effect-free 的其余缺口；denylist 不是完整
+# 安全边界，最后一环永远是 ragent_readonly DB role（见 _analysis_dsn fail-closed）。
 # 精确名在小写集合里匹配；变体族（pg_sleep / pg_sleep_for / pg_sleep_until，
 # dblink / dblink_exec / dblink_connect…）走前缀匹配。
 _DANGEROUS_FUNCTIONS = {
@@ -108,6 +126,10 @@ _DANGEROUS_FUNCTIONS = {
     "pg_ls_dir", "pg_ls_logdir", "pg_ls_waldir", "pg_stat_file",
     "lo_import", "lo_export", "lo_unlink", "lo_put",
     "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf", "set_config",
+    # Review-2：咨询锁 / 序列 / 通知（SELECT 调用也有锁/状态副作用）
+    "pg_advisory_lock", "pg_advisory_xact_lock",
+    "pg_try_advisory_lock", "pg_try_advisory_xact_lock",
+    "nextval", "setval", "pg_notify",
 }
 _DANGEROUS_FUNCTION_PREFIXES = ("pg_sleep", "dblink")
 
