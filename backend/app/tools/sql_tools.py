@@ -6,6 +6,7 @@ from typing import Any
 
 import sqlglot
 from sqlglot import exp as sql_exp
+from sqlglot.tokens import TokenType
 import psycopg2
 import psycopg2.errors
 import psycopg2.extras
@@ -153,12 +154,57 @@ def _check_table_whitelist(parsed: sql_exp.Expression) -> tuple[bool, str]:
     return True, ""
 
 
+def _check_select_side_effects(parsed: sql_exp.Expression, sql: str) -> tuple[bool, str]:
+    """SELECT 顶层的隐性写/锁子句——AST 与词法黑名单的盲区（Final Hardening ②）。
+
+    - `SELECT ... INTO <表>`：把查询结果写入一张真实表。INTO 不在关键字黑名单里
+      （词法层 SET 拆词看不见），但落在 AST Select 的 `args["into"]`——显式拒绝。
+    - `FOR UPDATE / FOR NO KEY UPDATE / FOR KEY SHARE / FOR SHARE`：行锁子句。
+      sqlglot（默认与 postgres dialect）解析后把 lock 信息静默丢弃，AST 层不可见，
+      只能回到 token 层逐 token 匹配关键词序列。Token 级扫描跳过字符串字面量与
+      注释，`LIKE '%FOR UPDATE%'` 这类合法文本不会误伤（旧 regex 全文扫会命中）。
+    """
+    if isinstance(parsed, sql_exp.Select) and parsed.args.get("into") is not None:
+        target = parsed.args["into"]
+        # postgres dialect 下 into 是 exp.Into(this=Table(...))，剥一层拿目标表
+        if isinstance(target, sql_exp.Into):
+            target = target.this
+        name = ""
+        if isinstance(target, sql_exp.Table):
+            name = target.name or ""
+        elif isinstance(target, (list, tuple)) and target:
+            first = target[0]
+            name = first.name if isinstance(first, sql_exp.Table) else str(first)
+        return False, f"禁止 SELECT INTO（写入目标表 {name or '?'}），仅支持只读查询"
+    if not sql or not sql.strip():
+        return True, ""
+    try:
+        dialect = sqlglot.Dialect.get_or_raise("postgres")
+        tokens = [t for t in dialect.tokenize(sql) if t.token_type != TokenType.STRING]
+    except Exception:
+        tokens = []
+    for i, tok in enumerate(tokens):
+        if tok.text.upper() != "FOR":
+            continue
+        seq = [t.text.upper() for t in tokens[i + 1 : i + 4]]
+        if (
+            seq[:1] == ["UPDATE"]
+            or seq[:3] == ["NO", "KEY", "UPDATE"]
+            or seq[:1] == ["SHARE"]
+            or seq[:2] == ["KEY", "SHARE"]
+        ):
+            return False, "禁止行锁子句（FOR UPDATE / FOR NO KEY UPDATE / FOR KEY SHARE / FOR SHARE），仅支持只读查询"
+    return True, ""
+
+
 def check_sql_safety(sql: str) -> tuple[bool, str]:
     """SQL 安全检查：SELECT-only + 关键字黑名单 + AST 五重校验。
 
     校验链：(1) 顶层必须是 SELECT（允许 WITH…SELECT 的 CTE 写法）；
-    (2) DDL/DML 关键字黑名单；(3) sqlglot AST 顶层节点必须是 Select；
-    (4) 危险函数黑名单（A-1 闸 1）；(5) dim_/fact_ 表白名单（A-1 闸 2）。
+    (2) DDL/DML 关键字黑名单；(3) sqlglot AST（postgres dialect）顶层节点
+    必须是 Select；(4) SELECT 顶层隐性副作用——SELECT INTO / 行锁子句
+    （Final Hardening ②，AST 与词法层盲区）；(5) 危险函数黑名单（A-1 闸 1）；
+    (6) dim_/fact_ 表白名单（A-1 闸 2）。
     任一失败返回 (False, 原因)。
     """
     sql_upper = sql.strip().upper()
@@ -173,13 +219,19 @@ def check_sql_safety(sql: str) -> tuple[bool, str]:
         if kw in tokens:
             return False, f"禁止使用 {kw}，仅支持只读查询"
 
-    # AST parse — reject anything that isn't a SELECT statement
+    # AST parse（postgres dialect，与真实执行环境对齐）— reject anything
+    # that isn't a SELECT statement
     try:
-        parsed = sqlglot.parse_one(sql)
+        parsed = sqlglot.parse_one(sql, dialect="postgres")
         if not isinstance(parsed, sql_exp.Select):
             return False, "只允许 SELECT 查询语句"
     except Exception as e:
         return False, f"SQL 语法解析失败: {e}"
+
+    # SELECT 顶层的隐性副作用（INTO / 行锁）——先于危险函数/白名单独立成闸
+    ok, msg = _check_select_side_effects(parsed, sql)
+    if not ok:
+        return False, msg
 
     # A-1 两道 AST 闸：危险函数黑名单 + 表白名单（复用同一个 parsed 对象）
     ok, msg = _check_dangerous_functions(parsed)

@@ -107,6 +107,58 @@ def test_table_whitelist_message_names_the_table():
     assert "pg_authid" in msg
 
 
+# --- SELECT 隐性副作用（Final Hardening ②）：INTO / 行锁 -----------------------
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # SELECT INTO 会写真实表（词法层看不见 INTO，AST args["into"] 显式拒绝）
+        "SELECT * INTO fact_orders_archive FROM fact_orders",
+        "SELECT order_id, order_amount INTO archive FROM fact_orders WHERE order_date < '2024-03-01'",
+        "WITH src AS (SELECT * FROM fact_orders) SELECT * INTO snapshot FROM src",
+        # 行锁子句：sqlglot 解析会静默丢弃 lock，token 级扫描显式拒绝
+        "SELECT * FROM fact_orders FOR UPDATE",
+        "SELECT * FROM fact_orders FOR NO KEY UPDATE",
+        "SELECT * FROM fact_orders FOR KEY SHARE",
+        "SELECT * FROM fact_orders FOR SHARE",
+        # 藏在子查询 / JOIN 表里的行锁同样命中（全文 token 扫描）
+        "SELECT * FROM fact_orders WHERE order_id IN (SELECT order_id FROM fact_payments FOR UPDATE)",
+        "SELECT o.* FROM fact_orders o JOIN dim_store s ON o.store_id = s.store_id FOR KEY SHARE",
+    ],
+)
+def test_select_side_effect_rejected(sql):
+    from app.tools.sql_tools import check_sql_safety
+
+    safe, msg = check_sql_safety(sql)
+    assert safe is False
+    assert msg
+
+
+def test_select_into_message_names_target_table():
+    from app.tools.sql_tools import check_sql_safety
+
+    safe, msg = check_sql_safety("SELECT * INTO fact_orders_archive FROM fact_orders")
+    assert safe is False
+    assert "fact_orders_archive" in msg
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # 字符串字面量里的 FOR UPDATE / FOR SHARE 文本不是行锁（token 级扫描跳过 STRING）
+        "SELECT o.payment_method FROM fact_orders o WHERE o.payment_method LIKE '%FOR UPDATE%'",
+        "SELECT o.payment_method FROM fact_orders o WHERE o.payment_method LIKE 'FOR SHARE'",
+        "SELECT 'docs mention FOR KEY SHARE lock clauses' AS remark FROM fact_orders LIMIT 1",
+    ],
+)
+def test_lock_keywords_inside_string_literals_allowed(sql):
+    from app.tools.sql_tools import check_sql_safety
+
+    safe, msg = check_sql_safety(sql)
+    assert safe is True, f"字符串字面量里的行锁词被误拦: {msg}"
+    assert msg == ""
+
+
 # --- 正常 BI 查询不受影响 -------------------------------------------------------
 
 @pytest.mark.parametrize(
