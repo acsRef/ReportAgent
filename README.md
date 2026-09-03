@@ -64,8 +64,8 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 | 记忆 | 分层对话上下文（L1 原始 / L2 摘要覆盖重写 / L2.5 归档 / L3 结构化事实）+ pgvector 语义召回（语义主导，LFU/LRU 作排序因子 + 容量上限淘汰）；mem0 可选作 L3 抽取引擎（`MEM0_ENABLED`） |
 | LLM | OpenAI 兼容（MiniMax，可配置） |
 | Embedding | SiliconFlow API（pgvector 语义搜索，失败降级关键字匹配） |
-| 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型 6 维 4 事实；数据覆盖 2020–2024） |
-| 测试 | pytest（147 通过，含 persistence；e2e 需 `REPORTAGENT_E2E`）+ vitest（242 通过） |
+| 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型：2 事实 + 5 维度零售订单，见 `backend/scripts/seed_business_p15prelude.sql`；数据覆盖 2024） |
+| 测试 | 分层：离线 gate（`pytest` backend/tests，含真 PG persistence）+ Contract E2E（Playwright，mock LLM，per-PR CI）+ Live evaluation（`REPORTAGENT_E2E=1`，真实 LLM/MCP/PG，夜间/手动） |
 
 ## 环境要求
 
@@ -114,7 +114,10 @@ MEM0_ENABLED=false
 
 ```bash
 docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/init_pg.sql
-docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_pg.sql
+# 现役业务星型 seed（零售订单；会清理旧演示业务表，可重复执行）
+docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_business_p15prelude.sql
+# 分析只读角色（LLM SQL 执行路径的最小权限身份，ANALYSIS_DSN 用）
+docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/setup_app_role.sql
 ```
 
 ### 4. 安装依赖

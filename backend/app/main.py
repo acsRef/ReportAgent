@@ -635,7 +635,12 @@ async def _chat_requirement_analysis(
     graph = build_requirement_analysis_graph()
     config = {"configurable": {"thread_id": session_id}}
     # P15 e2e MCP-down seam：requirement 的 schema discovery（data_graph）也 honor。
-    _mcp_down = mcp_down.parse_header(req.headers.get("X-E2E-McpDown"))
+    # req 在真实 HTTP 路径由 FastAPI 注入恒非 None；直调单测（api 契约）传 None，
+    # seam 必须静默失活（补于 Final Hardening ⑮ 全量回归抓到的 P15 遗留回归）。
+    _mcp_down = (
+        mcp_down.parse_header(req.headers.get("X-E2E-McpDown"))
+        if req is not None else None
+    )
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         try:

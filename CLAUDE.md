@@ -251,7 +251,10 @@ docker run -d --name ragent-postgres \
   pgvector/pgvector:0.7.0-pg15
 
 docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/init_pg.sql
-docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_pg.sql
+# 现役业务星型 seed（零售订单：fact_orders/fact_payments + 5 dim，会清理旧演示表）
+docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_business_p15prelude.sql
+# 分析只读角色 ragent_readonly（ANALYSIS_DSN，深度防御最后一环）
+docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/setup_app_role.sql
 ```
 
 Start services in this order; the MCP server has no fixed port and the backend discovers it through MCP (local schema tools provide the fallback if MCP is down):

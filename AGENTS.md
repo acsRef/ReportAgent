@@ -26,7 +26,7 @@ User ←SSE→ React+Vite (:3000) → proxy /api → FastAPI+LangGraph (:8100)
                                          PostgreSQL (all data)
 ```
 
-**PostgreSQL schemas:** `public` (6 dim + 4 fact tables via `seed_pg.sql`, data 2020–2024), `app` (users, conversations, templates), `agent` (session, requirement_draft, report_version append-only), `memory` (query_template VECTOR(1536), semantic_entry), `observability` (trace spans, LLM calls).
+**PostgreSQL schemas:** `public` (零售订单星型模型 via `seed_business_p15prelude.sql`：fact_orders/fact_payments + dim_date/dim_store/dim_product/dim_customer/dim_promotion，数据 2024；旧 10 表演示库已退役), `app` (users, conversations, templates), `agent` (session, requirement_draft, report_version append-only), `memory` (query_template VECTOR(1536), semantic_entry), `observability` (trace spans, LLM calls).
 
 **Two graphs (v2 active path):** `requirement_analysis_graph` exposes ONLY schema tools (`search_tables`/`get_table_ddl`/`list_tables`) and produces a `RequirementCard`; `confirmed_execution_graph` starts with a `security_guard` entry node (injection check; `SecurityRejectedError` → SSE `SECURITY_REJECTED`), then gates (status=complete, no missing fields, assumptions resolved, owner check) → locks draft → schema → sql_agent (plan→generate→validate(EXPLAIN)→execute→evaluate→diagnose→build_output; P8 落地 Evaluate→Diagnose→Route 三段拆分 + DiagnosePolicy 纯确定性策略) → report_agent → persist_report (three-state persist: SUCCESS/EMPTY/FAILED all write a row). Legacy single graph (`parent_graph.py`, `mode=legacy`) kept for one compat cycle.
 
@@ -42,7 +42,8 @@ cd frontend && npm install
 docker run -d --name ragent-postgres -e POSTGRES_USER=ragent -e POSTGRES_PASSWORD=ragent \
   -e POSTGRES_DB=ragent -p 5432:5432 pgvector/pgvector:0.7.0-pg15
 docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/init_pg.sql
-docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_pg.sql
+docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_business_p15prelude.sql
+docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/setup_app_role.sql
 ```
 
 Key `.env` vars: `LLM_API_KEY` (falls back to `MINIMAX_API_KEY`), `LLM_MODEL`, `LLM_BASE_URL` (MiniMax), `SILICONFLOW_API_KEY` + `EMBEDDING_MODEL` (must match `EMBEDDING_DIM=1536`/`VECTOR(1536)`), `DATABASE_URL`, `JWT_SECRET`, `DEFAULT_USERNAME`/`DEFAULT_PASSWORD`, `APP_ENV` + `ALLOW_INSECURE_DEFAULT_AUTH=1` (dev escape hatch), `MEM0_ENABLED` (optional L3 extractor, default false). Auth startup gate is fail-closed: non-dev envs refuse to start with weak secret/password.
