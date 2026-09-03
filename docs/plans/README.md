@@ -26,6 +26,7 @@
 | Plan | 主题 | 备注 |
 |---|---|---|
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
+| [2026-09-03-final-hardening.md](2026-09-03-final-hardening.md) | Final Hardening（面试封版前收口，P0+P1 全收）：① schema 全链对齐（few-shot/FAQ/输出例/MCP 描述旧表清零 + 防漂移钉）②+⑥ SELECT INTO/行锁显式拒 + sqlglot dialect=postgres ③ Decimal 全链字符串化 ④ Argon2id（透明升级）⑤ 确定性 object_not_found→MCP→repair replay ⑦ execute_sql 内建 EXPLAIN gate ⑧ SQL 语义评估（canonical SQL 数值比对）⑨ 并发 confirm race ⑩ cross-user 隔离 ⑪ tool/schema 输出注入防线 ⑫ CORS 白名单 ⑬ 最小 GitHub Actions ⑭ 文档数字/setup/CI 声明对齐 ⑮ 最终回归封版 | 用户逐行 review（P14/P15+SQL+Reliability+Auth+Test 全景）12 项指控全数核实属实；P15 后不堆功能，收硬点后封版 |
 
 ## 已完成
 
