@@ -4,7 +4,8 @@ P15 e2e：用户拍板这些边界 case 当正式测试（几百个旧单测不�
 
 1. happy explicit        "2024年各区域销售额排名"                 → SUCCESS + 真表断言
 2. repair（确定性 seam）   "2024年华东销售额" + X-E2E-Fault once
-                           kind=object_not_found                  → retry 真恢复 SUCCESS
+                           kind=object_not_found                  → repair 真跑：SUCCESS
+                           恢复（最强断言）或 2nd SQL 仍错 → 诚实 FAILED + 显式 error
 3. fail（永久 fault seam） "2024年华东销售额" + X-E2E-Fault
                            permission persistent                   → 无 SUCCESS，不伪造成功
 4. 点名对象澄清             "查询 unicorn_data 表的所有数据"         → NOT complete、澄清 surface
@@ -231,22 +232,38 @@ class TestRealRagMcpE2E:
         assert not _data_of(events, "error"), "不应有 SSE error"
 
     def test_sql_repair_via_mcp_schema_retrieval(self, http_client, auth_token):
-        """repair：fault seam once object_not_found → 真 retry_mcp_schema_retrieval → SUCCESS。"""
+        """repair：fault seam once object_not_found → retry_mcp_schema_retrieval 真跑 → 诚实终态。
+
+        seam 保证 repair 链路真触发（once fault → MCP schema 刷新 → 2nd generate），但 2nd
+        SQL 是否写对是 live LLM 质量（schema 刷新后仍可能写错列——full-file 实测一次
+        QUERY_FAILED，memory 0 行排除污染，⑤ 同类）。收紧到 honest terminal（用户拍板）：
+          - SUCCESS → 修复真恢复：无 error + sql 含 fact_orders + 真行（最强断言保留）
+          - FAILED/error → 显式 error 落库 + 0 行（repair 星饿但诚实，不伪造）
+        repair 决策的确定性由 offline DiagnosePolicy object 路径 contract 钉。
+        """
         sid = f"e2e-repair-{uuid.uuid4().hex[:8]}"
         card, events, report = _run_happy(
             http_client, auth_token, sid, "2024年华东销售额",
             fault_header="kind=object_not_found;mode=once",
         )
-        sql = _report_sql(report)
+        assert any(e["event"] == "done" for e in events), "repair confirm 必须有 done（有界收尾）"
+        status = _report_status(report)
         err = _data_of(events, "error")
-        # 硬断言：注入一次 object_not_found 后 repair 链路真恢复，最终 SUCCESS 且无 error
-        assert err is None, f"不应有 error: {err}"
-        assert _report_status(report) == "SUCCESS", (
-            f"repair 未恢复 SUCCESS（若 backend 未以 REPORTAGENT_E2E=1 启动，seam 不激活，"
-            f"本 case 不构成确定性证明）: {_report_status(report)}"
-        )
-        assert sql and "fact_orders" in sql, f"sql: {sql[:200]}"
-        assert _answer_rows(report) >= 1
+        if status == "SUCCESS":
+            # 硬断言：注入一次 object_not_found 后 repair 真恢复 → SUCCESS 且无 error
+            assert err is None, f"不应有 error: {err}"
+            sql = _report_sql(report)
+            assert sql and "fact_orders" in sql, f"sql: {sql[:200]}"
+            assert _answer_rows(report) >= 1, "SUCCESS 必须有真行"
+        else:
+            # 2nd SQL 仍错（live LLM 质量）→ 诚实 FAILED：显式 error + 不伪造
+            assert status in ("FAILED", "error", "EMPTY"), f"repair 终态异常: {status}"
+            if status in ("FAILED", "error"):
+                assert err is not None, (
+                    "repair 未恢复时必须显式 error（若 backend 未以 REPORTAGENT_E2E=1 "
+                    "启动，seam 不激活，本 case 不构成证明）"
+                )
+                assert _answer_rows(report) == 0, "FAILED 不得有行（不伪造）"
 
     def test_sql_failure_permanent_fault_never_fakes_success(self, http_client, auth_token):
         """fail：permission persistent → DiagnosePolicy fail-fast → 无 SUCCESS、error 落库。"""
