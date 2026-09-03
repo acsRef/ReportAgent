@@ -38,6 +38,26 @@ def _run(coro):
     return asyncio.run(_body())
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _ensure_user_id_1_exists():
+    """CI 全新库修复：本文件多处硬编码 user_id=1（repo 调用以 id 引用用户），
+    本地库有历史 admin id=1 掩盖；全新库无 users 行 → FK violation。
+    显式插 id=1（ON CONFLICT 幂等）；模块级跑一次。"""
+    from app.infra.auth.repository import hash_password
+    from app.infra.db.postgres import get_pool
+
+    async def body():
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO app.users (id, username, password_hash) "
+                "VALUES (1, 'ci_id1_fixture', $1) ON CONFLICT (id) DO NOTHING",
+                hash_password("pw"),
+            )
+
+    _run(body())
+
+
 # ---------------------------------------------------------------------------
 # Session manager user_id typing
 # ---------------------------------------------------------------------------

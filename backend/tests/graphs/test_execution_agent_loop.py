@@ -61,12 +61,22 @@ def test_success_goes_to_build_output():
     assert _route_after_diagnose(state) == "build_output"
 
 
-def test_replan_does_not_reset_sql_generation_counter():
+def test_replan_does_not_reset_sql_generation_counter(monkeypatch):
     """F1 回归钉：`_plan` 入口必须保留 `_diagnose` 写入的 retry_counters，
     不能把 sql_generation 清零；否则单次分析最坏 4 次 SQL retry，与
     plan §D3 MAX_SQL_REPAIR_RETRIES=2 契约冲突。
     """
+    from app.agent import sql_graph as sql_graph_module
     from app.agent.sql_graph import _plan
+
+    monkeypatch.setattr(
+        sql_graph_module, "call_llm",
+        lambda prompt, **kw: (
+            '{"target_metric":"x","dimensions":[],"filters":[],"aggregation":"sum",'
+            '"time_range":null,"clarify_decision":{"action":"run_direct",'
+            '"missing_dimensions":[],"confidence":0.9}}'
+        ),
+    )
 
     state: dict = {
         "schema_context": None,

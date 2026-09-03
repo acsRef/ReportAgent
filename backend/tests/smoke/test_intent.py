@@ -25,8 +25,15 @@ def test_report_when_dict_hit():
     assert classify_intent("各区域销售额", dict_hit=True).kind == IntentKind.REPORT
 
 
-def test_report_weak_push_word_not_interface():
+def test_report_weak_push_word_not_interface(monkeypatch):
     # "推送"在报表语境常见（订单推送的数据做报表），不应硬判 INTERFACE
+    from app.agent import intent
+    # CI 无 LLM key 修复：classify 的关键词/字典均未命中时走 LLM 兜底，
+    # 本地 .env 有 key 时真调掩盖——显式 stub，只钉分类语义
+    monkeypatch.setattr(
+        intent, "call_llm",
+        lambda prompt, **kw: '{"kind": "report", "confidence": 0.9, "reason": "stub"}',
+    )
     assert classify_intent("统计订单推送的 amt 总额").kind != IntentKind.INTERFACE
 
 

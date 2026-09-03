@@ -46,7 +46,9 @@ export default async function globalSetup(): Promise<void> {
     )
   }
   if (!(await tcpReachable(VITE_PORT))) {
-    const vite = spawn('npm', ['run', 'dev'], {
+    // CI 修复：显式 --host 127.0.0.1——Ubuntu runner 上 vite 默认可能绑 ::1，
+    // 与 probe 的 127.0.0.1 不一致导致「dev server 启动超时」。
+    const vite = spawn('npm', ['run', 'dev', '--', '--host', '127.0.0.1'], {
       cwd: resolve(repoRoot, 'frontend'),
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',

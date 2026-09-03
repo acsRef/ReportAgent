@@ -63,6 +63,15 @@ def test_requirement_analysis_graph_does_not_call_sql_or_report_tools(
     import app.agent.requirement_parser as parser_mod
     monkeypatch.setattr(parser_mod, "call_llm", lambda *a, **k: '{"summary":"x","target_metrics":[],"time_range":null,"scope":[],"dimensions":[],"analysis_methods":[],"confidence":0.9,"missing_fields":[],"assumptions":[]}')
 
+    # CI 无 LLM key 修复：intent classify 的 call_llm 此前漏 stub——本地 .env
+    # 有 key 时真调 LLM 掩盖，全新 runner 无 key → ChatOpenAI 构造即抛。
+    # classify 只需要非 INTERFACE 分类即不触发工具链（结构断言前提）。
+    import app.agent.intent as intent_mod
+    monkeypatch.setattr(
+        intent_mod, "call_llm",
+        lambda *a, **k: '{"kind": "report", "confidence": 0.5, "reason": "stub"}',
+    )
+
     # Stub the data_agent's MCP path so no real network call happens.
     from app.agent import data_graph as data_graph_mod
     from app.models.contracts import SchemaContext, TableSchema

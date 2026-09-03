@@ -147,6 +147,9 @@ def test_get_chat_llm_in_mock_mode_raises_not_implemented(monkeypatch):
 def test_get_chat_llm_in_real_mode_still_constructs(monkeypatch):
     """LLM_PROVIDER 非 mock → get_chat_llm 仍返回 ChatOpenAI 实例（real path 不被破坏）。"""
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    # CI 无 LLM key 修复：ChatOpenAI 构造要求 api_key 存在（init 不联网、不校验
+    # 格式）——本地 .env 有真 key 掩盖，全新 runner 需显式假 key 仅验证构造路径。
+    monkeypatch.setenv("LLM_API_KEY", "sk-ci-fake")
 
     from langchain_openai import ChatOpenAI
 
