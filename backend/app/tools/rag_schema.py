@@ -25,9 +25,10 @@ import re
 
 import httpx
 
+from app.reliability.mcp_down import active as e2e_mcp_down_active
 from app.tools.interface_dict_tools import _base, _dict_kb_id, _login_token
 from app.tools.mcp_client import _fallback_allowed, _validate_matches_contract, get_rag_mcp_client
-from app.tools.mcp_errors import MCPBoundaryError
+from app.tools.mcp_errors import MCPBoundaryError, MCPErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,12 @@ def _retrieve_dict_via_mcp(query: str, top_k: int) -> list[dict]:
     Raises:
         MCPBoundaryError: 失败时显式分类（MCP_TIMEOUT / MCP_UNAVAILABLE / MCP_INVALID_RESPONSE）
     """
+    # P15 e2e MCP-down seam（fail-closed，仅 REPORTAGENT_E2E=1 时可能激活）：与真实
+    # MCP 中断同一错误分类，让上层既有 graceful 降级（→[]/None）原样跑一遍。
+    if e2e_mcp_down_active():
+        raise MCPBoundaryError(
+            MCPErrorCode.MCP_UNAVAILABLE, "E2E seam: schema MCP unavailable (injected)"
+        )
     result = get_rag_mcp_client().call_tool(
         "search_dictionary", {"query": query, "top_k": top_k}
     )

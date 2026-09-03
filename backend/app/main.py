@@ -69,6 +69,7 @@ from app.infra.db import report_version_repository
 from app.reliability.errors import classify_exception, normalize_kind, user_code, user_message, user_recoverable
 from app.reliability.timeout import MAX_TASK_DURATION, run_with_timeout
 from app.reliability import fault_inject
+from app.reliability import mcp_down
 
 VECTOR_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
@@ -611,6 +612,8 @@ async def _chat_requirement_analysis(
                user_query=request.user_query)
     graph = build_requirement_analysis_graph()
     config = {"configurable": {"thread_id": session_id}}
+    # P15 e2e MCP-down seam：requirement 的 schema discovery（data_graph）也 honor。
+    _mcp_down = mcp_down.parse_header(req.headers.get("X-E2E-McpDown"))
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         try:
@@ -633,7 +636,8 @@ async def _chat_requirement_analysis(
                 "event": "phase",
                 "data": json.dumps({"phase": "parsing"}, ensure_ascii=False),
             }
-            result = await graph.ainvoke(initial, config)
+            with mcp_down.scoped(_mcp_down):
+                result = await graph.ainvoke(initial, config)
 
             if result.get("security_level") == "HIGH":
                 yield {
@@ -728,10 +732,12 @@ async def _chat_confirmed_execution(
         adjustment_text=request.user_query,
         fault_override=fault_inject.parse_header(req.headers.get("X-E2E-Fault")),
     )
-    return _start_confirmed_stream(
-        session_id, user["id"], "adjust", graph, initial,
-        failed_action="adjust", phase_label="adjusting",
-    )
+    # P15 e2e MCP-down seam（同 confirm_session）：adjust 后台任务继承 request context。
+    with mcp_down.scoped(mcp_down.parse_header(req.headers.get("X-E2E-McpDown"))):
+        return _start_confirmed_stream(
+            session_id, user["id"], "adjust", graph, initial,
+            failed_action="adjust", phase_label="adjusting",
+        )
 
 
 # A-6：chosen_tool 后端白名单——与 IntentOption.tool 的 5 个 Literal 值一致。
@@ -1106,10 +1112,13 @@ async def confirm_session(
         session_id, user["id"], user_query="",
         fault_override=fault_inject.parse_header(req.headers.get("X-E2E-Fault")),
     )
-    return _start_confirmed_stream(
-        session_id, user["id"], "confirm", graph, initial,
-        failed_action="confirm", phase_label="generating",
-    )
+    # P15 e2e MCP-down seam：scoped 把 header 写进 request context，confirm 后台任务
+    # 由 asyncio.create_task 派生时继承 → 全链 schema 检索同批视为 MCP down。
+    with mcp_down.scoped(mcp_down.parse_header(req.headers.get("X-E2E-McpDown"))):
+        return _start_confirmed_stream(
+            session_id, user["id"], "confirm", graph, initial,
+            failed_action="confirm", phase_label="generating",
+        )
 
 
 @app.post("/api/v1/sessions/{session_id}/retry")
