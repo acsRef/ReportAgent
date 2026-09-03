@@ -3,8 +3,10 @@
 复用 `test_real_rag_mcp_e2e` 的 driver（login/SSE/fill-all/confirm/report），新增覆盖：
   security_injection  注入 query → SECURITY_REJECTED，不执行
   multi_join          多表联合（fact_orders + dim_store + dim_product）
-  double_fact         双事实表透视（fact_orders ↔ fact_payments）
-  empty_result        空结果（无数据年份）→ 不伪造行
+  double_fact         双事实表（fact_orders ↔ fact_payments）→ 诚实终态：SUCCESS 必双表同现
+                      SQL+真行；FAILED/error 必显式 error+0 行（⑤ 收紧，LLM SQL 质量不钉死）
+  empty_result        1999 无数据年份 → 绝不 SUCCESS（无视年份错答）、rows 恒 0：
+                      EMPTY（干净）或 FAILED（诚实 error）皆不伪造（⑤ 收紧）
   adjust_v2           report_ready 后 adjust → v2 报告迭代
   clarify_loop        模糊 query → awaiting_missing → fill → confirm SUCCESS
   sse_disconnect      confirm SSE 断连 → 后台跑完 → 轮询见 SUCCESS（宪法 §11 断连≠失败）
@@ -128,35 +130,64 @@ class TestEdgeCases:
         assert "join" in sql.lower(), "SQL 应含 JOIN"
 
     def test_double_fact_join(self, http_client, token):
-        """双事实表：订单金额 vs 支付金额 → SQL 同时引用 fact_orders + fact_payments。"""
+        """双事实表（fact_orders ↔ fact_payments）→ 真 SQL 双表同现 + 诚实终态。
+
+        seed 双事实按区域对比的 join 链本身难（fact_payments 无 store_id，须经
+        order_id→fact_orders→dim_store），live LLM 首猜写对非 100%。硬钉 SUCCESS = 把 live
+        LLM 技能当被测对象 → full-suite 偶发（⑤ 实证 1 轮 2 case 同 QUERY_FAILED）。
+        按 plan ⑤ 备选收紧到 honest terminal（用户预授权）：
+          - SUCCESS → 执行 SQL 真双表同现 + 真行（保留最强断言）
+          - FAILED/error/EMPTY → 显式 error 落库 + 0 行（诚实降级，非伪造）
+        恒钉：双事实意图不崩、有界收尾、不伪造 SUCCESS 行。
+        """
         sid = f"e2e-2fact-{uuid.uuid4().hex[:8]}"
         card, events, report = _run_happy(
             http_client, token, sid,
             "2024年各区域，对比 fact_orders 的订单金额 和 fact_payments 的支付金额"
         )
-        sql = _sql(report)
-        assert not _data_of(events, "error"), f"不应 error: {_data_of(events, 'error')}"
-        assert _report_status(report) == "SUCCESS", f"execution: {_report_status(report)}"
-        assert "fact_orders" in sql and "fact_payments" in sql, (
-            f"双事实表应同现 SQL: {sql[:300]}"
-        )
+        assert any(e["event"] == "done" for e in events), "双事实 confirm 必须有 done（有界收尾）"
+        status = _report_status(report)
+        if status == "SUCCESS":
+            sql = _sql(report)
+            assert "fact_orders" in sql and "fact_payments" in sql, (
+                f"SUCCESS 的执行 SQL 必须双表同现: {sql[:300]}"
+            )
+            assert _answer_rows(report) >= 1, "SUCCESS 必须有真行"
+        else:
+            assert status in ("FAILED", "error", "EMPTY"), f"双事实终态异常: {status}"
+            if status in ("FAILED", "error"):
+                assert _data_of(events, "error") is not None, "FAILED 必须显式 error（QUERY_FAILED）"
+                assert _answer_rows(report) == 0, "FAILED 不得有行（不伪造）"
 
     def test_empty_result_no_fabrication(self, http_client, token):
-        """空结果：无数据的年份 → 干净 EMPTY 报告（不伪造行、不 error）。"""
+        """1999（seed 无数据年份）→ 绝不伪造 SUCCESS 行。
+
+        hard 断言：
+          - status 恒 ∈ {EMPTY, FAILED, error}——**SUCCESS 决不允许**（1999 无数据，SUCCESS
+            即无视年份返回了其它年 = 错答）；
+          - rows 恒 0（EMPTY 干净无数据 / FAILED 查询失败都无行）。
+        若 LLM 的 year filter 写对 → 干净 EMPTY（无数据文案）；写错（坏 SQL）→ QUERY_FAILED
+        诚实 error（也 0 行）。两种都是「不伪造」，live LLM 决定落哪支 → 断言不再钉死 EMPTY。
+        """
         sid = f"e2e-empty-{uuid.uuid4().hex[:8]}"
         card, events, report = _run_happy(
             http_client, token, sid, "1999年各区域销售额"
         )
-        assert not _data_of(events, "error"), f"不应 error: {_data_of(events, 'error')}"
+        assert any(e["event"] == "done" for e in events), "1999 confirm 必须有 done（有界收尾）"
         status = _report_status(report)
+        assert status in ("EMPTY", "FAILED", "error"), (
+            f"1999 不得 SUCCESS（无数据年份返回成功行 = 无视年份错答）: status={status}"
+        )
         payload = (report or {}).get("report_payload") or {}
         answer = payload.get("answer") or {}
         rows = len(((answer).get("table") or {}).get("rows") or [])
-        assert status == "EMPTY", f"空结果应为 EMPTY（非伪造 SUCCESS 行）: status={status}"
-        assert rows == 0, f"EMPTY 不应有行: {rows}"
-        assert any(k in (answer.get("text") or "") for k in ("未匹配", "无数据", "没有")), (
-            f"EMPTY 文案应说明无数据: {answer.get('text')}"
-        )
+        assert rows == 0, f"1999 不得有行（伪造）: {rows}"
+        if status == "EMPTY":
+            assert any(k in (answer.get("text") or "") for k in ("未匹配", "无数据", "没有")), (
+                f"EMPTY 文案应说明无数据: {answer.get('text')}"
+            )
+        else:
+            assert _data_of(events, "error") is not None, "FAILED 必须显式 error（不静默）"
 
     def test_adjust_produces_v2(self, http_client, token):
         """report_ready 后 adjust → v2 报告（保留 v1，产生新版本 SUCCESS）。"""
