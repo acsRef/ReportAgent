@@ -1,7 +1,24 @@
 # 2026-09-03 Final Hardening（P0+P1 收口，面试封版前）
 
-> 状态: 进行中
+> 状态: 已完成
 > 依据：用户逐行代码审查报告（P14/P15+SQL Agent+Reliability+Auth+Test 体系全景），结论「不再堆新功能，做最后一轮 correctness/security/test-confidence hardening 后封版」。用户拍板：**P0+P1 全收 + Decimal 全链字符串化 + 加最小 GitHub Actions**。
+
+## 落地记录（2026-09-03，master 直推 15 commit）
+
+commit 链：`bb2b197` plan → `abfedb2` ① → `958bff0` ②⑥ → `e92a7e4` ③ → `c0da85a` ④ → `7a6fe22` ⑦ → `87b717d` ⑤ → `d772988` ⑨ → `8c8a862`+amend `d1e6999` ⑫ → `13dddd3` ⑩ → `40c973b` ⑪ → `8a61c73` ⑧ → `e4c4933` ⑬ → `ed4c63d`（⑮ seam 回归修复 + ⑭ docs）→ `1684598`（e2e 适配 06 + per-PR 面排除 05 + artifacts ignore）。
+
+最终数字：**backend 1116 passed / 1 skipped**（含真 PG persistence 与 role 最小权限）；frontend vitest **301 passed** + tsc/build 干净；Playwright Contract **9/10 绿**（05-failed-result 为 P13 记录在案已知红：FAILED 版本落库正常、前端 ReportPaper error band 时序未修——per-PR 面已显式排除并注释）；评估离线块与 live 语义套件就位（⑧ REPORTAGENT_E2E 手动门）。
+
+关键发现（写进面试/文档的故事点）：
+- **P15 遗留回归（⑮ 全量回归抓到）**：`_chat_requirement_analysis` 的 MCP-down seam 对 req=None（直调单测）无条件解引用——P15 收口后从未跑过含 api 的全量，751 口径不含 api 故未暴露。补 null 守卫静默失活。
+- **端口泄漏致 Contract 全红假象**：spec 后端 bind :8100 失败时页面实际在跟孤儿后端交互，10 specs 全挂是环境污染不是代码回归；清端口后 01→10 逐绿（教训：跑 Contract 前先查 8100/3000）。
+- **本地 dev 库此前是混合 schema**（P15 prelude 只建新表没清旧表）——旧 few-shot 的危害是「真能选中还在库里的旧表」，不只 prompt 不一致。canonical seed 文件现负责清旧表。
+- ⑦ execute_sql 内建 EXPLAIN 自证门后，图内路径走 `_execute_validated` 不重复 EXPLAIN（monkeypatch 面不变：仍 patch `sql_graph.execute_sql`）。
+- ⑤ replay 首跑暴露两个 seam 细节：`get_table_ddl` 是 langchain @tool（要 `.invoke` 替身）；MockLLMAdapter 必须**单例**（每调用 new 会让 kind seq 永远卡 1）。
+- Decimal 全链后 insight/group 等本地计算工具若裸 isinstance 判数值会把金额列当非数值——`app/utils/numbers.py` 收敛；KPI 数值层 tolerance 语义明确（1e-9 相对容差，不承诺 1e17 量级的末位检测——那是 float 语义本来就给不了的）。
+- ⑩ cross-user 测试确认 conversation/session/memory 读侧在 SQL 层即双 scoping（B 的召回天然为空），DB 行归属与用户计数互不渗透。
+
+live 未跑项（留手动门，结构与 README/计划同步就位）：⑧ 语义评估首跑跑分、真 LLM repair/fail seam 冒烟、CI workflow 首次绿（仓库推 GitHub 后触发）。
 
 ## Context
 
