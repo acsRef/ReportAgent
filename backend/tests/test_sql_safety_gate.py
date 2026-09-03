@@ -44,6 +44,14 @@ pytestmark = pytest.mark.smoke
         "SELECT pg_cancel_backend(42)",
         "SELECT pg_reload_conf()",
         "SELECT set_config('log_statement', 'all', false)",
+        # Review-2：咨询锁 / 序列推进 / 异步通知（SELECT 调用同样有副作用）
+        "SELECT pg_advisory_lock(42)",
+        "SELECT pg_advisory_xact_lock(42)",
+        "SELECT pg_try_advisory_lock(42)",
+        "SELECT pg_try_advisory_xact_lock(42)",
+        "SELECT nextval('seq_x')",
+        "SELECT setval('seq_x', 100)",
+        "SELECT pg_notify('channel', 'payload')",
         # 危险函数藏在 JOIN 后的子查询里也要命中
         "SELECT * FROM fact_sales WHERE amount > (SELECT pg_read_file('/etc/passwd'))",
     ],
