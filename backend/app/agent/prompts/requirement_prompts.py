@@ -24,7 +24,7 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "\n\n字段释义规则："
         "\n- 「数据字典参考」中给出释义的字段，直接采用其含义，不要再生成对应假设"
         "\n- **关键**：data_source_type=stream 的字段（接口/长连接/实时推送）**不在任何 "
-        "fact_* 事实表里**——严禁生成「该字段可能存在于 fact_sales.total_amount 这类事实表」"
+        "fact_* 事实表里**——严禁生成「该字段可能存在于 fact_orders.order_amount 这类事实表」"
         "这种假设！必须生成一个 data_source assumption："
         "\n  key 固定为 \"data_source:<接口名>\"，text 写「该字段来自实时流接口，未在当前分析"
         "数据库中；如需聚合查询需先接入数据通道」，"
@@ -44,7 +44,7 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "\n\n维度判断规则："
         "\n- time_range: 是否包含明确的时间范围或可推断的相对时间词（本月/上月/今年/最近30天 等）"
         "\n- scope: 是否包含明确的区域/产品/客户范围；可缺省（默认 ALL）"
-        "\n- metric: 是否包含明确指标（销售额/订单数/退货率 等）"
+        "\n- metric: 是否包含明确指标（销售额/订单数/退款率 等）"
         "\n- granularity: 日/周/月/季度；不指定时默认月"
         "\n- comparison: 是否要对比（同比/环比/指定基线）；不需要则 none"
     ),

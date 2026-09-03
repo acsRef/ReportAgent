@@ -32,31 +32,31 @@ def _mcp_matches():
         {
             "chunk_id": "c1",
             "document_id": "d1",
-            "title": "区域退货率",
-            "text": "# 退货率\n示例 SQL:\nSELECT ...\n要点: 退货率 = 退货金额/销售额",
+            "title": "区域退款率",
+            "text": "# 退款率\n示例 SQL:\nSELECT ...\n要点: 退款率 = REFUNDED 支付金额占比",
             "score": 0.8,
         }
     ]
 
 
 def _local_matches():
-    return faq_tools._search_faq_rows("退货率", top_k=3)
+    return faq_tools._search_faq_rows("退款率", top_k=3)
 
 
 # --- faq_tools.search_faq 主从切换（Task 2 后：统一 client.call_tool）---
 
 
 def test_mcp_primary_used_when_available(monkeypatch):
-    """MCP 成功 → 走 MCP 路径，不落本地（本地命中以「各区域退货率」开头，MCP 是「区域退货率」）。"""
+    """MCP 成功 → 走 MCP 路径，不落本地（本地命中以「区域退款率」开头，MCP 同题面）。"""
     fake = MagicMock()
     fake.call_tool.return_value = {"matches": _mcp_matches()}
     monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
 
-    raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+    raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
     parsed = json.loads(raw)
-    assert parsed["matches"] and parsed["matches"][0]["question"] == "区域退货率"
+    assert parsed["matches"] and parsed["matches"][0]["question"] == "区域退款率"
     fake.call_tool.assert_called_once_with(
-        "search_faq", {"query": "退货率", "top_k": 3}
+        "search_faq", {"query": "退款率", "top_k": 3}
     )
 
 
@@ -72,7 +72,7 @@ def test_mcp_error_falls_back_to_local(monkeypatch):
     monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
     monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-    raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+    raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
     parsed = json.loads(raw)
     assert parsed["matches"], "MCP 失败应降级本地并返回主题内容"
     # P2 Tool Contract：{question, text, score}
@@ -88,10 +88,10 @@ def test_mcp_not_configured_falls_back_to_local(monkeypatch):
     monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
     monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-    raw = faq_tools.search_faq.invoke({"query": "毛利率", "top_k": 3})
+    raw = faq_tools.search_faq.invoke({"query": "月度销售趋势", "top_k": 3})
     parsed = json.loads(raw)
     assert parsed["matches"]
-    assert "毛利率" in parsed["matches"][0]["question"]
+    assert "月度销售趋势" in parsed["matches"][0]["question"]
 
 
 def test_mcp_empty_returns_empty_legitimate_result(monkeypatch):
@@ -105,7 +105,7 @@ def test_mcp_empty_returns_empty_legitimate_result(monkeypatch):
     monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
     monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-    raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+    raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
     parsed = json.loads(raw)
     assert parsed["matches"] == [], "MCP 空命中是合法结果，不应触发本地 seed fallback"
 
@@ -119,7 +119,7 @@ def test_mcp_unavailable_flag_locked_returns_error_json(monkeypatch):
     monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
     monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: False)
 
-    raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+    raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
     parsed = json.loads(raw)
     assert "error" in parsed
     assert "MCP_UNAVAILABLE" in parsed["error"]

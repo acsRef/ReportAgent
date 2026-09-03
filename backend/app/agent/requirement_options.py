@@ -6,7 +6,7 @@ controlled option list. The frontend then renders the structured
 options as a form (no free-form text from the LLM reaches the user).
 
 The options are intentionally coarse (4-6 entries per dimension) and
-match the canonical business vocabulary used in `backend/seed_pg.sql`.
+match the canonical business vocabulary used in `backend/scripts/seed_business_p15prelude.sql`.
 """
 from __future__ import annotations
 
@@ -38,17 +38,17 @@ def time_options(current_date: datetime | None = None) -> list[RequirementOption
 # --- Scope (region) options -------------------------------------------------
 
 def scope_options() -> list[RequirementOption]:
-    """Region options pulled from the dim_region table vocabulary. Static for
-    now; can be extended to query dim_region when a database session is
-    available.
+    """Region options pulled from the dim_store.region table vocabulary (6 大区，
+    现役零售 schema 无东北)。Static for now; can be extended to query dim_store
+    when a database session is available.
     """
     return [
         RequirementOption(label="华东", value="华东"),
         RequirementOption(label="华北", value="华北"),
         RequirementOption(label="华南", value="华南"),
+        RequirementOption(label="华中", value="华中"),
         RequirementOption(label="西南", value="西南"),
         RequirementOption(label="西北", value="西北"),
-        RequirementOption(label="东北", value="东北"),
         RequirementOption(label="全部区域", value="ALL"),
     ]
 
@@ -63,8 +63,7 @@ def metric_options() -> list[RequirementOption]:
         RequirementOption(label="销售额", value="销售额"),
         RequirementOption(label="销售量", value="销售量"),
         RequirementOption(label="订单数", value="订单数"),
-        RequirementOption(label="毛利率", value="毛利率"),
-        RequirementOption(label="退货率", value="退货率"),
+        RequirementOption(label="退款率", value="退款率"),
         RequirementOption(label="客户数", value="客户数"),
     ]
 

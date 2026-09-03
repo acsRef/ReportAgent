@@ -23,22 +23,22 @@ async def handle_list_tools() -> list[Tool]:
             description=(
                 "根据中文业务关键词语义搜索数据库表，返回最相关的表名、字段结构、DDL 和匹配分。\n"
                 "\n"
-                "用途：不知道数据在哪个表时用来「找表」。用户问题里提到了销售额、退货率、库存、考勤等业务概念时优先用这个。\n"
+                "用途：不知道数据在哪个表时用来「找表」。用户问题里提到了销售额、退款、趋势等业务概念时优先用这个。\n"
                 "\n"
                 "输入：\n"
                 "  query（必填）— 中文自然语言描述，如 '2024年各区域销售额'\n"
                 "  top_k（可选，默认 3）— 返回前 N 个最相关的表\n"
                 "\n"
                 "输出：JSON 数组，每项包含：\n"
-                "  table_name（表名，如 fact_sales）\n"
+                "  table_name（表名，如 fact_orders）\n"
                 "  description（中文业务描述）\n"
                 "  columns（字段列表 [{name, type}]）\n"
                 "  ddl（完整建表语句）\n"
                 "  score（匹配分，越高越相关）\n"
                 "\n"
                 "示例：\n"
-                "  search_tables('退货原因分析') → 返回 fact_returns（退货记录表）\n"
-                "  search_tables('每个月的销售趋势') → 返回 fact_sales + dim_date\n"
+                "  search_tables('2024年华东各门店销售额') → 返回 fact_orders + dim_store\n"
+                "  search_tables('区域退款率') → 返回 fact_payments + fact_orders\n"
                 "\n"
                 "不要用来：\n"
                 "  - 已经知道表名、只需要看字段结构时 → 用 get_table_ddl\n"
@@ -52,7 +52,7 @@ async def handle_list_tools() -> list[Tool]:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "中文自然语言查询，描述你要找的数据内容，如 '销售额趋势'、'退货原因分析'、'库存情况'",
+                        "description": "中文自然语言查询，描述你要找的数据内容，如 '销售额趋势'、'区域退款率'、'门店销售对比'",
                     },
                     "top_k": {
                         "type": "integer",
@@ -72,13 +72,13 @@ async def handle_list_tools() -> list[Tool]:
                 "SQL Agent 在生成 SQL 前用这个工具确认字段存在性。\n"
                 "\n"
                 "输入：\n"
-                "  table_name（必填）— 精确表名（英文下划线格式），如 'fact_sales'、'dim_product'。\n"
+                "  table_name（必填）— 精确表名（英文下划线格式），如 'fact_orders'、'dim_product'。\n"
                 "\n"
                 "输出：CREATE TABLE 文本，包含所有字段名和类型。\n"
                 "\n"
                 "示例：\n"
-                "  get_table_ddl('fact_sales') → 返回含 sale_id、total_amount、profit 等字段的建表语句\n"
-                "  get_table_ddl('dim_region') → 返回含 region_name、province、city、tier 的建表语句\n"
+                "  get_table_ddl('fact_orders') → 返回含 order_id、order_amount、payment_method 等字段的建表语句\n"
+                "  get_table_ddl('dim_store') → 返回含 region、city、store_type 的建表语句\n"
                 "\n"
                 "不要用来：\n"
                 "  - 不知道表名时 → 先用 search_tables 找表\n"
@@ -93,7 +93,7 @@ async def handle_list_tools() -> list[Tool]:
                 "properties": {
                     "table_name": {
                         "type": "string",
-                        "description": "精确表名（英文下划线格式），如 'fact_sales'、'dim_product'、'dim_region'",
+                        "description": "精确表名（英文下划线格式），如 'fact_orders'、'dim_product'、'dim_store'",
                     },
                 },
                 "required": ["table_name"],
@@ -104,11 +104,11 @@ async def handle_list_tools() -> list[Tool]:
             description=(
                 "根据中文业务关键词检索历史 FAQ 知识库，返回最相关的常见问题、示例 SQL 和业务口径要点。\n"
                 "\n"
-                "用途：写 SQL 前查「这类问题以前怎么算」——业务口径（毛利率、退货率、出勤率、库存周转等）"
+                "用途：写 SQL 前查「这类问题以前怎么算」——业务口径（销售额口径、退款率、销售占比、月度趋势等）"
                 "和常见分组/排序模板都在这。不知道指标怎么算时先查这里。\n"
                 "\n"
                 "输入：\n"
-                "  query（必填）— 中文自然语言描述，如 '区域退货率'、'月度销售趋势'\n"
+                "  query（必填）— 中文自然语言描述，如 '区域退款率'、'月度销售趋势'\n"
                 "  top_k（可选，默认 3）— 返回前 N 个案例\n"
                 "\n"
                 "输出：JSON 数组，每项包含：\n"
@@ -119,8 +119,8 @@ async def handle_list_tools() -> list[Tool]:
                 "  score（匹配分，越高越相关）\n"
                 "\n"
                 "示例：\n"
-                "  search_faq('退货率') → 返回退货率口径（退货金额/销售额，经 sale_id 关联）\n"
-                "  search_faq('毛利率') → 返回毛利率口径（SUM(profit)/SUM(total_amount)）\n"
+                "  search_faq('区域退款率') → 返回退款率口径（REFUNDED 支付金额占比，经 order_id 关联）\n"
+                "  search_faq('月度销售趋势') → 返回 date_trunc('month', order_date) 分组模板\n"
                 "\n"
                 "不要用来：\n"
                 "  - 找数据在哪个表 → 用 search_tables\n"
@@ -133,7 +133,7 @@ async def handle_list_tools() -> list[Tool]:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "中文自然语言查询，描述你要算的指标/口径，如 '退货率'、'各区域销售额排名'",
+                        "description": "中文自然语言查询，描述你要算的指标/口径，如 '区域退款率'、'各区域销售额排名'",
                     },
                     "top_k": {
                         "type": "integer",
@@ -157,13 +157,13 @@ async def handle_list_tools() -> list[Tool]:
                 "输入：无。不需要任何参数。\n"
                 "\n"
                 "输出：JSON 数组，每项包含：\n"
-                "  table_name（表名，如 fact_sales）\n"
+                "  table_name（表名，如 fact_orders）\n"
                 "  description（中文描述，如 '销售记录事实表'）\n"
                 "  column_count（字段数量，如 12）\n"
                 "\n"
                 "示例：\n"
-                "  返回 10 张表，含 4 张事实表（fact_sales、fact_returns、fact_inventory、fact_attendance）\n"
-                "  和 6 张维度表（dim_date、dim_region、dim_product、dim_customer、dim_warehouse、dim_employee）\n"
+                "  返回 7 张表，含 2 张事实表（fact_orders、fact_payments）\n"
+                "  和 5 张维度表（dim_date、dim_store、dim_product、dim_customer、dim_promotion）\n"
                 "\n"
                 "不要用来：\n"
                 "  - 已经确定了目标表 → 用 get_table_ddl 查看具体字段结构\n"

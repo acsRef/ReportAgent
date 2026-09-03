@@ -25,16 +25,16 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # --- faq_tools（SQL Agent 使用路径：注册工具 + 纯检索） ---
 
 
-def test_search_faq_rows_matches_return_rate():
-    rows = faq_tools._search_faq_rows("退货率", top_k=3)
+def test_search_faq_rows_matches_refund_rate():
+    rows = faq_tools._search_faq_rows("退款率", top_k=3)
     assert rows
     top = rows[0]
     assert top["score"] > 0
-    assert "退货率" in top["question"]
+    assert "退款率" in top["question"]
     # P2 review 修订：local seed 规范化到 {question, text, score}——SQL 文本在
     # text 字段里（_format_faq_text 序列化），不再作为独立字段暴露。
     assert "SELECT" in top["text"]
-    assert "退货率" in top["text"]  # note 也在 text 里
+    assert "退款率" in top["text"]  # note 也在 text 里
 
 
 def test_search_faq_rows_no_match_returns_empty():
@@ -62,7 +62,7 @@ def test_search_faq_rows_missing_file_degrades(monkeypatch):
         Path(__file__).parent / "does_not_exist_schema_faq.json",
     )
     try:
-        assert faq_tools._search_faq_rows("退货率", top_k=3) == []
+        assert faq_tools._search_faq_rows("退款率", top_k=3) == []
     finally:
         # 清缓存：否则 _load_faq 会把「缺失 → 空列表」固化，污染后续测试
         faq_tools._FAQ_ENTRIES = None
@@ -80,21 +80,21 @@ def test_search_faq_tool_invoke_returns_json_matches(monkeypatch):
         {
             "chunk_id": "c1",
             "document_id": "d1",
-            "title": "区域退货率",
-            "text": "# 退货率\n示例 SQL:\nSELECT rc.region_name...\n要点: 退货率 = 退货金额/销售额",
+            "title": "区域退款率",
+            "text": "# 退款率\n示例 SQL:\nSELECT rc.region_name...\n要点: 退款率 = 退货金额/销售额",
             "score": 0.8,
         },
     ]}
     monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
 
-    raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+    raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
     assert isinstance(raw, str)
     parsed = json.loads(raw)
     assert isinstance(parsed.get("matches"), list)
     assert parsed["matches"]
     # Tool Contract P2：{question, text, score}——SELECT 在 text 里
     assert "SELECT" in parsed["matches"][0]["text"]
-    assert "退货率" in parsed["matches"][0]["question"]
+    assert "退款率" in parsed["matches"][0]["question"]
     # 必须没有 sql/note/tables 顶层字段（已规范化）
     for forbidden in ("sql", "note", "tables"):
         assert forbidden not in parsed["matches"][0]
@@ -132,11 +132,11 @@ def test_mcp_registry_search_faq(monkeypatch):
         sys.path.insert(0, str(_REPO_ROOT))
     from mcp_schema_server.registry import registry
 
-    rows = registry.search_faq("退货率", top_k=3)
+    rows = registry.search_faq("退款率", top_k=3)
     assert rows
     assert "SELECT" in rows[0]["sql"]
-    # 与后端路径口径一致：命中的是退货率 FAQ
-    assert "退货率" in rows[0]["question"]
+    # 与后端路径口径一致：命中的是退款率 FAQ
+    assert "退款率" in rows[0]["question"]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -171,18 +171,18 @@ class TestSearchFaqDispatcher:
             {
                 "chunk_id": "c1",
                 "document_id": "d1",
-                "title": "区域退货率",
-                "text": "# 退货率\n示例 SQL:\nSELECT ...\n要点: 退货率 = 退货金额/销售额",
+                "title": "区域退款率",
+                "text": "# 退款率\n示例 SQL:\nSELECT ...\n要点: 退款率 = 退货金额/销售额",
                 "score": 0.8,
             },
         ])
-        raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+        raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
         parsed = json.loads(raw)
         assert parsed["matches"]
-        assert parsed["matches"][0]["question"] == "区域退货率"
+        assert parsed["matches"][0]["question"] == "区域退款率"
         # MCP 必被调
         fake.call_tool.assert_called_once_with(
-            "search_faq", {"query": "退货率", "top_k": 3}
+            "search_faq", {"query": "退款率", "top_k": 3}
         )
 
     def test_fallback_to_local_on_mcp_unavailable(self, monkeypatch):
@@ -193,11 +193,11 @@ class TestSearchFaqDispatcher:
         )
         monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-        raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+        raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
         parsed = json.loads(raw)
-        # 本地命中：question 含「退货率」，text 字段含 SQL
+        # 本地命中：question 含「退款率」，text 字段含 SQL
         assert parsed["matches"]
-        assert "退货率" in parsed["matches"][0]["question"]
+        assert "退款率" in parsed["matches"][0]["question"]
         # Tool Contract P2：{question, text, score}——SELECT 在 text 里
         assert "SELECT" in parsed["matches"][0]["text"]
 
@@ -209,7 +209,7 @@ class TestSearchFaqDispatcher:
         )
         monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: False)
 
-        raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+        raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
         parsed = json.loads(raw)
         assert "error" in parsed
         # code.value 已是 "MCP_UNAVAILABLE"；f-string 不应再加 "MCP_" 前缀
@@ -226,7 +226,7 @@ class TestSearchFaqDispatcher:
         )
         monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-        raw = faq_tools.search_faq.invoke({"query": "退货率", "top_k": 3})
+        raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
         parsed = json.loads(raw)
         assert "error" in parsed
         assert "MCP_INVALID_RESPONSE:" in parsed["error"]

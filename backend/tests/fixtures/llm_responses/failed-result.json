@@ -17,7 +17,7 @@
     "filters": [{"field": "year", "operator": "=", "value": 2024}],
     "aggregation": "sum",
     "time_range": "2024",
-    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_sales", "confidence": 0.9, "reasoning": "生成失败 SQL"}
+    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_orders", "confidence": 0.9, "reasoning": "生成失败 SQL"}
   },
   "sql_generate:1": "SELEC broken syntax FROM no_such_table",
   "sql_generate:2": "SELEC broken syntax FROM no_such_table",
@@ -27,7 +27,7 @@
     "filters": [{"field": "year", "operator": "=", "value": 2024}],
     "aggregation": "sum",
     "time_range": "2024",
-    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_sales", "confidence": 0.9, "reasoning": "replan 后继续失败"}
+    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_orders", "confidence": 0.9, "reasoning": "replan 后继续失败"}
   },
   "sql_generate:3": "SELEC broken syntax FROM no_such_table"
 }

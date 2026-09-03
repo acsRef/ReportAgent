@@ -137,11 +137,11 @@ def _mcp_search_faq(query: str, top_k: int) -> list[dict]:
 def search_faq(query: str, top_k: int = 3) -> str:
     """在 Schema FAQ 知识库中检索最常见分析问题的 SQL 模板与业务口径要点。
 
-    输入：query（中文自然语言，如 '区域退货率'、'毛利率'），top_k 返回条数（默认 3）。
+    输入：query（中文自然语言，如 '各区域销售额排名'、'区域退款率'），top_k 返回条数（默认 3）。
     输出：JSON，matches 为命中案例 [{question, text, score}]——MCP 路径与本地
     fallback 路径暴露同一契约（review 第 2 轮 P1 修订）；无匹配时 matches=[]。
-    用于：写 SQL 前查「这类问题以前怎么算」——业务口径（毛利率/退货率/出勤率/库存周转等）
-    和常见分组/排序模板都在这里。
+    用于：写 SQL 前查「这类问题以前怎么算」——业务口径（销售额口径/退款率/销售占比/
+    月度趋势等）和常见分组/排序模板都在这里。
     不要用来找数据表——用 search_tables；不要用来查业务数据行——此工具只读 FAQ 知识库。
 
     P5 仍保留本地 fallback 代码但默认不走（PHASE2_MCP_ONLY 默认 ON）；仅测试显式 flag OFF 时可达。

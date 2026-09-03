@@ -1,10 +1,25 @@
 -- ═══════════════════════════════════════════════════════════════
--- ReportAgent 业务测试数据（P15 prelude 验证用）
+-- ReportAgent 业务测试数据（现役 canonical 星型 schema）
 -- 零售订单场景：fact_orders + fact_payments + dim_*（store/product/customer/date/promotion）
 -- 为 sql_repair 验证故意设计「易拼错列名」（order_amount / quantity / payment_method）
 -- 数据量：5000 orders + 5000 payments + 30 stores + 50 products + 100 customers + 365 dates + 10 promotions
+--
+-- 历史：本文件 2026-09-02 P15 prelude 引入（当时只重建 7 张新表）；2026-09-03
+-- Final Hardening 起承担 canonical 角色——同时清理 2026-08-04 旧 10 表演示 schema
+-- （fact_sales/fact_returns/fact_inventory/fact_attendance + dim_region/
+-- dim_warehouse/dim_employee），避免新旧业务表并存导致 LLM 命中陈旧数据表。
 -- ═══════════════════════════════════════════════════════════════
 
+-- 旧演示 schema（2026-08-04 seed_pg.sql 产物）退役清理
+DROP TABLE IF EXISTS fact_attendance CASCADE;
+DROP TABLE IF EXISTS fact_inventory CASCADE;
+DROP TABLE IF EXISTS fact_returns CASCADE;
+DROP TABLE IF EXISTS fact_sales CASCADE;
+DROP TABLE IF EXISTS dim_employee CASCADE;
+DROP TABLE IF EXISTS dim_warehouse CASCADE;
+DROP TABLE IF EXISTS dim_region CASCADE;
+
+-- 现役 schema 重建
 DROP TABLE IF EXISTS fact_payments CASCADE;
 DROP TABLE IF EXISTS fact_orders CASCADE;
 DROP TABLE IF EXISTS dim_promotion CASCADE;

@@ -36,7 +36,7 @@ CONVERSATION_SUMMARIZE_V1: dict[str, str] = {
         '只保留话题脉络/用户反馈/决策背景，不含具体字段名和数值",'
         '\n  "extracted_schemas": ['
         '\n    {{"type": "field_mapping", "user_term": "销售额", '
-        '"db_field": "total_amount", "table": "fact_sales"}},'
+        '"db_field": "order_amount", "table": "fact_orders"}},'
         '\n    {{"type": "calculation", "user_term": "环比", '
         '"sql_expression": "(v-LAG(v))/LAG(v)*100"}}'
         "\n  ],"

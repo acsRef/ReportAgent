@@ -3,7 +3,7 @@
 ANALYSIS_DSN 解析与「走非超级用户连接」由 unit 测覆盖（test_sql_limits.py）。
 本文件验证 *真的* 拿到 PG 上时 ragent_readonly 是否被 PG 层成功挡住：
 
-- 正常 BI（fact_sales）→ 成功
+- 正常 BI（fact_orders）→ 成功
 - 服务端文件读写（pg_read_file）→ permission denied for function
 - 系统表读取（pg_authid）→ permission denied for table
 
@@ -56,7 +56,7 @@ def test_normal_bi_query_succeeds(dsn: str) -> None:
     """ragent_readonly 对业务表 SELECT 仍可用。"""
     with _connect(dsn) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM fact_sales")
+            cur.execute("SELECT count(*) FROM fact_orders")
             (n,) = cur.fetchone()
     assert n > 0
 

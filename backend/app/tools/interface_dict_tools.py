@@ -41,7 +41,7 @@ _MAX_MATCH_TEXT = 400
 _MAX_MATCHES = 8
 
 # data_source_type 推断：字典块文本里若显式说「长连接/流/推送/长轮询」之类，
-# 就是实时流/外部通道，不在 fact_sales / fact_returns 等事实表里。
+# 就是实时流/外部通道，不在 fact_orders / fact_payments 等事实表里。
 # LLM 看到这个标记就不该写 SQL，而应在 requirement 里建议接入实时数据。
 _STREAM_KEYWORDS = (
     "长连接", "websocket", "sse ", "server-sent", "server sent",
@@ -186,7 +186,7 @@ def _search_dict_http(query: str, top_k: int) -> tuple[list[dict], bool]:
 @tool
 def search_interface_dictionary(query: str, top_k: int = 5) -> str:
     """在数据字典知识库中检索字段/接口/表的含义释义。
-    输入：query（中文自然语言，如 'total_amount 是什么'），top_k 返回条数（默认 5）。
+    输入：query（中文自然语言，如 'order_amount 是什么'），top_k 返回条数（默认 5）。
     输出：JSON，matches 为命中片段 [{text, source, score}]；无匹配时 matches=[] 且 note 说明；
     字典服务未配置/不可达时返回 error 字段（调用方按无字典处理，不阻塞主流程）。
     用于：用户问题涉及接口字段或不明确字段含义时查释义；写 SQL 前确认业务口径。

@@ -17,9 +17,9 @@
     "filters": [{"field": "year", "operator": "=", "value": 2024}],
     "aggregation": "sum",
     "time_range": "2024",
-    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_sales", "confidence": 0.9, "reasoning": "时间/区域/指标均明确"}
+    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_orders", "confidence": 0.9, "reasoning": "时间/区域/指标均明确"}
   },
-  "sql_generate:1": "SELECT r.region_name AS 区域, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_region r ON f.region_id = r.region_id\nWHERE r.region_name = '华南'\nGROUP BY r.region_name",
+  "sql_generate:1": "SELECT s.region AS 区域, SUM(o.order_amount) AS 销售额\nFROM fact_orders o\nJOIN dim_store s ON o.store_id = s.store_id\nWHERE s.region = '华南'\nGROUP BY s.region",
   "report_plan:1": {
     "steps": [{"tool": "insight_analyst", "args": {}, "description": "华南销售额"}],
     "reasoning": "后台执行完成后可查看"

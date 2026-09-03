@@ -55,7 +55,7 @@ SQL_INTENT_ANALYZE_V1: dict[str, str] = {
         '\n      "label": "📊 各区域销售对比",'
         '\n      "description": "按区域汇总销售额并排名",'
         '\n      "tool": "group_compare",'
-        '\n      "params_preview": {{"group_col": "region_name", "value_col": "total_amount"}}'
+        '\n      "params_preview": {{"group_col": "region", "value_col": "order_amount"}}'
         "\n    }}"
         "\n  ],"
         '\n  "needs_options_group": true/false,'
@@ -152,7 +152,7 @@ SQL_PLAN_V1: dict[str, str] = {
         '\n  "clarify_decision": {{'
         '\n    "action": "clarify" | "run_direct",'
         '\n    "missing_dimensions": ["time"|"region"|"metric"],'
-        '\n    "predicted_table": "fact_sales"|null,'
+        '\n    "predicted_table": "fact_orders"|null,'
         '\n    "confidence": 0.85,'
         '\n    "reasoning": "简短理由"'
         "\n  }}"
@@ -248,9 +248,10 @@ SQL_GENERATE_V1: dict[str, str] = {
         "\n- 不要使用 EXTRACT() 类的 DuckDB 函数做日期处理"
         "\n- 只生成 SELECT 语句，WHERE 条件必须完整"
         "\n- 表名和列名必须严格使用上面列出的名称"
-        "（注意 dim_date 没有 month 列，只有 year / quarter_num / quarter / "
-        "week_of_year / day_name / full_date）"
-        "\n- JOIN 条件使用外键关联（如 fact_sales.region_id = dim_region.region_id）"
+        "（事实表自带日期列 order_date/payment_date；需要年/季度/月/周/节假日属性时"
+        "JOIN dim_date ON dim_date.full_date = 事实表日期列——dim_date 有 date_id / full_date / "
+        "year / quarter_num / quarter / month / week_of_year / day_of_week / is_holiday）"
+        "\n- JOIN 条件使用外键关联（如 fact_orders.store_id = dim_store.store_id）"
         "\n- 使用中文别名（例如「销售额」「年份」）"
         "\n- 只输出纯 SQL，禁止解释，禁止 markdown 代码块，禁止反斜杠转义"
         "\n- 字面量规则（重要）— 见 _SQL_GENERATION_RULES 末尾「字面量与转义规则」段"

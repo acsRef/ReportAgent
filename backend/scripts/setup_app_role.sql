@@ -30,15 +30,15 @@ GRANT USAGE ON SCHEMA public TO ragent_readonly;
 
 -- 3. 业务表 SELECT——逐张显式 GRANT，不做 blanket public SELECT。
 --    这样后续新建的 pgvector / agent / memory / observability 表默认不被分析路径
---    看见，必须显式追加。表名取自 seed_pg.sql。
+--    看见，必须显式追加。表名取自 seed_business_p15prelude.sql（现役零售 schema，
+--    7 张星型表；旧 10 表演示库已退役）。
 DO $$
 DECLARE
     t text;
 BEGIN
     FOREACH t IN ARRAY ARRAY[
-        'dim_date', 'dim_region', 'dim_product', 'dim_customer',
-        'dim_warehouse', 'dim_employee',
-        'fact_sales', 'fact_returns', 'fact_inventory', 'fact_attendance'
+        'dim_date', 'dim_store', 'dim_product', 'dim_customer', 'dim_promotion',
+        'fact_orders', 'fact_payments'
     ]
     LOOP
         EXECUTE format('GRANT SELECT ON TABLE public.%I TO ragent_readonly', t);

@@ -288,7 +288,7 @@
     <div class="atelier-autocomplete" style="max-width:360px">
       <input class="atelier-textfield" placeholder="搜索指标或表名" value="销售"/>
       <div class="atelier-autocomplete__menu">
-        <div class="atelier-autocomplete__item is-active">fact_sales <small>table</small></div>
+        <div class="atelier-autocomplete__item is-active">fact_orders <small>table</small></div>
         <div class="atelier-autocomplete__item">销售额 <small>metric</small></div>
         <div class="atelier-autocomplete__item">销售毛利 <small>metric</small></div>
         <div class="atelier-autocomplete__item">SalesChannel 维度 <small>dim</small></div>

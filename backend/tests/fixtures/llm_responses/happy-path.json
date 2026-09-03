@@ -17,9 +17,9 @@
     "filters": [{"field": "year", "operator": "=", "value": 2024}],
     "aggregation": "sum",
     "time_range": "2024",
-    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_sales", "confidence": 0.9, "reasoning": "时间/区域/指标均明确"}
+    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_orders", "confidence": 0.9, "reasoning": "时间/区域/指标均明确"}
   },
-  "sql_generate:1": "SELECT r.region_name AS 区域, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_region r ON f.region_id = r.region_id\nJOIN dim_date d ON f.date_id = d.date_id\nWHERE d.year = 2024\nGROUP BY r.region_name\nORDER BY 销售额 DESC",
+  "sql_generate:1": "SELECT s.region AS 区域, SUM(o.order_amount) AS 销售额\nFROM fact_orders o\nJOIN dim_store s ON o.store_id = s.store_id\nJOIN dim_date d ON d.full_date = o.order_date\nWHERE d.year = 2024\nGROUP BY s.region\nORDER BY 销售额 DESC",
   "report_plan:1": {
     "steps": [{"tool": "group_compare", "args": {}, "description": "各区域销售额对比"}],
     "reasoning": "用户想看各区域销售排名"

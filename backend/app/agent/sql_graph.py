@@ -298,30 +298,31 @@ _PLAN_TABLE_HINTS = """常用表速查:
 
 _PLAN_FEWSHOT = """[示例1]
 用户: "今年华东销售趋势"
-输出: {"target_metric":"销售趋势","dimensions":["时间","区域"],"filters":[{"field":"region","operator":"=","value":"华东"},{"field":"year","operator":"=","value":"今年"}],"aggregation":"sum","time_range":"今年","clarify_decision":{"action":"run_direct","missing_dimensions":[],"predicted_table":"fact_sales","confidence":0.9,"reasoning":"时间(今年)、区域(华东)、指标(销售)三维度均明确"}}
+输出: {"target_metric":"销售趋势","dimensions":["时间","区域"],"filters":[{"field":"region","operator":"=","value":"华东"},{"field":"year","operator":"=","value":"今年"}],"aggregation":"sum","time_range":"今年","clarify_decision":{"action":"run_direct","missing_dimensions":[],"predicted_table":"fact_orders","confidence":0.9,"reasoning":"时间(今年)、区域(华东)、指标(销售)三维度均明确"}}
 
 [示例2]
 用户: "看一下销量"
-输出: {"target_metric":"销量","dimensions":["时间"],"filters":[],"aggregation":"sum","time_range":null,"clarify_decision":{"action":"clarify","missing_dimensions":["时间","区域"],"predicted_table":"fact_sales","confidence":0.45,"reasoning":"时间与区域均缺失，无法定位数据范围"}}
+输出: {"target_metric":"销量","dimensions":["时间"],"filters":[],"aggregation":"sum","time_range":null,"clarify_decision":{"action":"clarify","missing_dimensions":["时间","区域"],"predicted_table":"fact_orders","confidence":0.45,"reasoning":"时间与区域均缺失，无法定位数据范围"}}
 
 [示例3]
-用户: "上个月退货最多的是哪个商品"
-输出: {"target_metric":"退货数","dimensions":["商品"],"filters":[{"field":"month","operator":"=","value":"上个月"}],"aggregation":"count","time_range":"上个月","clarify_decision":{"action":"run_direct","missing_dimensions":[],"predicted_table":"fact_returns","confidence":0.82,"reasoning":"时间(上个月)、商品、指标(退货)三维度均明确"}}"""
+用户: "上月订单最多的门店是哪家"
+输出: {"target_metric":"订单数","dimensions":["门店","时间"],"filters":[{"field":"month","operator":"=","value":"上个月"}],"aggregation":"count","time_range":"上个月","clarify_decision":{"action":"run_direct","missing_dimensions":[],"predicted_table":"fact_orders","confidence":0.82,"reasoning":"时间(上个月)、门店、指标(订单数)三维度均明确"}}"""
 
 
 _SQL_GENERATION_RULES = """多表 JOIN 规则（必须逐条遵守）:
 - 多表关联优先使用 LEFT JOIN，禁止使用 RIGHT JOIN
 - FROM 后面的第一张表就是主表，其余表都是通过 JOIN 挂上来的维度表/关联表
 - JOIN 关联条件必须写在 ON 子句里，禁止把外键关联条件下沉到 WHERE
-- 维度表的过滤条件写在 ON 里（如 LEFT JOIN dim_region ON fact_sales.region_id = dim_region.region_id AND dim_region.tier = '一线'）；主表（FROM 首表）自身的过滤条件写在 WHERE
+- 维度表的过滤条件写在 ON 里（如 LEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id AND dim_store.store_type = '旗舰店'）；主表（FROM 首表）自身的过滤条件写在 WHERE
 - 有聚合函数（SUM/AVG/COUNT）时，GROUP BY 必须包含所有未聚合的查询列
 - 关联超过 3 张表时，拆成两层子查询：先在各子查询内完成单表/少表聚合，再在外层 JOIN 子查询结果；禁止在同一个 SELECT 里平铺 4 张以上表
 - 明细/非聚合查询（无 GROUP BY 且无聚合函数）默认追加 LIMIT 200，防止全表返回
 - 所有表名、列名、别名必须严格来自「可用表结构」，禁止臆造列
 
 时间维度规则:
-- 时间过滤一律通过 date_id 外键关联 dim_date 表，再对 dim_date.full_date 做区间过滤（注意 dim_date 没有 month/timestamp 列，只有 year / quarter_num / quarter / week_of_year / day_name / full_date）
-- 相对时间（今年/上月/近 7 天）与绝对时间（具体日期，如 2024-01-15）必须统一换算为左闭右开区间 [start, end)，例如整月用 full_date >= '2024-01-01' AND full_date < '2024-02-01'
+- 事实表自带日期列：fact_orders.order_date / fact_payments.payment_date（DATE 类型），时间过滤直接在这两列上做区间
+- 需要按年/季度/月/周/节假日等 dim_date 属性过滤或分组时，JOIN dim_date ON dim_date.full_date = 事实表日期列（dim_date 有 date_id / full_date / year / quarter_num / quarter / month / week_of_year / day_of_week / is_holiday）
+- 相对时间（今年/上月/近 7 天）与绝对时间（具体日期，如 2024-01-15）必须统一换算为左闭右开区间 [start, end)，例如整月用 order_date >= '2024-01-01' AND order_date < '2024-02-01'
 - 一个问题里同时出现相对时间和绝对时间时（如「对比 2024-01 与上月」），分别用两个带别名的子查询各算各的区间，最后 JOIN 拼接结果；禁止在同一个 WHERE 里混写两种时间逻辑
 
 数组类型规则:
@@ -329,8 +330,8 @@ _SQL_GENERATION_RULES = """多表 JOIN 规则（必须逐条遵守）:
 - 当前表结构中暂无数组列，遇到疑似数组字段先按上一条规则核实列类型再写
 
 字面量与转义规则:
-- 日期/字符串字面量使用标准 PostgreSQL 单引号：full_date >= '2024-01-01' AND full_date < '2024-02-01'
-- 字面量内部若需单引号，用两个单引号转义：'O''Brien'——**禁止使用反斜杠转义**（不要写 'O\'Brien'、不要写 \n \t 等）
+- 日期/字符串字面量使用标准 PostgreSQL 单引号：order_date >= '2024-01-01' AND order_date < '2024-02-01'
+- 字面量内部若需单引号，用两个单引号转义：'O''Brien'——**禁止使用反斜杠转义**（不要写 'O\\'Brien'、不要写 \\n \\t 等）
 - 数字字面量直接写：WHERE id = 42，不要加引号
 - 布尔字面量写 TRUE / FALSE，不要加引号
 - 输出 SQL 时**纯文本**，不要附加 markdown 代码块、不要附加注释、不要附加解释"""

@@ -2,10 +2,10 @@
 
 替代被删除的硬编码 `_TABLES`。字典 KB 里每张表一个文档（`ingest_table_schemas` 灌入），
 chunk 文本格式实测：
-    # 表 `public.fact_sales`
-    销售记录事实表,每条记录代表一笔销售
+    # 表 `public.fact_orders`
+    订单事实表,每条记录代表一笔订单
     ## 字段
-    字段 sale_id 类型 integer 含义 销售记录主键 枚举/FK
+    字段 order_id 类型 integer 含义 订单主键 枚举/FK
     ...
 本模块把检索到的 chunk 解析回结构化 {table_name, description, columns}。
 
@@ -56,7 +56,7 @@ def _parse_table_doc(text: str) -> dict | None:
     """解析字典表结构文档 chunk → {table_name, description, columns}；失败返回 None。
 
     P15 prelude: 兼容两种标题形态——
-    - 旧格式：# 表 `public.fact_sales`（backtick 包裹）
+    - 旧格式：# 表 `public.fact_orders`（backtick 包裹）
     - 新格式：# 表 public.fact_orders（ragent-py render_table_doc 改版，无 backtick）
     """
     if not text:

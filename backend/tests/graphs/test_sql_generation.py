@@ -351,8 +351,8 @@ def test_generate_sql_faq_error_degrades(monkeypatch) -> None:
 
 
 def test_generate_sql_prompt_contains_time_split_rules(monkeypatch) -> None:
-    """时间维度规则：date_id 关联 dim_date.full_date 区间过滤 + 左闭右开 +
-    相对/绝对时间混用时子查询分算禁混写。"""
+    """时间维度规则：事实表 DATE 列直接区间过滤（dim_date 属性走 full_date JOIN）+
+    左闭右开 + 相对/绝对时间混用时子查询分算禁混写。"""
     from app.agent.sql_graph import _generate_sql
     captured = _capture_prompt(monkeypatch)
     state = {
@@ -363,14 +363,16 @@ def test_generate_sql_prompt_contains_time_split_rules(monkeypatch) -> None:
     _generate_sql(state)
 
     prompt = captured["text"]
-    assert "date_id 外键关联 dim_date" in prompt
+    assert "时间过滤直接在这两列上做区间" in prompt
     assert "full_date" in prompt
     assert "左闭右开区间" in prompt
     assert "[start, end)" in prompt
     assert "两个带别名的子查询" in prompt
     assert "禁止在同一个 WHERE 里混写两种时间逻辑" in prompt
-    # 明确提示 dim_date 无 month 列
-    assert "dim_date 没有 month" in prompt
+    # dim_date 有 month / day_of_week / is_holiday 属性列（现役零售 schema），
+    # 属性过滤/分组经 JOIN dim_date ON dim_date.full_date = 事实表日期列
+    assert "JOIN dim_date ON dim_date.full_date" in prompt
+    assert "month / week_of_year / day_of_week / is_holiday" in prompt
 
 
 def test_generate_sql_prompt_contains_array_rule(monkeypatch) -> None:
