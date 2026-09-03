@@ -31,6 +31,12 @@ live 未跑项（留手动门，结构与 README/计划同步就位）：⑧ 语
 
 Review-2 后最终数字：backend **1124 passed / 1 skipped**；frontend vitest **302 passed** + tsc 干净；**Playwright Contract 10/10 绿**（全套实测 4.3m）；CI 真实绿跑于推送 `4d1a9dc` 后在 GitHub Actions 执行（gh CLI 本机未装，结果以 Actions 页为准）。commit：`c342506`(1-3) / `baf513e`(4) / `5ec5128`(5) / `4d1a9dc`(6)。
 
+## Review-3 修正（用户 2026-09-04 复查 ab2527a，PASS with 1 P1 + 1 P2，commit `ef80376`）
+
+1. **P1 `_month_key` 实现与文档不一致**（实锤）：解析顺序缺陷——`"2024-01"` 先被「纯数字前缀」分支吞成 head="2024"（>12 → None），ISO 分支是死代码；"January" 全称此前也未真正支持（旧分支要求缩写+空格/点后缀）。修复：ISO 形态（`2024-01` / `2024-01-01` / 时间后缀）先于英文月份全称/缩写（先长后短匹配，容忍空格/点/「月」后缀）再纯数字/数字前缀；文档承诺格式全部配单测（`evaluation/tests/test_semantic_helpers.py`，38 例：支持 13 格式 + 拒 14 未知格式）。
+2. **P2 measure 提取外形假设**：旧 `_money_values` 只收「含小数点 str」——整数金额 `"100"` 是合法产物却被 false negative。重构为结构驱动 `_single_measure(row) → (col, Decimal)`：候选=str 数值列；恰一即取；多候选仅含小数点者唯一才取（消歧 str 月份维度）；否则 ambiguous 直接失败（宁缺勿纵）；total/refund/monthly 统一走它，monthly 按 measure 列排除后取月份键。
+3. **CI 首绿抓到真 bug（与 Review 无关但只有 CI 能暴露）**：init_pg.sql 有 2 处 `VECTOR(1536)` 却从不 `CREATE EXTENSION vector`——本地库 extension 早已存在从未暴露；CI 全新 pgvector 容器首跑 init 即挂（backend-gate + contract-e2e 双 job failure，frontend 过）。修复：init_pg.sql 头部补 `CREATE EXTENSION IF NOT EXISTS vector;`（幂等），本地重跑验证 exit 0。教训：**本地「长命数据库」会掩盖 schema-init 类缺陷——新加 PG 初始化链路后必须用全新容器验证一次**。
+
 ## ⑧ live 实跑记录（2026-09-03 夜，真 MiniMax LLM + ragent-py MCP + 零售 PG）
 
 harness 三轮修复（都是实跑抓的，非离线可见）：① 漏 `BASE_URL` 常量（模块级 fixture 引用）；② `_run_canonical` 的 `from app.tools...` 在 pytest 进程缺 backend sys.path——此前 LLM 全败根本没走到该行，掩盖成潜在 bug；③ P15 `_patch_fill_all` 对语义比对是灾难（自动补 granularity=月把单维 case 变二维、全盘接受「销售额=fact_payments.payment_amount」等 LLM/字典假设→口径改写）——改为**权威卡**（runner 以用户身份只留 case 真实约束，清空发明的 missing/assumptions）。另：total/refund 判定从「单行标量」放宽为**集合等价**（LLM plan 层有权按合理粒度如 12 月明细返回，判全行金额串之和 == canonical；double_fact/错口径仍会翻倍被抓）。
