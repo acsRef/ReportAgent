@@ -1,0 +1,12 @@
+{
+  "sql_plan:1": {
+    "target_metric": "销售额",
+    "dimensions": ["区域"],
+    "filters": [{"field": "year", "operator": "=", "value": 2024}],
+    "aggregation": "sum",
+    "time_range": "2024",
+    "clarify_decision": {"action": "run_direct", "missing_dimensions": [], "predicted_table": "fact_orders", "confidence": 0.9, "reasoning": "时间/区域/指标均明确"}
+  },
+  "sql_generate:1": "SELECT s.region AS 区域, SUM(o.order_amount) AS 销售额\nFROM fact_orders o\nJOIN dim_store s ON o.store_id = s.store_id\nWHERE o.bogus_column = 1\nGROUP BY s.region\nORDER BY 销售额 DESC",
+  "sql_generate:2": "SELECT s.region AS 区域, SUM(o.order_amount) AS 销售额\nFROM fact_orders o\nJOIN dim_store s ON o.store_id = s.store_id\nWHERE o.order_date >= '2024-01-01' AND o.order_date < '2025-01-01'\nGROUP BY s.region\nORDER BY 销售额 DESC"
+}
