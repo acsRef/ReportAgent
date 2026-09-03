@@ -18,7 +18,7 @@ from app.utils.text import extract_sql, safe_json_parse
 from app.infra.trace.sdk import current_tracer, traced_node
 from app.reliability.errors import SQL_ERROR_KINDS, agent_recoverable
 from app.reliability import fault_inject
-from app.tools.sql_tools import validate_sql, execute_sql
+from app.tools.sql_tools import validate_sql, _execute_validated as execute_sql
 from app.tools.data_tools import search_tables, get_table_ddl
 from app.state.checkpoint_adapter import migrate_checkpoint
 from app.agent.prompts import (
@@ -618,6 +618,9 @@ def _validate(state: SQLAgentState) -> dict:
 
 @traced_node("sql_execute")
 def _execute(state: SQLAgentState) -> dict:
+    """执行节点。走 `_execute_validated`（Final Hardening ⑦）：图内 EXPLAIN gate
+    已在 `_validate` 节点完成，此处不重复 EXPLAIN；公共 execute_sql（工具直调）
+    才是内建 EXPLAIN 的自证路径。"""
     sql = state.get("generated_sql", "")
     if not sql:
         return {"sql_result": json.dumps({"error": "无SQL语句"})}

@@ -218,7 +218,7 @@ def register_all_tools():
             name="execute_sql",
             purpose="执行只读 SELECT 查询，返回列结构和行数据",
             when_to_use="validate_sql 校验 valid=true 后立即执行，为报表生成提供数据",
-            when_not_to_use="不要用来执行任何 DDL/DML——连接为只读；未校验的 SQL 不要直接执行",
+            when_not_to_use="不要用来执行任何 DDL/DML——连接为只读；execute_sql 内建 EXPLAIN 自证门，未过校验的 SQL 会在门内被拒",
             description=(
                 "执行只读 SELECT 查询，返回列结构和行数据。"
                 "输入：合法 SELECT 语句（必须先经 validate_sql 校验 valid=true，字段名须出自已确认的表结构）。"

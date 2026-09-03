@@ -229,6 +229,72 @@ def test_validate_sql_sets_error_kind_too(monkeypatch):
     assert result["error_kind"] == "syntax"
 
 
+# ── Final Hardening ⑦：execute_sql 自证 EXPLAIN gate，无法绕过 ──────────
+
+
+def test_execute_sql_self_gates_explain_before_executing(monkeypatch):
+    """进程内直调 execute_sql（含 LLM 工具路径）也必须过 EXPLAIN——无法绕过。
+
+    EXPLAIN 阶段即拒：error envelope 带 error_kind 分类，且不进入真正执行。
+    """
+    from app.tools import sql_tools
+    import psycopg2.errors
+
+    calls = {"n": 0}
+
+    class FakeCursor:
+        description = None
+
+        def execute(self, sql):
+            calls["n"] += 1
+            raise psycopg2.errors.UndefinedColumn('column "nope" does not exist')
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class FakeConn:
+        def cursor(self, cursor_factory=None): return FakeCursor()
+        def close(self): pass
+
+    monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
+    result = json.loads(sql_tools.execute_sql("SELECT nope FROM fact_orders"))
+    assert result["error_kind"] == "object_not_found"
+    assert calls["n"] == 1, "EXPLAIN 阶段即拒，不应进入真正的执行查询"
+    assert result["rows"] == []
+    assert result["row_count"] == 0
+
+
+def test_execute_validated_skips_explain(monkeypatch):
+    """内部路径 _execute_validated 不再自证 EXPLAIN——图内 validate 节点已门过。"""
+    from app.tools import sql_tools
+
+    seen = []
+
+    class FakeCursor:
+        description = [SimpleNamespace(name="v", type_code=23)]
+
+        def execute(self, sql):
+            seen.append(sql)
+            if sql.startswith("EXPLAIN"):
+                raise AssertionError("_execute_validated 不应再跑 EXPLAIN")
+
+        def fetchall(self):
+            return [{"v": 1, "_total": 1}]
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class FakeConn:
+        def cursor(self, cursor_factory=None): return FakeCursor()
+        def close(self): pass
+
+    monkeypatch.setattr(sql_tools, "_get_pg_conn", lambda: FakeConn())
+    result = json.loads(sql_tools._execute_validated("SELECT 1"))
+    assert result.get("error") in (None, "")
+    assert result["rows"] == [{"v": 1}]
+    assert not any(s.startswith("EXPLAIN") for s in seen)
+
+
 # ── ANALYSIS_DSN 解析 + ragent_readonly 真连断言 ──────────────────────
 # docs/plans/2026-08-05-pg-role-least-privilege.md
 

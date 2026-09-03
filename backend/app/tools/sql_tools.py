@@ -244,6 +244,22 @@ def check_sql_safety(sql: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _explain(sql: str) -> tuple[bool, str, str]:
+    """PG EXPLAIN 门（Final Hardening ⑦）：(ok, error_msg, error_kind)。
+
+    独立连接、用完即关；EXPLAIN 不执行查询，只验证 PG 接受该语句。
+    """
+    conn = _get_pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"EXPLAIN {sql}")
+        return True, "", ""
+    except Exception as exc:
+        return False, str(exc)[:300], _classify_psycopg2_error(exc)
+    finally:
+        conn.close()
+
+
 def validate_sql(sql: str) -> str:
     """三重校验 SQL 语法和安全性，不执行查询。
     用途：每次 execute_sql 前的安全检查。必须校验通过后才能执行。
@@ -259,39 +275,21 @@ def validate_sql(sql: str) -> str:
     if not safe:
         return json.dumps({"valid": False, "error": msg}, ensure_ascii=False)
 
-    conn = _get_pg_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"EXPLAIN {sql}")
-        return json.dumps({"valid": True, "error": ""}, ensure_ascii=False)
-    except Exception as exc:
+    ok, err, kind = _explain(sql)
+    if not ok:
         return json.dumps(
-            {
-                "valid": False,
-                "error": str(exc)[:300],
-                "error_kind": _classify_psycopg2_error(exc),
-            },
+            {"valid": False, "error": err, "error_kind": kind},
             ensure_ascii=False,
         )
-    finally:
-        conn.close()
+    return json.dumps({"valid": True, "error": ""}, ensure_ascii=False)
 
 
-def execute_sql(sql: str) -> str:
-    """执行只读 SELECT 查询，返回列结构和行数据。
-    前置条件：必须先调 validate_sql 且返回 {"valid": true}
-    安全限制：只接受 SELECT 语句。任何 DDL/DML 都会被拒绝。
-    输入：sql（合法 SELECT，字段名必须引用已确认的表结构）
-    输出：{"columns": [{name, type}], "rows": [{col: value}], "error": string}
-      - error 为空字符串表示成功
-      - error 有内容表示执行失败（如字段不存在、语法错误）
-    重试策略：失败最多重试 3 次，每次携带错误信息回 LLM 修正 SQL。
-              3 次全失败则转 clarify 节点要求用户澄清。
-    注意：连接的是只读 PostgreSQL 副本，无法修改数据。"""
-    safe, msg = check_sql_safety(sql)
-    if not safe:
-        return json.dumps({"error": msg, "columns": [], "rows": []}, ensure_ascii=False)
+def _execute_validated(sql: str) -> str:
+    """执行**已通过 EXPLAIN 门**的只读 SELECT（Final Hardening ⑦ 内部路径）。
 
+    调用方必须保证该 SQL 已经过 EXPLAIN 验证（sql_graph 的 `_validate` 节点
+    之后、或公共 `execute_sql` 内部已自证）——本函数不再重复开连接跑 EXPLAIN。
+    """
     conn = _get_pg_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -339,6 +337,36 @@ def execute_sql(sql: str) -> str:
         )
     finally:
         conn.close()
+
+
+def execute_sql(sql: str) -> str:
+    """执行只读 SELECT 查询，返回列结构和行数据。
+    Final Hardening ⑦：execute_sql 自身强制 EXPLAIN 门——进程内任意直接调用
+    （含注册给 LLM 的工具路径）都无法绕过 validate 直达执行；EXPLAIN 失败返回
+    与执行失败同形状的错误 envelope（error_kind 分类），不落库不执行。
+    输入：sql（合法 SELECT，字段名必须引用已确认的表结构）
+    输出：{"columns": [{name, type}], "rows": [{col: value}], "error": string}
+      - error 为空字符串表示成功
+      - error 有内容表示执行失败（如字段不存在、语法错误）
+    注意：连接的是只读 PostgreSQL 副本，无法修改数据。"""
+    safe, msg = check_sql_safety(sql)
+    if not safe:
+        return json.dumps({"error": msg, "columns": [], "rows": []}, ensure_ascii=False)
+
+    ok, err, kind = _explain(sql)
+    if not ok:
+        return json.dumps(
+            {
+                "error": err,
+                "columns": [],
+                "rows": [],
+                "row_count": 0,
+                "truncated": False,
+                "error_kind": kind,
+            },
+            ensure_ascii=False,
+        )
+    return _execute_validated(sql)
 
 
 def chart_advisor(sql_result: str) -> str:
