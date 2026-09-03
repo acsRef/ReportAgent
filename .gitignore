@@ -69,3 +69,6 @@ node_modules/
 
 # Claude Code local state
 .claude/
+
+# Playwright 产物（每次运行清空重建，README 说明见 frontend/e2e/README.md）
+frontend/e2e/artifacts/

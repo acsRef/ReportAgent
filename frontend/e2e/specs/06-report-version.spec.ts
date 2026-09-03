@@ -26,7 +26,7 @@ test.describe('06-report-version — adjust 流 report 自动刷新选中新版'
 
     // 报告态下 composer 走 adjust（chatModeForPhase report_ready → adjust）
     await wb.sendQuery('按产品维度再看销售额')
-    await wb.expectReportContains('茅台飞天53度')
+    await wb.expectReportContains('商品1')
     await expect(page.locator('.wb-report-version').first()).toContainText(/报告 v2/)
   })
 })
