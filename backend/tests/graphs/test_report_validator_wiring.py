@@ -37,7 +37,7 @@ _STATE = {
 }
 
 
-def test_report_graph_output_passes_validator(monkeypatch):
+async def test_report_graph_output_passes_validator(monkeypatch):
     """T4：真图闭环（LLM 选工具 + chart_advisor 产 chart）→ spec 带 provenance 且过三层。"""
     from app.agent import report_graph as rg
     from app.report.validator import validate_report_spec
@@ -55,7 +55,7 @@ def test_report_graph_output_passes_validator(monkeypatch):
     }, ensure_ascii=False)
     monkeypatch.setattr(rg, "chart_advisor", lambda data_json: fake_chart)
 
-    out = rg.build_report_graph().invoke(dict(_STATE))
+    out = await rg.build_report_graph().ainvoke(dict(_STATE))  # P16: 节点含 async（ContextRuntime 接入）
     spec = out["report_spec"]
 
     assert spec.components, "bar 型 chart 应产出组件"
