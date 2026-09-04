@@ -25,6 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
+| [2026-09-04-realistic-business-data.md](2026-09-04-realistic-business-data.md) | 真实业务数据 seed 改造：seed_business_p15prelude.sql 重写（30k orders + 真实命名 + 季节性 + 周末 + 促销 + 支付一致性 + 退款合理性 + 头部店 + 品类价格梯度）；用户拍板面试展示阶段优先级（真实数据 > 复杂查询 > SQL 验收） | 用户节奏「一步步来，做好记录」；预计 3 commit（数据真实化 → 跑通复杂查询 demo → SQL 质量验收）；commit 1 目标：数据真实化矩阵全达标 + baseline 仍绿 + 1129 passed |
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
 
 ## 已完成
