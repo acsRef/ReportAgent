@@ -16,9 +16,12 @@ function resolvePython(): string {
   const fromEnv = process.env.RAGENT_PYTHON
   if (fromEnv) {
     if (!existsSync(fromEnv)) {
-      throw new FileNotFoundError(
+      // ESM Node 22+ 不全局暴露 FileNotFoundError，用 Error 表达 + name 字段
+      const e = new Error(
         `RAGENT_PYTHON=${fromEnv} 路径不存在——CI runner 装的是 actions/setup-python；本地若有自定义 conda 设一下。`
       )
+      e.name = "FileNotFoundError"
+      throw e
     }
     return fromEnv
   }
@@ -32,9 +35,11 @@ function resolvePython(): string {
       return cand
     } catch (_) { /* try next */ }
   }
-  throw new FileNotFoundError(
+  const e = new Error(
     '无可用 Python 解释器：CI runner 期待 actions/setup-python 提供 python3；本地 macOS/Linux 需 python3 或 python 在 PATH。'
   )
+  e.name = "FileNotFoundError"
+  throw e
 }
 
 const PYTHON = resolvePython()
