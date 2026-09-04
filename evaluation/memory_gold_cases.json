@@ -1,0 +1,541 @@
+{
+  "version": 2,
+  "description": "P16 Layer 3 gold set：固定记忆集（用户 A）+ 30 queries 召回金标。规则（保证确定性判定）：(1) 关键词位 embedding（memory_bucket_keywords 命中打位）；(2) 每 query 的 gold = 词交最高的记忆（2 词+交行 ≤3 全列）；(3) forbidden = 与 query 零词交或按档位契约排除（REPORT 不召 query memory / EXECUTION 不召 preference / chitchat 与无触发词 query 全不召）；(4) noise 记忆与所有 query 零词交（永不该召）。",
+  "memory_bucket_keywords": [
+    "销售",
+    "区域",
+    "柱状图",
+    "饼图",
+    "表格",
+    "按月",
+    "季度",
+    "金额",
+    "GMV",
+    "口径",
+    "促销",
+    "订单",
+    "门店",
+    "报告",
+    "去年",
+    "2024",
+    "华东",
+    "退货"
+  ],
+  "memories": {
+    "pref_report_bar": {
+      "type": "preference",
+      "content": "报告图表优先使用柱状图展示"
+    },
+    "pref_report_pie": {
+      "type": "preference",
+      "content": "报告图表用饼图更直观"
+    },
+    "pref_region_monthly": {
+      "type": "preference",
+      "content": "销售分析默认按月汇总"
+    },
+    "pref_region_quarter": {
+      "type": "preference",
+      "content": "销售分析按季度看趋势"
+    },
+    "pref_amount_decimal": {
+      "type": "preference",
+      "content": "金额数据保留两位小数"
+    },
+    "pref_report_table": {
+      "type": "preference",
+      "content": "报告展示只要表格不要图表"
+    },
+    "pref_region_annual": {
+      "type": "preference",
+      "content": "年度报告按区域展开"
+    },
+    "pref_return_table": {
+      "type": "preference",
+      "content": "退货明细用表格呈现"
+    },
+    "fact_gmv_net": {
+      "type": "fact",
+      "content": "GMV 口径为净销售额"
+    },
+    "fact_promo_list": {
+      "type": "fact",
+      "content": "促销订单销售额按原价计入"
+    },
+    "fact_region_three": {
+      "type": "fact",
+      "content": "零售分区域为华东华南华北三大盘"
+    },
+    "fact_2024_peak": {
+      "type": "fact",
+      "content": "2024 年华东贡献最高销售"
+    },
+    "fact_return_rate": {
+      "type": "fact",
+      "content": "退货率口径为退货额除以销售额"
+    },
+    "fact_customer_tier": {
+      "type": "fact",
+      "content": "会员按订单量分层"
+    },
+    "fact_promo_q3": {
+      "type": "fact",
+      "content": "Q3 季度促销折扣力度最大"
+    },
+    "fact_store_top": {
+      "type": "fact",
+      "content": "华东门店销售额领先"
+    },
+    "qry_region_sales": {
+      "type": "query",
+      "question": "2024 年各区域销售额排名",
+      "sql": "SELECT region, SUM(order_amount) AS sales FROM fact_orders GROUP BY region",
+      "target_metric": "销售额"
+    },
+    "qry_monthly_trend": {
+      "type": "query",
+      "question": "2024 年按月销售趋势",
+      "sql": "SELECT month, SUM(order_amount) FROM fact_orders GROUP BY month",
+      "target_metric": "销售趋势"
+    },
+    "qry_store_rank": {
+      "type": "query",
+      "question": "门店销售额排行",
+      "sql": "SELECT store_name, SUM(order_amount) FROM fact_orders GROUP BY store_name",
+      "target_metric": "门店销售额"
+    },
+    "qry_promo_effect": {
+      "type": "query",
+      "question": "促销活动对销售额的影响",
+      "sql": "SELECT promo_name, SUM(order_amount) FROM fact_orders GROUP BY promo_name",
+      "target_metric": "促销销售额"
+    },
+    "qry_return_monthly": {
+      "type": "query",
+      "question": "按月退货金额统计",
+      "sql": "SELECT month, SUM(return_amount) FROM fact_orders GROUP BY month",
+      "target_metric": "退货金额"
+    },
+    "qry_region_quarter": {
+      "type": "query",
+      "question": "各区域季度销售对比",
+      "sql": "SELECT region, quarter, SUM(order_amount) FROM fact_orders GROUP BY region, quarter",
+      "target_metric": "季度销售"
+    },
+    "noise_visit_log": {
+      "type": "noise",
+      "content": "客户回访记录在案",
+      "importance": 0.3
+    },
+    "noise_old_plan": {
+      "type": "noise",
+      "content": "有份旧方案不用了",
+      "importance": 0.3
+    },
+    "noise_archive": {
+      "type": "noise",
+      "content": "年底要把归档整理一遍",
+      "importance": 0.3
+    }
+  },
+  "queries": [
+    {
+      "id": "q1",
+      "agent": "report_plan_analysis",
+      "query": "2024年各区域销售额报告用柱状图展示",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "pref_report_bar",
+        "pref_region_annual",
+        "fact_2024_peak"
+      ],
+      "forbidden": [
+        "noise_old_plan",
+        "noise_visit_log"
+      ]
+    },
+    {
+      "id": "q2",
+      "agent": "report_plan_analysis",
+      "query": "区域销售报告想要饼图直观些",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "pref_report_pie",
+        "pref_region_annual"
+      ],
+      "forbidden": [
+        "noise_archive",
+        "noise_visit_log"
+      ]
+    },
+    {
+      "id": "q3",
+      "agent": "report_plan_analysis",
+      "query": "报告展示用表格就行",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "pref_report_table"
+      ],
+      "forbidden": [
+        "noise_old_plan",
+        "noise_archive"
+      ]
+    },
+    {
+      "id": "q4",
+      "agent": "report_plan_analysis",
+      "query": "销售分析按月来看",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "pref_region_monthly"
+      ],
+      "forbidden": [
+        "noise_visit_log",
+        "noise_archive"
+      ]
+    },
+    {
+      "id": "q5",
+      "agent": "report_plan_analysis",
+      "query": "金额展示格式有什么讲究",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "pref_amount_decimal"
+      ],
+      "forbidden": [
+        "noise_old_plan"
+      ]
+    },
+    {
+      "id": "q6",
+      "agent": "report_plan_analysis",
+      "query": "退货报告用表格呈现",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "pref_report_table",
+        "pref_return_table"
+      ],
+      "forbidden": [
+        "noise_visit_log"
+      ]
+    },
+    {
+      "id": "q7",
+      "agent": "report_plan_analysis",
+      "query": "你好",
+      "memory_scope": [],
+      "gold": [],
+      "forbidden": [],
+      "expect_none": true
+    },
+    {
+      "id": "q8",
+      "agent": "report_plan_analysis",
+      "query": "华东区域今年情况做份报告",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "fact_region_three",
+        "pref_region_annual"
+      ],
+      "forbidden": [
+        "noise_archive"
+      ]
+    },
+    {
+      "id": "q9",
+      "agent": "report_plan_analysis",
+      "query": "报告要柱状图和表格结合",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "pref_report_bar",
+        "pref_report_table"
+      ],
+      "forbidden": [
+        "noise_old_plan",
+        "noise_visit_log"
+      ]
+    },
+    {
+      "id": "q10",
+      "agent": "report_plan_analysis",
+      "query": "GMV 和销售额是什么关系",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "fact_gmv_net"
+      ],
+      "forbidden": [
+        "noise_archive",
+        "noise_visit_log"
+      ]
+    },
+    {
+      "id": "q11",
+      "agent": "requirement_analyze",
+      "query": "按我的习惯分析销售数据",
+      "memory_scope": [],
+      "gold": [],
+      "forbidden": [],
+      "expect_none": true
+    },
+    {
+      "id": "q12",
+      "agent": "requirement_analyze",
+      "query": "生成华东区域销售分析报告",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "fact_region_three",
+        "pref_region_annual"
+      ],
+      "forbidden": [
+        "noise_archive"
+      ]
+    },
+    {
+      "id": "q13",
+      "agent": "requirement_analyze",
+      "query": "GMV 口径是什么",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "fact_gmv_net"
+      ],
+      "forbidden": [
+        "noise_old_plan",
+        "noise_visit_log"
+      ]
+    },
+    {
+      "id": "q14",
+      "agent": "requirement_analyze",
+      "query": "订单量大的门店怎么分级",
+      "memory_scope": [],
+      "gold": [],
+      "forbidden": [],
+      "expect_none": true
+    },
+    {
+      "id": "q15",
+      "agent": "requirement_analyze",
+      "query": "继续华东门店销售分析",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "fact_store_top"
+      ],
+      "forbidden": [
+        "noise_archive",
+        "noise_old_plan"
+      ]
+    },
+    {
+      "id": "q16",
+      "agent": "requirement_analyze",
+      "query": "退货率口径怎么算",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "fact_return_rate"
+      ],
+      "forbidden": [
+        "noise_visit_log",
+        "noise_old_plan"
+      ]
+    },
+    {
+      "id": "q17",
+      "agent": "requirement_analyze",
+      "query": "去年 GMV 销售口径",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "fact_gmv_net"
+      ],
+      "forbidden": [
+        "noise_archive"
+      ]
+    },
+    {
+      "id": "q18",
+      "agent": "requirement_analyze",
+      "query": "促销表现报告按季度看",
+      "memory_scope": [
+        "semantic"
+      ],
+      "gold": [
+        "fact_promo_q3"
+      ],
+      "forbidden": [
+        "noise_old_plan"
+      ]
+    },
+    {
+      "id": "q19",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "统计2024年各区域销售额",
+      "memory_scope": [
+        "query"
+      ],
+      "gold": [
+        "qry_region_sales"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q20",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "去年各区域销售情况",
+      "memory_scope": [
+        "query"
+      ],
+      "gold": [
+        "qry_region_sales"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q21",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "按月看销售走势",
+      "memory_scope": [
+        "query"
+      ],
+      "gold": [
+        "qry_monthly_trend"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q22",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "门店销售额排行",
+      "memory_scope": [
+        "query"
+      ],
+      "gold": [
+        "qry_store_rank"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q23",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "促销对销售额的影响",
+      "memory_scope": [
+        "query"
+      ],
+      "gold": [
+        "qry_promo_effect"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q24",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "按月退货金额统计",
+      "memory_scope": [
+        "query"
+      ],
+      "gold": [
+        "qry_return_monthly"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q25",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "统计各区域 GMV 销售额",
+      "memory_scope": [
+        "semantic",
+        "query"
+      ],
+      "gold": [
+        "fact_gmv_net",
+        "qry_region_sales"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q26",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "订单量情况如何",
+      "memory_scope": [],
+      "gold": [],
+      "forbidden": [],
+      "expect_none": true
+    },
+    {
+      "id": "q27",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "各区域季度销售对比",
+      "memory_scope": [
+        "query"
+      ],
+      "gold": [
+        "qry_region_quarter"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q28",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "华东区域2024年销售额",
+      "memory_scope": [
+        "query"
+      ],
+      "gold": [
+        "qry_region_sales"
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "q29",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "2024促销数据怎么样",
+      "memory_scope": [],
+      "gold": [],
+      "forbidden": [],
+      "expect_none": true
+    },
+    {
+      "id": "q30",
+      "agent": "confirmed_execution_sql_agent",
+      "query": "生成华东门店销售报告",
+      "memory_scope": [
+        "semantic",
+        "query"
+      ],
+      "gold": [
+        "fact_store_top",
+        "qry_store_rank"
+      ],
+      "forbidden": [
+        "pref_report_bar",
+        "pref_report_table"
+      ]
+    }
+  ]
+}
