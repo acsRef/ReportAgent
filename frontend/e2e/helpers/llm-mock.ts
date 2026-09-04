@@ -15,10 +15,18 @@ import { BACKEND_URL, CONTRACT_FIXTURES_DIR, loadDotEnv, repoRoot } from './env'
 function resolvePython(): string {
   const fromEnv = process.env.RAGENT_PYTHON
   if (fromEnv) {
-    if (!existsSync(fromEnv)) {
-      // ESM Node 22+ 不全局暴露 FileNotFoundError，用 Error 表达 + name 字段
+    // CI 修复：env 既可能是「程序可执行名」（如 actions/setup-python 提供的
+    // "python3"——PATH 里的命令，无文件路径）也可能是「绝对文件路径」（如本地
+    // D:/miniConda/envs/agent/python.exe）。后者才 existsSync 校验；前者直接
+    // 信任 spawn 通过 PATH 解析——混淆正是本轮「RAGENT_PYTHON=python3 路径不存在」
+    // 的根因。
+    const looksLikePath =
+      fromEnv.includes('/') ||
+      fromEnv.includes('\\') ||
+      /^[A-Za-z]:[\\/]/.test(fromEnv)
+    if (looksLikePath && !existsSync(fromEnv)) {
       const e = new Error(
-        `RAGENT_PYTHON=${fromEnv} 路径不存在——CI runner 装的是 actions/setup-python；本地若有自定义 conda 设一下。`
+        `RAGENT_PYTHON=${fromEnv} 路径不存在——若想传可执行名请确认在 PATH 中；若传路径请修正。`
       )
       e.name = "FileNotFoundError"
       throw e
