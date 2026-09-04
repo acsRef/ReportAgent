@@ -26,6 +26,7 @@
 | Plan | 主题 | 备注 |
 |---|---|---|
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
+| [2026-09-04-p16-memory-evaluation.md](2026-09-04-p16-memory-evaluation.md) | P16 Memory Evaluation & Behavioral Tests（Memory 封版）：① Report 偏好最小接线（按 memory-architecture 契约补全——report 链补 ContextRuntime 接入 + chart 偏好确定性应用，prompt/chart_advisor/frontend 零改动）② EXECUTION 档 drop preference 契约修正 ③ 8 个行为测试（preference→chart / 不污染 SQL / query memory→SQL / candidate & expired 不进 Agent / cross-user Agent 层 / ON-OFF 对照）④ Gold Set 召回评测（25 memory + 30 queries，evaluation/；fake embedding 链路钉 + 真 embedding env-gated runner 出 Recall@1/@3/MRR）⑤ 真 LLM SQL 行为手动门 | 分支 `p16-memory-evaluation`；T0 plan 落库 |
 
 ## 已完成
 
