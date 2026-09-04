@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, execSync, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { BACKEND_URL, CONTRACT_FIXTURES_DIR, loadDotEnv, repoRoot } from './env'
@@ -17,8 +17,7 @@ function resolvePython(): string {
   if (fromEnv) {
     if (!existsSync(fromEnv)) {
       throw new FileNotFoundError(
-        `RAGENT_PYTHON=${fromEnv} 路径不存在——CI runner 装的是 actions/setup-python，`
-        `本地若有自定义 conda 设一下。`
+        `RAGENT_PYTHON=${fromEnv} 路径不存在——CI runner 装的是 actions/setup-python；本地若有自定义 conda 设一下。`
       )
     }
     return fromEnv
@@ -29,14 +28,12 @@ function resolvePython(): string {
   // Linux/macOS：先找 python3（actions/setup-python 默认 PATH），再退到 python
   for (const cand of ['python3', 'python']) {
     try {
-      const { execSync } = require('node:child_process') as typeof import('node:child_process')
       execSync(`${cand} -c "import sys; sys.exit(0)"`, { stdio: 'ignore' })
       return cand
     } catch (_) { /* try next */ }
   }
   throw new FileNotFoundError(
-    '无可用 Python 解释器：CI runner 期待 actions/setup-python 提供 python3；'
-    '本地 macOS/Linux 需 python3 或 python 在 PATH。'
+    '无可用 Python 解释器：CI runner 期待 actions/setup-python 提供 python3；本地 macOS/Linux 需 python3 或 python 在 PATH。'
   )
 }
 
