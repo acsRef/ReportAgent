@@ -1,13 +1,51 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { BACKEND_URL, CONTRACT_FIXTURES_DIR, loadDotEnv, repoRoot } from './env'
 
-const PYTHON = process.env.RAGENT_PYTHON ?? 'D:/miniConda/envs/agent/python.exe'
+/**
+ * CI 修复：Python 解释器必须能跨平台解析——
+ *  Windows 本地：开发机 conda（默认 D:/miniConda/envs/agent/python.exe）；可由
+ *    `RAGENT_PYTHON` env 覆盖（playwright.config / 直接调试）。
+ *  Linux/Ubuntu（CI runner）：Conda 不存在；actions/setup-python@v5 提供 `python3`；
+ *    也可由 `RAGENT_PYTHON` env 显式覆盖（先验，不污染 env 来源单一）。
+ *  没有 RAGENT_PYTHON 时按平台探测（Windows 保持原默认，Linux 优先 python3 / python）。
+ * 仍找不到 → 抛 FileNotFoundError 让 spec 早失败而非 silent ENOENT 跑完全部。
+ */
+function resolvePython(): string {
+  const fromEnv = process.env.RAGENT_PYTHON
+  if (fromEnv) {
+    if (!existsSync(fromEnv)) {
+      throw new FileNotFoundError(
+        `RAGENT_PYTHON=${fromEnv} 路径不存在——CI runner 装的是 actions/setup-python，`
+        `本地若有自定义 conda 设一下。`
+      )
+    }
+    return fromEnv
+  }
+  if (process.platform === 'win32') {
+    return 'D:/miniConda/envs/agent/python.exe'
+  }
+  // Linux/macOS：先找 python3（actions/setup-python 默认 PATH），再退到 python
+  for (const cand of ['python3', 'python']) {
+    try {
+      const { execSync } = require('node:child_process') as typeof import('node:child_process')
+      execSync(`${cand} -c "import sys; sys.exit(0)"`, { stdio: 'ignore' })
+      return cand
+    } catch (_) { /* try next */ }
+  }
+  throw new FileNotFoundError(
+    '无可用 Python 解释器：CI runner 期待 actions/setup-python 提供 python3；'
+    '本地 macOS/Linux 需 python3 或 python 在 PATH。'
+  )
+}
+
+const PYTHON = resolvePython()
 const BACKEND_DIR = resolve(repoRoot, 'backend')
 // Contract 强制不连真实 MCP：指向不存在的解释器 → RagMCPClient 子进程起不来，
 // dict_hit=False → intent 走 mock LLM；schema 空 → plan/generate 由 fixture 直接
 // 返回可执行 SQL（对真实 seeded PG 跑）。fixture key 是语义 kind，不依赖 schema 漂移。
-const RAGENT_MCP_PYTHON = process.env.RAGENT_MCP_PYTHON ?? 'D:/non-existent/ragent-python.exe'
+const RAGENT_MCP_PYTHON = process.env.RAGENT_MCP_PYTHON ?? '/non-existent/ragent-python'
 
 let backend: ChildProcess | null = null
 

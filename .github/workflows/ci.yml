@@ -126,10 +126,11 @@ jobs:
       - name: Contract E2E (mock LLM + real PG)
         # 10/10 绿（Review-2 修掉 05：confirm error 事件后 onFailed 刷新版本 →
         # ReportPaper error band 渲染；详见 plan 落地记录）。失败详情经
-        # ::error:: 进 annotations（check-runs API 匿名可读，诊断用）
+        # ::error:: 进 annotations（check-runs API 匿名可读，诊断用）。
+        # RAGENT_PYTHON=python3 由 actions/setup-python@v5 提供，跨平台修复。
         run: |
           set +e
-          npm run e2e:contract > /tmp/contract.log 2>&1
+          RAGENT_PYTHON=python3 npm run e2e:contract > /tmp/contract.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then
             sed 's/\x1b\[[0-9;]*m//g' /tmp/contract.log | tail -40 | while IFS= read -r line; do
