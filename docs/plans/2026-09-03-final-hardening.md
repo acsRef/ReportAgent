@@ -185,3 +185,17 @@ harness 三轮修复（都是实跑抓的，非离线可见）：① 漏 `BASE_U
 - 不新增 RBAC/Kafka/Celery/Redis/异步全量重构/Prometheus 等 reviewer P2 清单。
 - 不改 P15 已冻结的 honest-terminal 断言哲学（⑧ 的语义断言只在 SUCCESS 分支生效）。
 - 不动架构契约五文档（本次全是实现层修复，契约无违反）。
+
+## A 阶段：CI 真实绿证达成（commit `8af8eee`，run 33867189183）
+
+GitHub Actions 三 job 全绿：backend-gate ✅ / frontend-gate ✅ / contract-e2e ✅（10/10）。
+
+CI 跨平台落地的 4 轮修复链：
+- `ef80376` / `393edd7` / `ed99cf0`：CI workflow 初版 + step summary / ::error:: 诊断通道
+- `e071e0a` / `0631ad6`：4 个 LLM 测试漏 stub、6 个 persistence 测试硬编码 user_id=1、vite 绑 ::1 三根因
+- `5c1747e`：Python 解释器跨平台（默认 Windows conda，Linux 探测 python3/python，env 覆盖优先）
+- `d2a621c`：ESM Node 22+ FileNotFoundError 全局未暴露（改 Error + name="FileNotFoundError" 等价表达）
+- `286d55f`：fileNotFoundError 仍误判（路径 vs 可执行名未区分）
+- **`8af8eee` 关键修复**：`RAGENT_PYTHON` 既可是「PATH 可执行名」（如 CI 的 `python3`）也可是「绝对文件路径」（如本地的 `D:/...python.exe`）——按分隔符（`/`/`\`/盘符前缀）判断，前者信任 spawn PATH 解析、后者才 existsSync 校验。
+
+Review-3 后真正封版：3 job GHA ✅ 拿到，evaluator correctness 已 Review-2/3 修至 PASS，CI 三 job 跨平台无差异。
