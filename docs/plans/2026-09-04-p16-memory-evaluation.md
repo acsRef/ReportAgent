@@ -1,7 +1,19 @@
 # P16 Memory Evaluation & Behavioral Tests
 
-> 状态: 进行中
-> 分支建议: `p16-memory-evaluation`　|　commit 信息统一带 `+ plan: p16-memory-evaluation`
+> 状态: 已完成（2026-09-04，分支 `p16-memory-evaluation`）
+> commit 信息统一带 `+ plan: p16-memory-evaluation`
+
+## 落地记录（追加）
+
+分支 `p16-memory-evaluation` 8 commit：`5905998`(plan) → `719195c`(D4 EXECUTION drop preference) → `2d94213`(apply_chart_preference 纯函数) → `81f5eec`(report 链接线) → `073177d`(①⑧ 行为) → `106905e`(②⑤⑥⑦ guardrails) → `532188d`(③④ query memory SQL) → `f7e9ee5`(gold set 评测 30/30×3) → `28b0c2d`(真 embedding runner) → `50ce283`(回归适配 + CLAUDE.md §6)。
+
+- **全量回归**：backend **1176 passed / 1 skipped**（1116 baseline + ~25 P16 增量；test_tool_descriptions 一例随 async 节点适配 await）；evaluation 78 passed。
+- **真 embedding 指标**（gold_memory_runner 真跑 ×2 数字一致）：**Recall@1 = 0.84（21/25）/ Recall@3 = 0.96（24/25）/ MRR = 0.90 / Clean = 1.0**（q18「促销表现报告按季度看」真语义下 Q3 大促记忆 rank>3——真实 miss 如实记录）；快照 `evaluation/results/memory_gold_20260904_230957.json`。
+- **执行偏差 3 项**：① gold set 评测测试落 `backend/tests/persistence/` 而非 evaluation/tests/（评测直连 backend 代码 import 便利 + DATABASE_URL gate 与 persistence 惯例一致；evaluation 域走 HTTP 自含惯例不破坏）；② dataset 逐轮实证收敛——noise 记忆零词交化、fact_region_three/promo_q3 content 词修正、forbidden 收敛为 {noise | 档位排除}（重要性 0.8 零词交行与 top3 尾位 tie 会 flaky——15 次验证后定为必不召锚点 = noise 0.3 或契约排除）；③ fake embedder base 从 0.01 压到 0.0001（base 主导 cos 使 0 词交行也被召——0.6 语义权重支配后词交排序可推演）。
+- **手动门待办（G4，用户在场跑）**：真 LLM SQL 行为 3 case——② 偏好不偏 SQL（GROUP BY region 保持）/ ③ 参考续 SQL（结构同、时间条件新）/ ④ COUNT(*) 历史不诱导 COUNT 产出。需 PG + MCP + backend（真 LLM key）全启动。
+- 不做清单保持：P14b harness、conversation 质量评测、report conversation 注入、insight 偏好、query_template lifecycle、简历数据盘点与截图（用户排最后）。
+
+---
 
 ## Context（为什么做）
 
