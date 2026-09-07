@@ -180,4 +180,54 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
     await expectReportLong(page)
     await shotReport(page, 'S4-report.png')
   })
+
+  test('S5 repair 演示：SQL 对象失败 → 诊断修复 → 成功报告', async ({ page }) => {
+    // X-E2E-Fault（kind=object_not_found;mode=once）经 page.route 注入 confirm 请求——
+    // P15 seam 确定性触发 repair（不靠 LLM 拼错彩票），后端走
+    // validation-failed → DiagnosePolicy → MCP schema 刷新 → 重生成 → 成功。
+    await page.route('**/api/v1/sessions/*/confirm', async (route) => {
+      const headers = { ...route.request().headers(), 'X-E2E-Fault': 'kind=object_not_found;mode=once' }
+      await route.continue({ headers })
+    })
+    await auth(page)
+    const wb = new WorkbenchPage(page)
+    await wb.open()
+    await wb.startNewSession()
+
+    await wb.sendQuery('2024年各区域销售额')
+    await wb.expectRequirementCard()
+    await resolveRequirementCard(page, wb)
+    await wb.confirmRequirement()
+
+    // 处理中状态（进度卡）——repair 过程的「进行时」证据
+    await expect(page.locator('.wb-progress-card').first()).toBeVisible({ timeout: 120_000 })
+    await shot(page, 'S5-in-progress.png')
+
+    await expectReportLong(page)
+    await shotReport(page, 'S5-report-after-repair.png')
+    await page.unroute('**/api/v1/sessions/*/confirm')
+  })
+
+  test('S6 跨会话 Query Memory：新会话延续上次分析结构', async ({ page }) => {
+    await auth(page)
+    const wb = new WorkbenchPage(page)
+    await wb.open()
+
+    // 会话 A：查 2024 华东（成功 → Query Memory 写入）
+    await wb.startNewSession()
+    await wb.sendQuery('2024年华东区域销售额排名')
+    await wb.expectRequirementCard()
+    await resolveRequirementCard(page, wb)
+    await wb.confirmRequirement()
+    await expectReportLong(page)
+
+    // 新会话 B（跨会话）：结构相近 query → Query Memory 参考帧
+    await wb.startNewSession()
+    await wb.sendQuery('同样看看华东2024年销售额')
+    await wb.expectRequirementCard()
+    await resolveRequirementCard(page, wb)
+    await wb.confirmRequirement()
+    await expectReportLong(page)
+    await shotReport(page, 'S6-cross-session-query-memory.png')
+  })
 })
