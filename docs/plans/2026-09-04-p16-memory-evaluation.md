@@ -3,6 +3,12 @@
 > 状态: 已完成（2026-09-04，分支 `p16-memory-evaluation`）
 > commit 信息统一带 `+ plan: p16-memory-evaluation`
 
+## 合并记录（追加 2）
+
+- **用户 P16 Final Review：PASS**（13 commit 全 diff：Memory 接线/行为测试/Gold Set/真 embedding runner/G4 门及文档，无越界）。分级结论：16 项全部 ✅；唯一遗留 **P16-LOW**（删 `"表"` 宽 alias）已顺手修（`32285ec`：删除单字「表」匹配——「图表更直观」不再误判 table，「表格」完整词保留 + 防回归钉；contracts+smoke 771 passed 零回归）。
+- 合 master：`c924db4`（--no-ff merge，远端 master 确认）。注意：本分支 cd74f29 后新增 1 个 commit（32285ec）——远端 p16-memory-evaluation 现为 32285ec。
+- **下一步（用户拍板）**：不再扩 Memory（conversation quality / report conversation injection / insight preference / query_template lifecycle / P14b harness 全部搁置）；直接进入简历数据说服力盘点 → 截图文件夹 → 面试材料。
+
 ## 落地记录（追加）
 
 **G4 真 LLM SQL 行为手动门（2026-09-07 执行，已跑完）**：
