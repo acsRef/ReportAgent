@@ -1,7 +1,14 @@
 # P16.5 Preference Explicit Wiring（简历盘点发现缺口，用户拍板修）
 
-> 状态: 进行中
-> 分支: `p16-5-preference-explicit-wiring`　|　commit 统一带 `+ plan: preference-explicit-wiring`
+> 状态: 已完成（2026-09-07，分支 `p16-5-preference-explicit-wiring`，合 master `d1c10f4`）
+> commit 信息统一带 `+ plan: preference-explicit-wiring`
+
+## 落地记录
+
+- `76843d6`(plan) → `6826755`(接线 + api 3 例 + 真 PG 闭环) → `91106ab`(闭环测试改专属临时用户) → merge `d1c10f4`。
+- 全量回归 **1181 passed / 1 skipped**（1176 baseline + 5 P16.5 增量，零回归）。
+- 执行偏差 1 项：短路里 `phase` 变量需 `= "idle"` 复位后再 yield（done.final_phase 读它——P11 F4 同坑，测试抓到 `final_phase=error` 即修）；闭环测试初版共享 user_id=1 被历史 marker 挤占 top-k 假阴性——改专属临时用户（也避免污染演示数据）。
+- **截图前置**：UI 手工门「以后报告都用柱状图 → 已记住 → 再问『2024年各区域销售额』→ bar」（后端需重启加载本改动）。
 
 ## Context（为什么做）
 
