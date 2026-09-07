@@ -4,6 +4,52 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 
 ## 系统架构
 
+### 主链路流程图
+
+```mermaid
+flowchart TB
+    subgraph 客户端
+        U["用户中文提问"]
+        UI["React 工作台 :3000<br/>SSE v2 七事件 + progress"]
+    end
+    subgraph 后端 "FastAPI + LangGraph :8100"
+        G["Security Guard<br/>注入归一化 + 拦截"]
+        CRT["Context Runtime<br/>Selective Recall（四触发）<br/>Conversation L1-L2.5 + Semantic/Query 召回<br/>Assembler（去重 / 排序 / Token 预算）"]
+        REQ["Requirement Agent<br/>意图 / 维度指标 / 缺失判断 / 澄清"]
+        EXEC["Execution Agent<br/>Plan → Generate → Validate(EXPLAIN)<br/>→ Execute → Evaluate<br/>└─ Diagnose → Repair（预算 2）"]
+        REP["Report Agent<br/>ReportSpec + 三层 Validator"]
+        TRACE["Trace 双 sink"]
+    end
+    subgraph 服务
+        MCP["MCP Schema Server（stdio）<br/>字典 KB 经 RAG MCP"]
+        PG[("PostgreSQL 15 + pgvector<br/>public 星型（分析 SQL）<br/>agent.*（会话/需求/报告版本）<br/>memory.*（语义/查询记忆）+ traces")]
+    end
+    subgraph 外部
+        LLM["LLM Adapter（OpenAI 兼容）"]
+        EMB["Embedding API（SiliconFlow）"]
+    end
+
+    U -->|"SSE"| UI
+    UI -->|"/api"| G
+    G --> CRT
+    CRT -->|"Recalled Context"| REQ
+    REQ -->|"RequirementCard"| UI
+    UI -->|"确认 / 补全 PATCH"| EXEC
+    EXEC -->|"schema 检索（MCP 兜底本地）"| MCP
+    EXEC -->|"SQL 执行（ANALYSIS_DSN 只读角色）"| PG
+    EXEC --> REP
+    REP -->|"ReportVersion 三态 append-only"| PG
+    REP -->|"SSE report / error / done"| UI
+    CRT <-->|"记忆读写"| PG
+    REQ -.->|"LLM"| LLM
+    EXEC -.->|"LLM"| LLM
+    REP -.->|"LLM"| LLM
+    CRT -.->|"embedding"| EMB
+    EXEC -.-> TRACE -.->|"PG + Langfuse"| PG
+```
+
+### 分层部署视图
+
 ```
 用户 ←SSE v2→ React + Vite (:3000)
                  ↓ 代理 /api (Vite proxy)
@@ -49,6 +95,13 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 
 **mem0（可选）**：`MEM0_ENABLED=true` 时用 mem0 从对话自动抽取 L3 长期事实（自带去重/更新）；默认关闭，降级为纯 LLM 抽取。**mem0 只做抽取，不做召回**（召回主路径始终是 pgvector 语义排序）。
 
+**记忆生命周期与隔离**（P4b / P16 / P16.5 封版）：
+
+- **写入时机 = Write After Reliable Event**：用户**明说**偏好（如「以后都用柱状图」）→ 直接写 `stable_preference`（active，`confidence=high`）；LLM 推断的事实 → `candidate`（**不参与召回**，控制污染）；SQL 校验+执行都成功才进 Query Memory（失败只记 failure 元数据）。
+- **读取时机 = Selective Recall 四触发**（历史引用 / 偏好影响当前任务 / 业务定义 / Query Experience 高相似），chitchat 与完整 query 不召；**不同 Agent 档位召回不同内容**：SQL 上下文只有业务事实 + Query 经验（图表偏好被 Agent 层剔除），Report 档只收偏好。
+- **Agent 层隔离**：`ContextRuntime.build()` 产出层保证——candidate / expired / 他人（cross-user）的记忆不进入任何 Agent 上下文（不只靠 DB 查询过滤）。
+- **召回质量有评测证据**：Layer 3 Gold Set（25 记忆 + 30 金标 queries，30/30 稳定）+ 真 embedding 指标快照 **Recall@1 0.84 / Recall@3 0.96 / MRR 0.90 / Clean 1.0**（`evaluation/results/`）+ G4 真 LLM 行为门（发现并修复「参考帧年份 anchor 诱导时间偏移」——防御帧声明「时间以本 prompt 声明的今天为准」）。
+
 **checkpoint 持久化**（`app/infra/checkpoint/factory.py`）：dev 用 `MemorySaver`（便于本地单步），非 dev 用 **`AsyncPostgresSaver`**（checkpoint 落 PG，跨进程重启不丢、支持多实例）。
 
 ## 技术栈
@@ -58,7 +111,7 @@ AI 驱动的自然语言 → 报表系统。用户用中文提问，Agent 先拆
 | 前端 | React 19 + Vite 8 + TypeScript 6 + Zustand + immer |
 | UI | atelier 组件库（`components/atelier/`，antd 已移除）+ 手绘 SVG 图标（`components/ui/Icons.tsx`）+ `styles/tokens.css` / `styles/workbench.css` |
 | 渲染 | ECharts 6 (SVG) + ReportBlock 组件体系 |
-| API 协议 | SSE v2 流式推送（phase / requirement / report / error / done） |
+| API 协议 | SSE v2 流式推送（七事件 phase/requirement/trace/thinking/report/error/done + progress 族） |
 | 认证 | JWT（PyJWT，单 token，无 refresh，24h）；fail-closed 启动安全闸 |
 | Agent | LangGraph 双图 + psycopg2 + sqlglot；checkpoint 默认 MemorySaver（dev）/ **PostgresSaver**（非 dev，落 PG、跨重启持久） |
 | 记忆 | 分层对话上下文（L1 原始 / L2 摘要覆盖重写 / L2.5 归档 / L3 结构化事实）+ pgvector 语义召回（语义主导，LFU/LRU 作排序因子 + 容量上限淘汰）；mem0 可选作 L3 抽取引擎（`MEM0_ENABLED`） |
