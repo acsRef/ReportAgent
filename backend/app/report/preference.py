@@ -20,11 +20,13 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-# chart_advisor 词表交集；中文/英文值均识别
+# chart_advisor 词表交集；中文/英文值均识别。
+# P16-LOW（review）：不 alias 单字「表」——「图表」等普通偏好文本会被宽 substring
+# 误判成 table；「表格」完整词已覆盖。
 _PREFERRED_TYPE_MAP: dict[str, str] = {
     "柱状图": "bar", "bar": "bar",
     "饼图": "pie", "pie": "pie",
-    "表格": "table", "表": "table", "table": "table",
+    "表格": "table", "table": "table",
 }
 _VISUAL_TYPES = frozenset({"pie", "bar"})
 

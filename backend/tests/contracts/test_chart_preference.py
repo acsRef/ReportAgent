@@ -66,6 +66,15 @@ class TestApplyChartPreference:
             cfg = _pie()
             assert apply_chart_preference(cfg, [pref]) is cfg
 
+    def test_wide_substring_not_matched(self):
+        # P16-LOW：单字「表」不 alias table——「图表更直观」这类偏好不得误判成表格
+        for pref in ["以后图表展示尽量简洁", "图表可以更直观一些", "报告中的图表需要简洁"]:
+            cfg = _pie()
+            assert apply_chart_preference(cfg, [pref]) is cfg
+        # 「表格」完整词仍应命中
+        cfg = apply_chart_preference(_pie(), ["报告只要表格"])
+        assert cfg["type"] == "table"
+
     def test_english_chart_words_recognized(self):
         cfg = apply_chart_preference(_pie(), ["prefer bar charts"])
         assert cfg["type"] == "bar"
