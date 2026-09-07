@@ -5,6 +5,17 @@
 
 ## 落地记录（追加）
 
+**G4 真 LLM SQL 行为手动门（2026-09-07 执行，已跑完）**：
+
+- 固化 `evaluation/tests/test_memory_llm_sql_behavior.py`（REPORTAGENT_E2E=1 gate，4 case：control 无记忆基线 / ① 偏好不偏 SQL / ② 参考续 SQL（结构复用+时间更新）/ ③ COUNT 不诱导）；服务链 ragent-py :8000（conda rag 环境）+ backend :8100（REPORTAGENT_E2E=1）全起，真 LLM（MiniMax-M2.7-highspeed）+ 真 embedding。
+- **结果（多轮采样，全 SQL 原文已打印归档）**：control 4/5 绿、① 3/3 绿、② 修复后 3/3 绿（`WHERE dd.year=2025` ✅）、③ 3/3 绿；2 次 LLM 彩票（1 次「SELECT 1 AS 无目标指标 LIMIT 0」+ 1 次 case② 输出 COUNT(*) 订单数量——均为 Requirement 需求解析随机，重跑收敛，P15 同款 LLM gating 协议；非 Memory 边界问题）。
+- **发现并修复 1 个真实 Memory→LLM 缺陷**：参考帧年份 anchor 诱导时间偏移——归因实验（同 query 无记忆对照）：「去年各区域销售情况」无记忆 → `2025-01-01~2026-01-01` ✅（正确读 prompt today）；有「2024 年各区域销售额排名」参考帧 → `2023` ❌（模型内部时钟幻觉被参考强化，「去年」算成 2023）。修复：`format_context_block` 防御帧补「**日期/年份以本 prompt 正文声明的今天为准**——参考数据中的年份仅作历史事实」→ 修复后重跑 =2025 ✅ ×3 稳定。这正是 G4 存在的意义——「错误的历史 Query Memory 可能通过参考帧 wording 诱导 SQL」（用户 review 清单第 4 项命中）。
+- 帧文案离线兼容：test_context / test_prompt_injection_boundaries / test_query_memory_sql_guidance / facade / decouple 39 passed 零回归。
+
+---
+
+### 原始记录保留
+
 分支 `p16-memory-evaluation` 8 commit：`5905998`(plan) → `719195c`(D4 EXECUTION drop preference) → `2d94213`(apply_chart_preference 纯函数) → `81f5eec`(report 链接线) → `073177d`(①⑧ 行为) → `106905e`(②⑤⑥⑦ guardrails) → `532188d`(③④ query memory SQL) → `f7e9ee5`(gold set 评测 30/30×3) → `28b0c2d`(真 embedding runner) → `50ce283`(回归适配 + CLAUDE.md §6)。
 
 - **全量回归**：backend **1176 passed / 1 skipped**（1116 baseline + ~25 P16 增量；test_tool_descriptions 一例随 async 节点适配 await）；evaluation 78 passed。
