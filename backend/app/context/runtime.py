@@ -80,6 +80,15 @@ class ContextRuntime:
                 str(user_id),
                 top_k_queries=decision.top_k_queries,
             ))
+        # Step 4.5（P16 D4）：契约 §三 修正——EXECUTION 档只收业务事实
+        # （memory_type ∉ {stable_preference, temporary_preference} → kind="semantic"，
+        # 如 insight/业务定义），preference 类（图表/格式偏好）不得进入 SQL 上下文，
+        # 防止"柱状图"类偏好污染 SQL 语义（Report 档 preference 才是主消费方；
+        # Requirement 档偏好影响需求理解，均不收窄）。
+        if agent_policy == AgentContextPolicy.EXECUTION:
+            recall_items = [
+                it for it in recall_items if it.get("kind") != "preference"
+            ]
         # Step 5：assemble (P4c post-review F2: 透传 remaining_token_budget)
         return self._assembler.assemble(
             conversation_context=conversation_context,

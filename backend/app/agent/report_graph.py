@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Optional, TypedDict
 
@@ -8,6 +9,7 @@ from langgraph.graph import END, StateGraph
 
 from app.llm import _format_tools_for_prompt, call_llm
 from app.models.contracts import QueryResult
+from app.report.preference import apply_chart_preference
 from app.report.spec import ComponentSpec, DataBinding, ReportSpec, TableSpec
 from app.tools.sql_tools import chart_advisor, insight_analyst
 from app.utils.text import safe_json_parse, strip_markdown_fence
@@ -15,6 +17,8 @@ from app.tools.registry import registry
 from app.infra.trace.sdk import traced_node
 from app.state.checkpoint_adapter import migrate_checkpoint
 from app.agent.prompts import build_report_plan_prompt
+
+logger = logging.getLogger(__name__)
 
 
 class ReportAgentState(TypedDict):
@@ -30,6 +34,12 @@ class ReportAgentState(TypedDict):
     assemble_results: list[dict]
     # 层7/B-3: 声明 trace_id（调用点早已传入），避免子图 span 落进共享桶。
     trace_id: str
+    # P16 D1：Report 偏好接线（memory-architecture §三 Report = Semantic ✅ Preference）——
+    # 父图透传会话归属，_plan_analysis 经 ContextRuntime 召回 preference 类记忆，
+    # 走确定性通道（apply_chart_preference）影响 chart_config，不注入 prompt。
+    session_id: Optional[str]
+    user_id: Optional[int]
+    report_preferences: list[str]
 
 
 def _validate_qr(qr_raw) -> Optional[QueryResult]:
@@ -47,8 +57,40 @@ def _validate_qr(qr_raw) -> Optional[QueryResult]:
 
 
 @traced_node("report_plan_analysis")
-def _plan_analysis(state: ReportAgentState) -> dict:
+async def _plan_analysis(state: ReportAgentState) -> dict:
     state = migrate_checkpoint(dict(state))  # P3 (γ): graph 入口 v1→v2 adapter
+
+    # P16 D2：Report 偏好接入（按 memory-architecture 契约补全——§二触发 2「报告生成时
+    # 召回图表偏好」+ §三 Report = Semantic ✅ Preference）。decision 层 REPORT 档已保证
+    # semantic=True / query=False / top_k_preferences=3，这里只取 preference 类条目；
+    # 视觉化偏好 → 确定性 apply_chart_preference（不注入 prompt，LLM 输出面不扩大）。
+    # 失败降级为空，绝不阻塞报告生成（与 SQL 链接入语义一致）。
+    report_preferences: list[str] = []
+    query = state.get("user_query") or ""
+    session_id = state.get("session_id")
+    if session_id and query:
+        try:
+            from app.context.runtime import ContextRuntime  # 局部 import 避免 cycle / 测试 patch
+
+            _uid_raw = state.get("user_id")
+            try:
+                _uid = int(_uid_raw) if _uid_raw not in (None, "") else 0
+            except (TypeError, ValueError):
+                _uid = 0
+            _bundle = await ContextRuntime().build(
+                session_id=session_id,
+                user_id=_uid,
+                query=query,
+                agent="report_plan_analysis",  # resolver report_* → REPORT 档
+                state_dict=dict(state),
+            )
+            report_preferences = [
+                it["raw_text"] for it in _bundle["recall_items"]
+                if it.get("source") == "memory_preference" or it.get("kind") == "preference"
+            ]
+        except Exception as exc:
+            logger.warning("ContextRuntime.build (report) failed: %s", exc)
+
     qr_raw = state.get("query_result")
     if not qr_raw:
         return {"assemble_plan": [], "assemble_step_idx": 0, "assemble_results": []}
@@ -75,7 +117,10 @@ def _plan_analysis(state: ReportAgentState) -> dict:
     else:
         steps = [{"tool": "chart_advisor", "args": {}, "description": "推荐图表"}]
 
-    return {"assemble_plan": steps, "assemble_step_idx": 0, "assemble_results": []}
+    return {
+        "assemble_plan": steps, "assemble_step_idx": 0, "assemble_results": [],
+        "report_preferences": report_preferences,
+    }
 
 
 @traced_node("report_run_step")
@@ -146,6 +191,10 @@ def _build_output(state: ReportAgentState) -> dict:
             "rows": qr.rows if qr else [],
         }, ensure_ascii=False, default=str)
         chart_config = safe_json_parse(chart_advisor(data_json)) or {}
+
+    # P16 D3：视觉化偏好确定性应用（memory-architecture §二触发 2）——ContextRuntime
+    # 召回的 preference 文本 → chart type override；词表外偏好/数据不支持时让位。
+    chart_config = apply_chart_preference(chart_config, state.get("report_preferences") or [])
 
     # P10：v2 spec 带 provenance——chart 行/字段锚定 QueryResult（validator 钉），
     # table 列直通 QueryResult 列名，kpi 不生产（无业务诉求，schema+校验机制就位）。

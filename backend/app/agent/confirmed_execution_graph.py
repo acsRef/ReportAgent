@@ -340,6 +340,10 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
         "assemble_step_idx": 0,
         "assemble_results": [],
         "trace_id": state.get("trace_id", ""),
+        # P16 D1：Report 偏好接线——父 state 透传会话归属，report 链经 ContextRuntime
+        # 召回 preference（memory-architecture §三 Report = Semantic ✅ Preference）。
+        "session_id": state.get("session_id"),
+        "user_id": state.get("user_id"),
     }, _callbacks_only(config))
 
     qr = state.get("query_result")

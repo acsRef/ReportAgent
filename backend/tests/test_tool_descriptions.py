@@ -67,7 +67,7 @@ def test_whitelist_parameter_filters() -> None:
     assert "- trend_analysis:" not in block
 
 
-def test_report_graph_prompt_menu_covers_all_five_tools(monkeypatch) -> None:
+async def test_report_graph_prompt_menu_covers_all_five_tools(monkeypatch) -> None:
     """report_graph 的规划 prompt 必须列出全部 5 个工具（含 insight_analyst），
     且 _run_step 能分发 insight_analyst——菜单与执行不允许漂移。"""
     import app.agent.report_graph as rg
@@ -87,7 +87,7 @@ def test_report_graph_prompt_menu_covers_all_five_tools(monkeypatch) -> None:
         "row_count": 2,
         "status": "SUCCESS",
     }
-    result = rg._plan_analysis({"query_result": qr, "user_query": "x"})
+    result = await rg._plan_analysis({"query_result": qr, "user_query": "x"})  # P16: 节点含 async（ContextRuntime 接入）
     assert captured, "plan prompt 未捕获"
     prompt = captured[0]
     for name in ANALYSIS_TOOLS:

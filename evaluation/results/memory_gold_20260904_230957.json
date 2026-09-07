@@ -1,0 +1,401 @@
+{
+  "ts": "2026-09-04T23:09:57",
+  "dataset": "D:\\PyProject\\ReportAgent\\evaluation\\memory_gold_cases.json",
+  "cases": 25,
+  "recall_at_1": 0.84,
+  "recall_at_3": 0.96,
+  "mrr": 0.9,
+  "clean": 1.0,
+  "per_case": [
+    {
+      "id": "q1",
+      "query": "2024年各区域销售额报告用柱状图展示",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "pref_report_bar",
+        "pref_region_annual",
+        "fact_2024_peak"
+      ],
+      "gold_ranks": [
+        1,
+        2
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q2",
+      "query": "区域销售报告想要饼图直观些",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "pref_report_pie",
+        "pref_region_annual"
+      ],
+      "gold_ranks": [
+        1,
+        3
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q3",
+      "query": "报告展示用表格就行",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "pref_report_table"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q4",
+      "query": "销售分析按月来看",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "pref_region_monthly"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q5",
+      "query": "金额展示格式有什么讲究",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "pref_amount_decimal"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q6",
+      "query": "退货报告用表格呈现",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "pref_report_table",
+        "pref_return_table"
+      ],
+      "gold_ranks": [
+        2,
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q8",
+      "query": "华东区域今年情况做份报告",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "fact_region_three",
+        "pref_region_annual"
+      ],
+      "gold_ranks": [
+        2,
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q9",
+      "query": "报告要柱状图和表格结合",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "pref_report_bar",
+        "pref_report_table"
+      ],
+      "gold_ranks": [
+        3,
+        2
+      ],
+      "recall_at_1": false,
+      "recall_at_3": true,
+      "mrr": 0.5,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q10",
+      "query": "GMV 和销售额是什么关系",
+      "agent": "report_plan_analysis",
+      "gold": [
+        "fact_gmv_net"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q12",
+      "query": "生成华东区域销售分析报告",
+      "agent": "requirement_analyze",
+      "gold": [
+        "fact_region_three",
+        "pref_region_annual"
+      ],
+      "gold_ranks": [
+        3,
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q13",
+      "query": "GMV 口径是什么",
+      "agent": "requirement_analyze",
+      "gold": [
+        "fact_gmv_net"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q15",
+      "query": "继续华东门店销售分析",
+      "agent": "requirement_analyze",
+      "gold": [
+        "fact_store_top"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q16",
+      "query": "退货率口径怎么算",
+      "agent": "requirement_analyze",
+      "gold": [
+        "fact_return_rate"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q17",
+      "query": "去年 GMV 销售口径",
+      "agent": "requirement_analyze",
+      "gold": [
+        "fact_gmv_net"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q18",
+      "query": "促销表现报告按季度看",
+      "agent": "requirement_analyze",
+      "gold": [
+        "fact_promo_q3"
+      ],
+      "gold_ranks": [],
+      "recall_at_1": false,
+      "recall_at_3": false,
+      "mrr": 0.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q19",
+      "query": "统计2024年各区域销售额",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "qry_region_sales"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q20",
+      "query": "去年各区域销售情况",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "qry_region_sales"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q21",
+      "query": "按月看销售走势",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "qry_monthly_trend"
+      ],
+      "gold_ranks": [
+        2
+      ],
+      "recall_at_1": false,
+      "recall_at_3": true,
+      "mrr": 0.5,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q22",
+      "query": "门店销售额排行",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "qry_store_rank"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q23",
+      "query": "促销对销售额的影响",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "qry_promo_effect"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q24",
+      "query": "按月退货金额统计",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "qry_return_monthly"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q25",
+      "query": "统计各区域 GMV 销售额",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "fact_gmv_net",
+        "qry_region_sales"
+      ],
+      "gold_ranks": [
+        2,
+        5
+      ],
+      "recall_at_1": false,
+      "recall_at_3": true,
+      "mrr": 0.5,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q27",
+      "query": "各区域季度销售对比",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "qry_region_quarter"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q28",
+      "query": "华东区域2024年销售额",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "qry_region_sales"
+      ],
+      "gold_ranks": [
+        1
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    },
+    {
+      "id": "q30",
+      "query": "生成华东门店销售报告",
+      "agent": "confirmed_execution_sql_agent",
+      "gold": [
+        "fact_store_top",
+        "qry_store_rank"
+      ],
+      "gold_ranks": [
+        1,
+        4
+      ],
+      "recall_at_1": true,
+      "recall_at_3": true,
+      "mrr": 1.0,
+      "forbidden_hits": []
+    }
+  ]
+}
