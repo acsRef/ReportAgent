@@ -28,7 +28,7 @@
 | L2 policy | 该不该召？ | SelectiveRecallPolicy 24 钉 + 四触发条件（`test_selective_recall_benefit.py`） |
 | L3 retrieval | 能召对吗？ | **Gold Set**：25 记忆 + 30 金标 queries，词交确定性设计，**30/30 ×3 稳定**（`test_memory_gold_recall.py`） |
 | L4 真指标 | 真实语义空间好不好？ | 真 embedding runner ×2 数字一致：**Recall@1 0.84 / Recall@3 0.96 / MRR 0.90 / Clean 1.0**（快照 `evaluation/results/memory_gold_20260904_230957.json`） |
-| L5 行为 | 记忆让 Agent 变好/变坏？ | 8 个行为测试 + **真 LLM G4 门**（发现真回归） |
+| L5 行为 | 记忆让 Agent 变好/变坏？ | 8 个行为测试 + **真 LLM G4 门**（发现真回归）。全量基线：backend **1182 passed/1 skipped** + evaluation 78 passed + frontend 301 passed |
 
 **面试金句**：`fake embedding 只钉链路正确性（同词簇必中/零交集必不召），真 embedding 才产出可引用指标——两个数字不能说成全系统 Recall。`
 
@@ -43,7 +43,7 @@ Memory OFF（同 query、无记忆）：WHERE order_date >= '2025-01-01'  ✅（
 Memory ON （有 2024 参考帧）  ：WHERE payment_date >= '2023-01-01' ❌（年份偏移）
 ```
 
-同一个 query、唯一变量是记忆 → **因果成立**：参考帧里的年份 anchor 强化了模型内部时钟幻觉（训练截止 2024）→ 「去年」被算成 2023。这不是 retrieval precision 问题——**召回是正确的，污染发生在 context wording**。
+同一个 query、唯一变量是记忆 → **因果成立**：参考帧里的年份 anchor 放大了模型内建时钟（约 2024，早于当下）与实际日期的偏差 → 「去年」被算成 2023。这不是 retrieval precision 问题——**召回是正确的，污染发生在 context wording**。
 
 **修复**：`format_context_block` 防御帧（本来就约束「表名/列名以可用表结构为准」）补一句「**日期/年份以本 prompt 声明的今天为准——参考数据中的年份仅作历史事实**」→ 修复后同 case 跑 3 次全部 `year = 2025` ✅。
 
@@ -77,7 +77,7 @@ Memory ON （有 2024 参考帧）  ：WHERE payment_date >= '2023-01-01' ❌（
    → 三种职责的不确定性完全不同：Requirement 决定「理解对了吗」（澄清是状态机），Execution 决定「SQL 对不对」（诊断/修复环），Report 决定「怎么呈现」（不能编数据 = 三层 Validator 钉死）。拆开 = 每环有独立预算/状态/失败语义，合起来是 Agent≠Workflow：`agent-flow.md` + 三图边界。
 
 2. **为什么 RAG 不直接 import，而走 MCP？**
-   → 系统边界强制：ReportAgent 是 Application Runtime，RAG 项目是 Retrieval Runtime。Embedding/Chunking/Vector Search 是 RAG 的事，ReportAgent 只通过 `MCP Client → RAG MCP Server` 用——这条是 Forbidden Pattern（CLAUDE.md §2），有测试钉（mcp-contract.md）。副产品：Schema 与记忆检索在 MCP down 时有明确的 fallback 行为（`X-E2E-McpDown` seam + 本地工具兜底）。
+   → 系统边界强制：ReportAgent 是 Application Runtime，RAG 项目是 Retrieval Runtime。Embedding/Chunking/Vector Search 是 RAG 的事，ReportAgent 只通过 `MCP Client → RAG MCP Server` 用——这条是 Forbidden Pattern（CLAUDE.md §2），配套：`mcp-contract.md` 冻结文档 + MCP 相关 contract 测试 + A-1~A-8/B-1~B-6 双端套件。副产品：Schema 与记忆检索在 MCP down 时有明确的 fallback 行为（`X-E2E-McpDown` seam + 本地工具兜底）。
 
 3. **Memory 何时读、何时写、为什么不污染？**
    → 读：Recall Before Agent + Selective Recall 四触发（历史引用/偏好任务/业务定义/Query 相似），chitchat 与完整 query 不召（policy 24 钉）；写：Write After Reliable Event——explicit statement → active（P16.5 主链接通）、LLM-inferred → candidate 不召回、SQL 成功才进 Query Memory；不污染的三道闸：recall SQL active-only + EXECUTION 档 drop preference + 防御帧（schema/today 权威声明）。
@@ -92,7 +92,7 @@ Memory ON （有 2024 参考帧）  ：WHERE payment_date >= '2023-01-01' ❌（
    → Tool Metadata 14 字段统一面（name/purpose/when_to_use/when_not_to_use/input/output/pre/post/…）——Tool Description 是 Agent Contract，写模糊 Agent 必乱调。`test_tool_descriptions.py` 钉最小面 + report 菜单 5 工具与执行分发不允许漂移。
 
 7. **换模型怎么证明 Prompt 没退化？**
-   → P7 Prompt 版本化（6 层结构 + META）→ P14 Evaluation 骨架（99 子包 + baseline_cases.json 13 类冻结 + TurnExpectation）→ P12 Playwright 语义 kind keying（不受日期/schema 漂移）。真 LLM 行为层：G4 env-gated 门 + P15 e2e 6 场景——模型彩票用「重跑收敛 + 抽样协议」处理（run#1 6/8 → run#2 8/8，P15 记录）。
+   → P7 Prompt 版本化（6 层结构 + META）→ P14 Evaluation 骨架（9 子包 + dispatcher + baseline_cases.json 13 类冻结 + TurnExpectation）→ P12 Playwright 语义 kind keying（不受日期/schema 漂移）。真 LLM 行为层：G4 env-gated 门 + P15 e2e 6 场景——模型彩票用「重跑收敛 + 抽样协议」处理（run#1 6/8 → run#2 8/8，P15 记录）。
 
 8. **MCP timeout 怎么处理？**
    → P9 reliability：MCP retry 预算 2 + 显式 unavailable/timeout（不许默默返回空数组伪装「没结果」）→ 上层决定 retry/clarify/fallback/fail；MCP-down 主链有 `X-E2E-McpDown` seam 验证降级路径（P15 日志 marker 直证）。
@@ -104,7 +104,7 @@ Memory ON （有 2024 参考帧）  ：WHERE payment_date >= '2023-01-01' ❌（
     → ReportSpec 带 provenance（DataBinding field⊆QueryResult 列）+ 三层 Validator：结构存在性 / KPI 聚合重算（数值必须等于 aggregation 重算）/ 行存在性（fabrication 检测）→ violations → FAILED + `REPORT_VALIDATION_ERROR`（永不伪造成功，三态全落库）；insight 文本不入正则审计（叙事文本非数值事实）。
 
 11. **前端怎么知道当前在 Tool Calling / SQL / Repair？**
-    → SSE 事件契约（six 事件基线 + progress 族，P11）：transport→schema→dispatch 三层，`parseAnalysisSSEEvent` 唯一 schema 层；trace progress 帧由后端节点→kind×status 映射推送（`infra/execution/progress.py`），ProgressCard 真信号驱动（移除假定时器）；report 完成态经 done final_phase + ReportVersion 状态（GENERATING/DONE/ERROR）。
+    → SSE 事件契约（**七事件**基线 phase/requirement/trace/thinking/report/error/done + progress 族，P11）：transport→schema→dispatch 三层，`parseAnalysisSSEEvent` 唯一 schema 层；trace progress 帧由后端节点→kind×status 映射推送（`infra/execution/progress.py`），ProgressCard 真信号驱动（移除假定时器）；report 完成态经 done final_phase + ReportVersion 状态（GENERATING/DONE/ERROR）。
 
 12. **你怎么证明这次重构比原来好？**
     → **Golden Set Before/After**：P0 baseline lock（20 例含行为期望 + 离线 checker + 真 API runner + 首份快照）→ 每 Phase 落地跑全量对比（`p4c-golden-before-after.md`、`p7-golden-before-after.md`、`p8-golden-before-after.md`）；**回归红线**：任一 Phase 后全量 offline suite 不回退（基线 1176→1182 passed 记录在 CLAUDE.md）；指标快照 + 测试数变化逐 Phase 可查。
@@ -119,6 +119,9 @@ Memory ON （有 2024 参考帧）  ：WHERE payment_date >= '2023-01-01' ❌（
 | Gold Set | `evaluation/memory_gold_cases.json`（25 记忆 + 30 queries） |
 | 截图集（7 张） | `screenshots/`（S1 主链 / S2 偏好记忆 / S3 多轮 / S4 澄清+报告） |
 | 30k 真实化数据 | `backend/scripts/seed_business_p15prelude.sql`（现实名称/季节/促销/头部店） |
+| 行为测试锚点 | `backend/tests/persistence/`：`test_report_chart_preference_behavior.py`①⑧ / `test_memory_agent_layer_guardrails.py`②⑤⑥⑦ / `test_query_memory_sql_guidance.py`③④ / `test_memory_gold_recall.py`(30/30) |
+| 契约/纯函数锚点 | `backend/tests/contracts/test_chart_preference.py`（12 例）+ `test_selective_recall_benefit.py` + `test_memory_write_pipeline_contract.py` |
+| 真 LLM 门 | `evaluation/tests/test_memory_llm_sql_behavior.py`（REPORTAGENT_E2E=1，4 case） |
 | 全量测试基线 | backend 1182 passed / 1 skipped + frontend 301 passed + evaluation 78 passed |
 
 ## ㊄ 诚实边界（主动讲，比被追问强）
