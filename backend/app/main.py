@@ -663,6 +663,38 @@ async def _chat_requirement_analysis(
                 "event": "phase",
                 "data": json.dumps({"phase": "parsing"}, ensure_ascii=False),
             }
+            # P16.5：Explicit preference statement（§五）——图前短路。用户明说
+            # 「以后都用柱状图」→ 写 active stable_preference（记得住、进报告链），
+            # 不复用 requirement 图（省一次 LLM + 不产 noise draft）；渲染复用
+            # chitchat 轻响应形态（phase idle + answer.text，前端零改动）。
+            # best-effort：检测/写入失败一律走主链（记忆不是核心 correctness 依赖）。
+            try:
+                from app.memory.manager import (
+                    extract_explicit_preference,
+                    remember_explicit_preference,
+                )
+
+                if extract_explicit_preference(request.user_query) is not None:
+                    try:
+                        await remember_explicit_preference(user["id"], request.user_query)
+                        reply = f"好的，已记住偏好：{request.user_query}"
+                    except Exception as exc:
+                        logger.warning("remember_explicit_preference failed: %s", exc)
+                        reply = "好的，已记住。"
+                    phase = "idle"  # P16.5：先复位变量再发——done.final_phase 读它（P11 F4 同坑）
+                    yield {
+                        "event": "phase",
+                        "data": json.dumps({"phase": "idle"}, ensure_ascii=False),
+                    }
+                    yield {
+                        "event": "report",
+                        "data": json.dumps(
+                            {"answer": {"text": reply}}, ensure_ascii=False,
+                        ),
+                    }
+                    return
+            except Exception as exc:
+                logger.warning("explicit preference detection failed: %s", exc)
             with mcp_down.scoped(_mcp_down):
                 result = await graph.ainvoke(initial, config)
 
