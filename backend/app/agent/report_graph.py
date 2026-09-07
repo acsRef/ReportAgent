@@ -164,7 +164,10 @@ def _run_step(state: ReportAgentState) -> dict:
         text = chart_advisor(data_json)
 
     results = list(state.get("assemble_results", []))
-    results.append({"step": step.get("description", tool_name), "result": text})
+    # P16.5 截图验收发现：保留 tool 名——_build_output 按确定性 tool 名分流
+    # （description 是 LLM 自由文本，「数据可视化」等描述不含「图表/chart」时
+    # chart JSON 会被误拼进 insight——真产品 bug）。
+    results.append({"step": step.get("description", tool_name), "tool": tool_name, "result": text})
 
     return {"assemble_step_idx": idx + 1, "assemble_results": results}
 
@@ -176,7 +179,8 @@ def _build_output(state: ReportAgentState) -> dict:
     insight_text = ""
 
     for r in results:
-        if "图表" in r["step"] or "chart" in r["step"]:
+        # P16.5：tool 名分流优先（确定性）——description 仅作兜底（「图表」/「chart」）
+        if r.get("tool") == "chart_advisor" or "图表" in r.get("step", "") or "chart" in r.get("step", ""):
             try:
                 chart_config = json.loads(r["result"])
             except (json.JSONDecodeError, Exception):
