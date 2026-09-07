@@ -26,6 +26,7 @@
 | Plan | 主题 | 备注 |
 |---|---|---|
 | [2026-08-25-refactor-master-freeze.md](2026-08-25-refactor-master-freeze.md) | 重构冻结基线（伞形 plan，已合并 V2 完整版）：架构契约 / 目标目录冻结 / Memory & Context Runtime / Reliability / Report Runtime / MCP 边界 / Unified LLM Migration / Playwright / Langfuse / Evaluation，P0–P15 阶段门 + 逐 Phase 验收清单 + DoD + 12 面试问题 + ragent-py 模型快照 | 宪法级文档；各 Phase 启动时另开实施 plan 并回链本文件 |
+| [2026-09-07-preference-explicit-wiring.md](2026-09-07-preference-explicit-wiring.md) | P16.5 Preference Explicit Wiring（简历盘点发现 + 用户拍板）：§五 契约 explicit→active 写入口无生产 caller——chat 入口图前短路（正则检测→remember_explicit_preference→idle 轻响应复用 chitchat 渲染，前端零改动）+ api 3 例 + 真 PG 闭环 1 例 | 分支 `p16-5-preference-explicit-wiring`；T0 plan 落库 |
 
 ## 已完成
 

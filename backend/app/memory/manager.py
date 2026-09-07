@@ -111,3 +111,12 @@ async def remember_explicit_preference(
         status=MemoryStatus.ACTIVE.value,
         confidence=CONFIDENCE_EXPLICIT_STATEMENT.value,
     )
+
+
+def extract_explicit_preference(text: str):
+    """P16.5：explicit preference 正则检测——chat 入口图前短路用（§五）。
+
+    与 `remember_explicit_preference` 共用同一 MemoryPolicy 规则源（单一真源，
+    避免「检测能命中、写入不命中」的分裂）；返回 MemoryEntry | None。
+    """
+    return _policy.extract_preference(text)
