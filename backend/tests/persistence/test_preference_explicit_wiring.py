@@ -67,6 +67,47 @@ def _cleanup(user_id: int):
     conn.close()
 
 
+def test_repeat_preference_statement_supersedes_to_single_active(monkeypatch):
+    """重申同偏好（第二次 UI 语句）→ supersede 生效：该 content 保持单条 active
+    （P16.5 修复前 supersede 缺 int 归一打 DataError——重申会产生双 active）。"""
+    marker = f"uipref{uuid.uuid4().hex[:6]}"
+    user_id = _make_user()
+    sid = f"s-p165-{uuid.uuid4().hex[:8]}"
+
+    from app.infra.memory import query_memory as qm_mod
+    from app.infra.memory import user_memory as um_mod
+
+    class _FakeEmbedder:
+        async def embed_or_none(self, text: str):
+            v = [0.0001] * int(os.getenv("EMBEDDING_DIM", "1536"))
+            if "柱状图" in text:
+                v[9] = 1.0
+            return v
+
+    monkeypatch.setattr(um_mod, "get_embedder", lambda: _FakeEmbedder())
+    monkeypatch.setattr(qm_mod, "get_embedder", lambda: _FakeEmbedder())
+
+    try:
+        def body():
+            return _drive_chat(f"以后报告都用柱状图 {marker}", user_id, sid)
+
+        _run(body())
+        _run(body())  # 重申同句
+
+        conn = _conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT count(*), count(*) FILTER (WHERE status='active') "
+            "FROM memory.semantic_entry WHERE user_id=%s AND content LIKE %s",
+            (user_id, f"%{marker}%"),
+        )
+        total, active = cur.fetchone()
+        conn.close()
+        assert total == 1 and active == 1, f"重申应 supersede 到单条 active: total={total} active={active}"
+    finally:
+        _cleanup(user_id)
+
+
 def test_ui_preference_statement_writes_active_and_recallable(monkeypatch):
     """① UI 偏好句 → SSE idle 轻响应（不进图）+ DB active/high stable_preference 行
     ② 随后 report 档 ContextRuntime.build 召回该偏好（report_preferences 链路闭环）。

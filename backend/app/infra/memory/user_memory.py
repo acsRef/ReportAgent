@@ -75,10 +75,10 @@ class UserMemory:
                 # F1 修：promote 同步更新 memory_type——否则 LLM-inferred "insight" 行
                 # 被 explicit stable_preference 重申后仍 memory_type='insight'，永远进不去
                 # get_user_preferences() 过滤的 (stable_preference, temporary_preference) 子集。
-                # 注：asyncpg prepared statement 要求 $N 连续（否则 IndeterminateDatatypeError），
-                # 所以占位符编为 $1..$5，不跳号。
+                # P16.5：superseded 行被用户重申（explicit 重写）→ 恢复 active——
+                # 否则 supersede→save 去重顺序使「重申后偏好消失」（active=0）。
                 promote = (
-                    existing["status"] == "candidate" and status == "active"
+                    existing["status"] in ("candidate", "superseded") and status == "active"
                 )
                 await conn.execute(
                     "UPDATE memory.semantic_entry SET access_count=access_count+1, "
@@ -242,6 +242,9 @@ class UserMemory:
         V1 仅同 content 精确冲突处理（显式重申同一偏好时避免双 active）；
         语义冲突 supersede 属后期。
         """
+        # P16.5：user_id 归一 int（列是 integer；str 直绑 int 列会 DataError——
+        # remember_explicit_preference 主链接入后 real 路径必调此函数，前此无 caller 潜伏）。
+        user_id = int(user_id)
         pool = get_pool()
         async with pool.acquire() as conn:
             res = await conn.execute(
