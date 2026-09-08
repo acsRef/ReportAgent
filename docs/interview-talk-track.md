@@ -117,7 +117,7 @@ Memory ON （有 2024 参考帧）  ：WHERE payment_date >= '2023-01-01' ❌（
 |---|---|
 | 真实指标快照 | `evaluation/results/memory_gold_20260904_230957.json`（Recall@1 0.84/@3 0.96/MRR 0.90/Clean 1.0） |
 | Gold Set | `evaluation/memory_gold_cases.json`（25 记忆 + 30 queries） |
-| 截图集（7 张） | `screenshots/`（S1 主链 / S2 偏好记忆 / S3 多轮 / S4 澄清+报告） |
+| 截图集（6 场景 10 张） | `screenshots/`（S1 主链 / S2 偏好记忆 / S3 多轮 / S4 澄清+报告 / S5 repair 演示 / S6 跨会话 Query Memory） |
 | 30k 真实化数据 | `backend/scripts/seed_business_p15prelude.sql`（现实名称/季节/促销/头部店） |
 | 行为测试锚点 | `backend/tests/persistence/`：`test_report_chart_preference_behavior.py`①⑧ / `test_memory_agent_layer_guardrails.py`②⑤⑥⑦ / `test_query_memory_sql_guidance.py`③④ / `test_memory_gold_recall.py`(30/30) |
 | 契约/纯函数锚点 | `backend/tests/contracts/test_chart_preference.py`（12 例）+ `test_selective_recall_benefit.py` + `test_memory_write_pipeline_contract.py` |
