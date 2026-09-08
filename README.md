@@ -102,7 +102,7 @@ flowchart TB
 - **Agent 层隔离**：`ContextRuntime.build()` 产出层保证——candidate / expired / 他人（cross-user）的记忆不进入任何 Agent 上下文（不只靠 DB 查询过滤）。
 - **召回质量有评测证据**：Layer 3 Gold Set（25 记忆 + 30 金标 queries，30/30 稳定）+ 真 embedding 指标快照 **Recall@1 0.84 / Recall@3 0.96 / MRR 0.90 / Clean 1.0**（`evaluation/results/`）+ G4 真 LLM 行为门（发现并修复「参考帧年份 anchor 诱导时间偏移」——防御帧声明「时间以本 prompt 声明的今天为准」）。
 
-**checkpoint 持久化**（`app/infra/checkpoint/factory.py`）：dev 用 `MemorySaver`（便于本地单步），非 dev 用 **`AsyncPostgresSaver`**（checkpoint 落 PG，跨进程重启不丢、支持多实例）。
+**checkpoint 持久化**（`app/infra/checkpoint/factory.py`）：dev 用 `MemorySaver`（便于本地单步），非 dev 优先 `AsyncPostgresSaver`（落 PG、跨进程重启不丢、支持多实例）。**fail-safe fallback**：非 dev 环境若 `DATABASE_URL` 缺失，**降级为 `MemorySaver` 并 log warning**（`checkpoint: DATABASE_URL unset, falling back to MemorySaver`）——而非拒绝启动，原因是 checkpoint 不阻塞主链路；运维应立即补配 `DATABASE_URL`，否则多实例重启会丢 state。
 
 ## 技术栈
 
@@ -113,10 +113,10 @@ flowchart TB
 | 渲染 | ECharts 6 (SVG) + ReportBlock 组件体系 |
 | API 协议 | SSE v2 流式推送（七事件 phase/requirement/trace/thinking/report/error/done + progress 族） |
 | 认证 | JWT（PyJWT，单 token，无 refresh，24h）；fail-closed 启动安全闸 |
-| Agent | LangGraph 双图 + psycopg2 + sqlglot；checkpoint 默认 MemorySaver（dev）/ **PostgresSaver**（非 dev，落 PG、跨重启持久） |
+| Agent | LangGraph 双图 + psycopg2 + sqlglot；checkpoint 默认 MemorySaver（dev）/ PostgresSaver（非 dev + 已配 `DATABASE_URL`，未配时降级 MemorySaver + warning——见「checkpoint 持久化」节） |
 | 记忆 | 分层对话上下文（L1 原始 / L2 摘要覆盖重写 / L2.5 归档 / L3 结构化事实）+ pgvector 语义召回（语义主导，LFU/LRU 作排序因子 + 容量上限淘汰）；mem0 可选作 L3 抽取引擎（`MEM0_ENABLED`） |
 | LLM | OpenAI 兼容（MiniMax，可配置） |
-| Embedding | SiliconFlow API（pgvector 语义搜索，失败降级关键字匹配） |
+| Embedding | SiliconFlow API（pgvector 语义搜索，当前默认模型 `Qwen/Qwen3-Embedding-8B` 实测输出 **1536 维**，三处同源：`.env` `EMBEDDING_DIM` / `init_pg.sql` `VECTOR(n)` / `main.py` 启动校验；改维度必须三处一起改。失败降级关键字匹配） |
 | 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型：2 事实 + 5 维度零售订单，见 `backend/scripts/seed_business_p15prelude.sql`；数据覆盖 2024） |
 | 测试 | 分层：离线 gate（`pytest` backend/tests，含真 PG persistence）+ Contract E2E（Playwright，mock LLM，per-PR CI）+ Live evaluation（`REPORTAGENT_E2E=1`，真实 LLM/MCP/PG，夜间/手动） |
 
@@ -142,7 +142,11 @@ docker run -d --name ragent-postgres \
 MINIMAX_API_KEY=your-minimax-key
 SILICONFLOW_API_KEY=your-siliconflow-key
 DATABASE_URL=postgresql://ragent:ragent@localhost:5432/ragent
-# LLM_MODEL / LLM_BASE_URL / EMBEDDING_MODEL / EMBEDDING_DIM(必须 1536) 可选
+# LLM_MODEL / LLM_BASE_URL / SILICONFLOW_BASE_URL 可选
+# Embedding：当前默认模型 `Qwen/Qwen3-Embedding-8B` 实测输出 1536 维（与
+# `.env.example EMBEDDING_DIM=1536`、`init_pg.sql` 两处 `VECTOR(1536)`、
+# `main.py` 启动校验 `VECTOR_DIM` 三处同源；真改维度必须三处一起改，缺一启动失败）。
+SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
 
 # 运行环境 + 开发逃生门（见下方「生产部署安全前置」）
 APP_ENV=development
@@ -280,7 +284,7 @@ backend/app/
   services/                    — requirement / report_version / snapshot / template
   infra/db/                    — asyncpg 池 + requirement/report_version 仓储
   infra/memory/                — user_memory（pgvector 召回 + LFU/LRU 淘汰）/ query_memory / mem0_extractor
-  infra/checkpoint/            — factory（MemorySaver/PostgresSaver 按环境切换）/ session
+  infra/checkpoint/            — factory（MemorySaver/PostgresSaver 按环境切换；非 dev + DATABASE_URL 缺失时降级 MemorySaver + warning）/ session
 
 frontend/src/
   components/atelier/          — 18 个组件 + ToastProvider/useToast + atelier.css
