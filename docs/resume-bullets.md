@@ -1,7 +1,7 @@
 # Resume Bullets（简历草稿 → 用户改写）
 
 > 使用方式：先读 [interview-talk-track.md](interview-talk-track.md) 五大叙事，再回来看本稿——每条 bullet 都能展开成 2-3 分钟叙事，且全部有证据锚点。
-> 数字口径：backend 1182 passed / 1 skipped、frontend 301 passed、evaluation 78 passed（2026-09-07 基线）。
+> 数字口径：backend 1182 passed / 1 skipped、frontend 302 passed、evaluation 78 passed（2026-09-07 基线）。
 
 ---
 

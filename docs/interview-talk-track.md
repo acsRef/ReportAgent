@@ -28,7 +28,7 @@
 | L2 policy | 该不该召？ | SelectiveRecallPolicy 24 钉 + 四触发条件（`test_selective_recall_benefit.py`） |
 | L3 retrieval | 能召对吗？ | **Gold Set**：25 记忆 + 30 金标 queries，词交确定性设计，**30/30 ×3 稳定**（`test_memory_gold_recall.py`） |
 | L4 真指标 | 真实语义空间好不好？ | 真 embedding runner ×2 数字一致：**Recall@1 0.84 / Recall@3 0.96 / MRR 0.90 / Clean 1.0**（快照 `evaluation/results/memory_gold_20260904_230957.json`） |
-| L5 行为 | 记忆让 Agent 变好/变坏？ | 8 个行为测试 + **真 LLM G4 门**（发现真回归）。全量基线：backend **1182 passed/1 skipped** + evaluation 78 passed + frontend 301 passed |
+| L5 行为 | 记忆让 Agent 变好/变坏？ | 8 个行为测试 + **真 LLM G4 门**（发现真回归）。全量基线：backend **1182 passed/1 skipped** + evaluation 78 passed + frontend 302 passed |
 
 **面试金句**：`fake embedding 只钉链路正确性（同词簇必中/零交集必不召），真 embedding 才产出可引用指标——两个数字不能说成全系统 Recall。`
 
@@ -122,7 +122,7 @@ Memory ON （有 2024 参考帧）  ：WHERE payment_date >= '2023-01-01' ❌（
 | 行为测试锚点 | `backend/tests/persistence/`：`test_report_chart_preference_behavior.py`①⑧ / `test_memory_agent_layer_guardrails.py`②⑤⑥⑦ / `test_query_memory_sql_guidance.py`③④ / `test_memory_gold_recall.py`(30/30) |
 | 契约/纯函数锚点 | `backend/tests/contracts/test_chart_preference.py`（12 例）+ `test_selective_recall_benefit.py` + `test_memory_write_pipeline_contract.py` |
 | 真 LLM 门 | `evaluation/tests/test_memory_llm_sql_behavior.py`（REPORTAGENT_E2E=1，4 case） |
-| 全量测试基线 | backend 1182 passed / 1 skipped + frontend 301 passed + evaluation 78 passed |
+| 全量测试基线 | backend 1182 passed / 1 skipped + frontend 302 passed + evaluation 78 passed |
 
 ## ㊄ 诚实边界（主动讲，比被追问强）
 
