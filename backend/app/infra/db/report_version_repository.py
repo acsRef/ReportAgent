@@ -147,3 +147,29 @@ async def set_favorite(
         session_id, user_id, version, favorite,
     )
     return row is not None
+
+
+async def find_done_by_draft(
+    conn: Any,
+    *,
+    session_id: str,
+    user_id: int,
+    requirement_draft_id: int,
+) -> dict | None:
+    """B7 幂等：该 draft 是否已产出「执行完成」的版本。
+
+    判定只认 `status='done'`（SUCCESS / EMPTY 都算已执行完）。**故意排除
+    `status='error'`**：FAILED 必须允许用户重试，否则一次失败就把这个 draft
+    永久锁死。返回最近的一条（理论上同一 draft 只会有一条 done）。
+    """
+    row = await conn.fetchrow(
+        """SELECT id, version, parent_version, title, status, report_payload,
+                  query_snapshot, trace_id, created_at
+           FROM agent.report_version
+           WHERE session_id = $1 AND user_id = $2
+             AND requirement_draft_id = $3 AND status = 'done'
+           ORDER BY version DESC
+           LIMIT 1""",
+        session_id, user_id, requirement_draft_id,
+    )
+    return dict(row) if row else None

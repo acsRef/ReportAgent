@@ -44,6 +44,10 @@ def _patch_upstream(monkeypatch, ceg, query_result):
     async def fake_load(state):
         return {}
 
+    async def fake_idem(state):
+        # B7 幂等闸单独在 test_idempotent_confirm.py 覆盖；这里 stub 掉避免触发 DB。
+        return {}
+
     async def fake_gate(state):
         return {"execution_status": "RUNNING"}
 
@@ -61,6 +65,7 @@ def _patch_upstream(monkeypatch, ceg, query_result):
         }
 
     monkeypatch.setattr(ceg, "_load_confirmed_requirement", fake_load)
+    monkeypatch.setattr(ceg, "_idempotency_guard", fake_idem)
     monkeypatch.setattr(ceg, "_sql_gate", fake_gate)
     monkeypatch.setattr(ceg, "_confirmed_data_agent", fake_data)
     monkeypatch.setattr(ceg, "_confirmed_sql_agent", fake_sql)

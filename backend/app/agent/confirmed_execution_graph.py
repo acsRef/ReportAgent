@@ -13,6 +13,7 @@ Flow:
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional, TypedDict
 
@@ -71,6 +72,10 @@ class ConfirmedExecutionState(TypedDict, total=False):
     # P15 e2e T4 fault seam: main 从 X-E2E-Fault header 解析（REPORTAGENT_E2E=1 双 gate），
     # 经此透传到 sql_graph._evaluate（确定性 fail/repair e2e 用；生产恒 None）。
     fault_override: Optional[dict]
+    # B7 幂等：`session_id:draft_id` 执行幂等键（trace/审计可见）。
+    idempotency_key: Optional[str]
+    # 非 None 表示本轮是「重放已完成的版本」，图直接结束、不再执行 SQL。
+    replayed_version: Optional[int]
 
 
 # --- Errors ----------------------------------------------------------------
@@ -144,6 +149,74 @@ async def _load_confirmed_requirement(state: ConfirmedExecutionState) -> dict:
             f"draft {draft['id']} has unresolved assumptions"
         )
     return {"requirement_card": card, "draft_id": draft["id"]}
+
+
+@traced_node("confirmed_idempotency_guard")
+async def _idempotency_guard(state: ConfirmedExecutionState) -> dict:
+    """B7 幂等闸：同一 draft 已执行完成过 → 重放该版本，不再跑 SQL。
+
+    背景：`_release_draft_lock` 会把 draft 从 locked 放回 complete，于是用户
+    重复点「确认」、客户端超时重发、或走 `/retry` 都会**再次通过 gate 并重新
+    执行一遍 SQL**，产出一条内容相同的新版本——这就是「重复执行」。
+
+    判定键 = `session_id:draft_id`。draft 一旦被 PATCH 就换新 id，所以需求
+    改动不会被误判成重放；只认 `status='done'`（SUCCESS / EMPTY），FAILED
+    落库为 `status='error'`，必须允许重试。
+
+    `base_report_version` 非 None（mode=adjust）时每次都该产出新版本，不参与幂等。
+    """
+    if state.get("base_report_version") is not None:
+        return {}
+
+    draft_id = await _draft_id_from_state(state)
+    session_id = state["session_id"]
+    key = f"{session_id}:{draft_id}"
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        existing = await report_version_repository.find_done_by_draft(
+            conn,
+            session_id=session_id,
+            user_id=state["user_id"],
+            requirement_draft_id=draft_id,
+        )
+    if existing is None:
+        return {"idempotency_key": key}
+
+    payload: Any = existing["report_payload"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    payload = dict(payload or {})
+    verdict = str(payload.get("execution_status") or "SUCCESS")
+
+    tracer = current_tracer()
+    if tracer is not None:
+        tracer.add_decision(
+            name="idempotency_guard",
+            action="replay",
+            idempotency_key=key,
+            replayed_version=existing["version"],
+            execution_status=verdict,
+        )
+    logger.info(
+        "idempotency replay: session=%s draft=%s version=%s",
+        session_id, draft_id, existing["version"],
+    )
+    return {
+        "idempotency_key": key,
+        "replayed_version": existing["version"],
+        "report_payload": {
+            **payload,
+            "version": existing["version"],
+            "parent_version": existing.get("parent_version"),
+            "title": existing.get("title") or "报告",
+        },
+        "execution_status": verdict,
+    }
+
+
+def _route_after_idempotency(state: ConfirmedExecutionState) -> str:
+    """已重放 → 直接 END（不执行 SQL、不再落库）；否则走正常执行链。"""
+    return "replay" if state.get("replayed_version") is not None else "execute"
 
 
 @traced_node("sql_gate")
@@ -659,6 +732,7 @@ def build_confirmed_execution_graph():
 
     workflow.add_node("security_guard", _security_guard)
     workflow.add_node("load_confirmed_requirement", _load_confirmed_requirement)
+    workflow.add_node("idempotency_guard", _idempotency_guard)
     workflow.add_node("sql_gate", _sql_gate)
     workflow.add_node("data_agent", _confirmed_data_agent)
     workflow.add_node("sql_agent", _confirmed_sql_agent)
@@ -673,7 +747,13 @@ def build_confirmed_execution_graph():
                                    {"interface_response": "interface_response", "data_agent": "data_agent"})
     workflow.add_edge("data_agent", "sql_agent")
     workflow.add_edge("interface_response", "persist_report")
-    workflow.add_edge("load_confirmed_requirement", "sql_gate")
+    # B7：load 之后先过幂等闸——同一 draft 已执行完成过就直接重放该版本并结束。
+    workflow.add_edge("load_confirmed_requirement", "idempotency_guard")
+    workflow.add_conditional_edges(
+        "idempotency_guard",
+        _route_after_idempotency,
+        {"replay": END, "execute": "sql_gate"},
+    )
     workflow.add_edge("sql_agent", "report_agent")
 
     def _route_after_report(state: ConfirmedExecutionState) -> str:

@@ -499,6 +499,12 @@ async def test_real_graph_failed_emits_error_not_report(monkeypatch):
         }
     monkeypatch.setattr(ceg, "_security_guard", fake_security)
     monkeypatch.setattr(ceg, "_load_confirmed_requirement", fake_load)
+
+    async def fake_idem(state):
+        # B7 幂等闸需要真 DB，由 test_idempotency_guard_pg.py 覆盖；此处 stub。
+        return {}
+
+    monkeypatch.setattr(ceg, "_idempotency_guard", fake_idem)
     monkeypatch.setattr(ceg, "_sql_gate", fake_gate)
     monkeypatch.setattr(ceg, "_confirmed_data_agent", fake_data)
     monkeypatch.setattr(ceg, "_confirmed_sql_agent", fake_sql)
