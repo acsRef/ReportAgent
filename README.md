@@ -12,7 +12,7 @@ flowchart TB
         U["用户中文提问"]
         UI["React 工作台 :3000<br/>SSE v2 七事件 + progress"]
     end
-    subgraph 后端 "FastAPI + LangGraph :8100"
+    subgraph BACKEND["FastAPI + LangGraph :8100"]
         G["Security Guard<br/>注入归一化 + 拦截"]
         CRT["Context Runtime<br/>Selective Recall（四触发）<br/>Conversation L1-L2.5 + Semantic/Query 召回<br/>Assembler（去重 / 排序 / Token 预算）"]
         REQ["Requirement Agent<br/>意图 / 维度指标 / 缺失判断 / 澄清"]
