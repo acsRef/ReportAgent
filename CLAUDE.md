@@ -210,7 +210,7 @@ Workflow：Trigger → Brainstorm before planning（fuzzy 时走 superpowers:bra
 
 15 个 Phase 严格按序（P0 Baseline → P1 Freeze → P2 MCP → P3 Context → P4 Memory → P5 Tool → P6 LLM → P7 Prompt → P8 Agent Loop → P9 Reliability → P10 Report → P11 Frontend/SSE → P12 Playwright → P13 Langfuse → P14 Evaluation → P15 Docs/Demo）。每个 Phase 完成必须走 `代码 → Unit Test → Integration Test → Golden Case → Git Commit → 更新 CLAUDE.md 对应章节` 再进下一个；每个 Phase 另开实施 plan 并登记索引。
 
-全程回归红线：任一 Phase 落地后全量 offline suite 不回退；**CI 门禁 = 后端 pytest**（`.github/workflows/ci.yml`），Contract E2E 在独立 workflow（手动/夜间）跑、不阻塞提交，Full E2E env-gated（`REPORTAGENT_E2E=1`）nightly/manual。
+全程回归红线：任一 Phase 落地后全量 offline suite 不回退；**CI 门禁 = 后端 pytest + 前端 vitest/tsc**（`.github/workflows/ci.yml`，任意分支 push 与 PR 触发）；Playwright Contract E2E 在独立 workflow（手动/夜间）跑、不阻塞提交；Full E2E env-gated（`REPORTAGENT_E2E=1`）nightly/manual。
 
 ---
 

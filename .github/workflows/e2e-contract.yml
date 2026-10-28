@@ -1,46 +1,25 @@
-# 前端 + Contract E2E：**不阻塞提交**（手动 workflow_dispatch / 夜间 cron）
+# Playwright Contract E2E：**不阻塞提交**（手动 workflow_dispatch / 夜间 cron）
 #
-# 2026-10-28 从 ci.yml 拆出（plan: ci-backend-only）。原先是 PR gate，但 Contract
-# E2E 的 mock LLM 按「语义 kind + 调用序」匹配 fixture：prompt 一改、调用序一偏，
-# canned 响应就落到别的步骤上，出现与业务无关的断言失败（如 spec 06 等不到「商品1」）。
+# 2026-10-28 从 ci.yml 拆出（plan: ci-backend-only，后经用户确认扩为"每次提交跑测试"）：
+# 后端 pytest 与前端 vitest/tsc 回到 ci.yml；只有 Playwright 留在这里。
+#
+# 原因：Contract E2E 的 mock LLM 按「语义 kind + 调用序」匹配 fixture。prompt 一改、
+# 调用序一偏，canned 响应就落到别的步骤上，出现与业务无关的断言失败（如 spec 06
+# 等不到「商品1」）。这类红不该拦提交。
 #
 # 用法：
-#   Actions → e2e-contract → Run workflow（可选只跑 frontend / contract）
+#   Actions → e2e-contract → Run workflow
 #   或本地：cd frontend && npm run e2e:contract
 name: e2e-contract
 
 on:
   workflow_dispatch:
-    inputs:
-      only:
-        description: "运行范围：all | frontend | contract"
-        required: false
-        default: all
   schedule:
     # 每天 18:00 UTC（= 次日 02:00 Asia/Shanghai）
     - cron: "0 18 * * *"
 
 jobs:
-  frontend-gate:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'frontend' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install frontend deps
-        run: npm --prefix frontend ci
-      - name: Frontend unit tests
-        run: npm --prefix frontend run test:run
-      - name: Frontend type-check + build
-        run: npm --prefix frontend run build
-
   contract-e2e:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'contract' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -86,8 +65,6 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: frontend
       - name: Contract E2E (mock LLM + real PG)
-        # 已知脆弱：mock keying = 语义 kind + 调用序；spec 06（adjust 后渲染新内容）
-        # 在 prompt 变更后可能失配。失败不代表产品坏，需人工看 artifacts。
         run: |
           set +e
           RAGENT_PYTHON=python3 npm run e2e:contract > /tmp/contract.log 2>&1

@@ -25,7 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
-| [2026-10-28-ci-backend-only.md](2026-10-28-ci-backend-only.md) | CI 门禁收缩为后端 pytest：`ci.yml` 只留 backend-gate；frontend-gate 与 contract-e2e 拆到 `e2e-contract.yml`（workflow_dispatch + 夜间 cron，带 artifacts），不再阻塞 push；起因 spec 06 的 mock-keying 失配（prompt 改动 → fixture 错位） | 已验证：两 YAML 解析通过；本地 `pytest -q` 1188 passed 与拆分前一致 |
+| [2026-10-28-ci-backend-only.md](2026-10-28-ci-backend-only.md) | CI 门禁调整：先收缩为后端 pytest（拆出 Playwright），同日按用户澄清扩回「每次提交都跑测试」——`ci.yml` = backend pytest + frontend vitest/tsc，任意分支 push 与 PR 触发 + concurrency 取消旧 run；`e2e-contract.yml` 只留 Playwright（手动/夜间，带 artifacts），不进 PR | 已验证：两 YAML 解析通过（jobs/triggers/concurrency 已核对）；本地 pytest 1188 passed 与拆分前一致 |
 | [2026-10-28-execution-idempotency.md](2026-10-28-execution-idempotency.md) | 执行幂等（B7 边界）：新增 `idempotency_guard` 图节点，键=`session_id:draft_id`；已 done 版本重放、FAILED 可重试、adjust 旁路；仓储 `find_done_by_draft` 单点判定 | 已验证：5 图例 + 1 真 PG 例；全量 1188 passed；真链路 confirm#2 只回同版本、无 trace、版本表 1 行 |
 | [2026-10-28-requirement-card-ux-and-send-timeout.md](2026-10-28-requirement-card-ux-and-send-timeout.md) | 需求卡"不迷惑用户" + 发送超时假警报：scope 空=未限定不再显示"待补充"、`field_meaning` 强制 alternatives 且禁止 metric 一问两遍（前端一键定口径写回 assumption text）、prompt JSON 示例 `{{}}`→`{}`、60s 裸 setTimeout 换 `createSendTimeoutGuard`（只提示不断流、序号守卫防串台） | 已验证：frontend 308 passed / tsc 0 / lint 0 error；backend 744 passed；真卡片两条 query 均产出 2 个口径候选；待 commit |
 | [2026-10-28-llm-provider-siliconflow.md](2026-10-28-llm-provider-siliconflow.md) | LLM provider 切换 MiniMax → SiliconFlow：`.env` 主 key/模型/base_url/context_window + 三处代码兜底默认值（保留 MINIMAX_* 别名）+ env.example/README/AGENTS/CLAUDE 同步；起因 MiniMax 402 余额耗尽致全链降级 | 已验证：evaluation explicit_query 2/2 + test_llm_adapter 14 passed；待 commit 后转 已完成 |

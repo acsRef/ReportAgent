@@ -69,3 +69,15 @@ Error: 1 failed
 - 不修 spec 06 的脆弱断言（根因是 mock keying，要修得让 mock 支持"按 prompt 内容哈希匹配"，属独立议题）。
 - 不改 `backend/app/llm/mock.py` 的 keying 机制。
 - 不引入 `continue-on-error` 假装绿——`e2e-contract` 自己红是该红的，只是不拦提交。
+
+## 修订（同日，用户澄清目标后）
+
+用户澄清真实诉求是「**每次提交代码就自动跑一遍测试**」，而不是「不要 CI」。据此调整：
+
+- `ci.yml` 触发从 `push: branches: [master]` 改为 `push: branches: ["**"]`——任意分支 push 都跑（原来推 feature 分支不会触发，等于没测）。
+- `frontend-gate`（vitest + `tsc -b`）**回到 `ci.yml`**：它稳定（14s）、不依赖 mock keying，和 Playwright 不是一类东西，不该被一起挪走。
+- 加 `concurrency: ci-${{ github.ref }}` + `cancel-in-progress`：连续 push 只保留最新一次结果。
+- `e2e-contract.yml` 去掉重复的 `frontend-gate`，只留 `contract-e2e`（手动 + 夜间）。
+- 刻意**不加** `paths` 过滤：用户的诉求是"每次提交都跑"，加过滤会让文档/前端改动静默跳过。若以后嫌吵再加。
+
+结论：PR 门禁 = 后端 pytest + 前端 vitest/tsc；Playwright 仍在外（脆弱，见 §Context）。

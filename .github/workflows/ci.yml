@@ -1,21 +1,27 @@
-# CI（PR/push 门禁）：**只跑后端**
+# CI：每次 push / PR 自动跑测试
 #
-# 2026-10-28 调整（plan: ci-backend-only）：
-#   - backend-gate 保留：全量 pytest（persistence 用 PG service 真跑；e2e marker
-#     无 REPORTAGENT_E2E 自动 skip）。
-#   - frontend-gate（vitest/build）与 contract-e2e（Playwright）**移出本 workflow**，
-#     改到 `.github/workflows/e2e-contract.yml`（手动 workflow_dispatch + 夜间 cron），
-#     不再阻塞 push / PR。
+# 设计目标（2026-10-28 与用户确认）：**每次提交代码就自动跑一遍测试，看情况**。
+#   - 触发：任意分支的 push + 所有 PR
+#   - backend-gate ：全量 pytest（PG service 真跑 persistence；e2e marker 无
+#                    REPORTAGENT_E2E 自动 skip）
+#   - frontend-gate：vitest 单测 + tsc 类型检查
+#   - Playwright Contract E2E **不在本 workflow**（见 e2e-contract.yml）：
+#     mock keying = 语义 kind + 调用序，prompt 一改就错位，属于"改了文案就红"
+#     的假失败，不该拦提交。
 #
-# 原因：Contract E2E 依赖 mock LLM 的固定 fixture + 调用序（语义 kind + seq）。
-# 任何 prompt 改动都可能让 fixture 与调用错位，spec 06 因此出现「等不到 商品1」
-# 的超时失败——这类失败与业务正确性无关，却会拦住每一次提交。
+# 想要更安静的话可以给 push 加 paths 过滤（只在 backend/** / frontend/** 变化时跑），
+# 但当前刻意不加——用户的诉求是"每次提交都跑"。
 name: ci
 
 on:
   pull_request:
   push:
-    branches: [master]
+    branches: ["**"]
+
+# 连续 push 同一分支时取消上一次，避免排队堆积（只保留最新一次结果）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend-gate:
@@ -67,3 +73,29 @@ jobs:
             done
           fi
           exit $code
+
+  frontend-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm --prefix frontend ci
+      - name: Frontend unit tests
+        run: |
+          set +e
+          npm --prefix frontend run test:run > /tmp/vitest.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            tail -40 /tmp/vitest.log | while IFS= read -r line; do
+              echo "::error file=frontend-vitest::$line"
+            done
+          fi
+          exit $code
+      - name: Type-check (tsc -b)
+        run: npm --prefix frontend exec -- tsc -b
