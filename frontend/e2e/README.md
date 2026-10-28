@@ -6,7 +6,7 @@ ReportAgent 浏览器端到端。测试对象 = React 工作台（:3000，vite�
 
 | 层 | 后端 LLM | env | 谁跑 |
 |---|---|---|---|
-| **Contract** | mock（`LLM_PROVIDER=mock` + fixture 驱动；不连真实 MCP） | 无额外要求 | `npm run e2e:contract` — 本地/CI per-PR |
+| **Contract** | mock（`LLM_PROVIDER=mock` + fixture 驱动；不连真实 MCP） | 无额外要求 | `npm run e2e:contract` — 本地 / 独立 workflow（手动·夜间，不阻塞 PR） |
 | **Full** | 真实 LLM（MiniMax）+ 真实 MCP（ragent-py） | `REPORTAGENT_E2E=1` | `npm run e2e:full` — nightly/manual |
 
 Contract 后端由每个 spec 的 `beforeAll` 独占启动（fixture key = 语义 kind + 调用序，
@@ -23,7 +23,7 @@ Contract 后端由每个 spec 的 `beforeAll` 独占启动（fixture key = 语�
 ```bash
 cd frontend
 npm run e2e            # 全部（Contract specs 正常跑，Full specs 无 REPORTAGENT_E2E 自动 skip）
-npm run e2e:contract   # specs/01..10（mock LLM，CI per-PR）
+npm run e2e:contract   # specs/01..10（mock LLM）；CI 侧在 e2e-contract workflow 手动/夜间跑
 REPORTAGENT_E2E=1 npm run e2e:full   # specs/11..12（真实 LLM，nightly/manual）
 ```
 

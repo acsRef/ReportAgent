@@ -118,7 +118,7 @@ flowchart TB
 | LLM | OpenAI 兼容（SiliconFlow / `deepseek-ai/DeepSeek-V3`，可配置；`MINIMAX_*` 仅作历史别名回退） |
 | Embedding | SiliconFlow API（pgvector 语义搜索，当前默认模型 `Qwen/Qwen3-Embedding-8B` 实测输出 **1536 维**，三处同源：`.env` `EMBEDDING_DIM` / `init_pg.sql` `VECTOR(n)` / `main.py` 启动校验；改维度必须三处一起改。失败降级关键字匹配） |
 | 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型：2 事实 + 5 维度零售订单，见 `backend/scripts/seed_business_p15prelude.sql`；数据覆盖 2024） |
-| 测试 | 分层：离线 gate（`pytest` backend/tests，含真 PG persistence）+ Contract E2E（Playwright，mock LLM，per-PR CI）+ Live evaluation（`REPORTAGENT_E2E=1`，真实 LLM/MCP/PG，夜间/手动） |
+| 测试 | 分层：离线 gate（`pytest` backend/tests，含真 PG persistence，**CI 门禁只跑这一层**）+ Contract E2E（Playwright，mock LLM，独立 workflow 手动/夜间）+ Live evaluation（`REPORTAGENT_E2E=1`，真实 LLM/MCP/PG，夜间/手动） |
 
 ## 环境要求
 

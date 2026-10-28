@@ -1,0 +1,109 @@
+# 前端 + Contract E2E：**不阻塞提交**（手动 workflow_dispatch / 夜间 cron）
+#
+# 2026-10-28 从 ci.yml 拆出（plan: ci-backend-only）。原先是 PR gate，但 Contract
+# E2E 的 mock LLM 按「语义 kind + 调用序」匹配 fixture：prompt 一改、调用序一偏，
+# canned 响应就落到别的步骤上，出现与业务无关的断言失败（如 spec 06 等不到「商品1」）。
+#
+# 用法：
+#   Actions → e2e-contract → Run workflow（可选只跑 frontend / contract）
+#   或本地：cd frontend && npm run e2e:contract
+name: e2e-contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "运行范围：all | frontend | contract"
+        required: false
+        default: all
+  schedule:
+    # 每天 18:00 UTC（= 次日 02:00 Asia/Shanghai）
+    - cron: "0 18 * * *"
+
+jobs:
+  frontend-gate:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'frontend' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm --prefix frontend ci
+      - name: Frontend unit tests
+        run: npm --prefix frontend run test:run
+      - name: Frontend type-check + build
+        run: npm --prefix frontend run build
+
+  contract-e2e:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'contract' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:0.7.0-pg15
+        env:
+          POSTGRES_USER: ragent
+          POSTGRES_PASSWORD: ragent
+          POSTGRES_DB: ragent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ragent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ragent:ragent@localhost:5432/ragent
+      ANALYSIS_DSN: postgresql://ragent_readonly:ragent_readonly@localhost:5432/ragent
+      APP_ENV: development
+      ALLOW_INSECURE_DEFAULT_AUTH: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install deps
+        run: |
+          pip install -r backend/requirements.txt
+          npm --prefix frontend ci
+      - name: Init PostgreSQL
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          export PGPASSWORD=ragent
+          psql -h localhost -U ragent -d ragent -f backend/scripts/init_pg.sql
+          psql -h localhost -U ragent -d ragent -f backend/scripts/seed_business_p15prelude.sql
+          psql -h localhost -U ragent -d ragent -f backend/scripts/setup_app_role.sql
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Contract E2E (mock LLM + real PG)
+        # 已知脆弱：mock keying = 语义 kind + 调用序；spec 06（adjust 后渲染新内容）
+        # 在 prompt 变更后可能失配。失败不代表产品坏，需人工看 artifacts。
+        run: |
+          set +e
+          RAGENT_PYTHON=python3 npm run e2e:contract > /tmp/contract.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            sed 's/\x1b\[[0-9;]*m//g' /tmp/contract.log | tail -40 | while IFS= read -r line; do
+              echo "::error file=contract-e2e::$line"
+            done
+          fi
+          exit $code
+        working-directory: frontend
+        env:
+          LLM_PROVIDER: mock
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: contract-e2e-artifacts
+          path: frontend/e2e/artifacts
+          retention-days: 7

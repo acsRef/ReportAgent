@@ -17,7 +17,7 @@
 
 4. **可靠性工程**：SQL 错误 8 类分类（对象不存在/语法/超时/权限…）+ 可恢复性双表决策（Agent 修复 vs 用户可重试）；MCP 失败显式 unavailable（不默默返回空数组）；执行三态（SUCCESS/EMPTY/FAILED）全部落库，报告永不伪造成功——数据真实性由三层 Validator 钉住（结构/KPI 聚合重算/行存在性）；Trace 双 sink（PG + Langfuse）全链路可定位失败层。
 
-5. **工程闭环**：1180+ 后端 / 301 前端 / 78 eval 测试全绿；Playwright Contract E2E（mock LLM + 真 PG）入 CI per-PR；15 个 Phase 全部 plan 驱动（文档+Golden Set Before/After 防回归）。
+5. **工程闭环**：1180+ 后端 / 308 前端 / 78 eval 测试全绿；CI 门禁 = 后端 pytest（PR/push）；Playwright Contract E2E（mock LLM + 真 PG）在独立 workflow 手动/夜间跑（不进 PR 门禁）；15 个 Phase 全部 plan 驱动（文档+Golden Set Before/After 防回归）。
 
 ---
 
@@ -25,7 +25,7 @@
 
 1. 全链 Agent 工作台（NL→确认→SQL→报告，LangGraph+FastAPI+React SSE v2）：Agentic 决策与确定性骨架分离；SQL 修复环 Evaluate→Diagnose→Route + 8 类错误分类 + 固定预算，不盲重试。
 2. Memory 四类分层 + 选择性召回 + Agent 层隔离；五层评测（含自建 Gold Set 30/30 + 真 embedding Recall@1 0.84/Recall@3 0.96/MRR 0.90）；真 LLM 门抓到参考帧年份 anchor 导致的时间语义回归（ON/OFF 归因 + 边界声明修复）——偏好走纯函数，不塞 prompt。
-3. 可靠性：SQL 三态全落库 + 报告三层 Validator（数据永不伪造）+ Trace 双 sink（PG+Langfuse）；1180+ 后端/301 前端/78 eval 全绿，Contract E2E 入 CI。
+3. 可靠性：SQL 三态全落库 + 报告三层 Validator（数据永不伪造）+ Trace 双 sink（PG+Langfuse）；1180+ 后端/308 前端/78 eval 全绿，CI 门禁跑后端全量、Contract E2E 走独立 workflow。
 
 ---
 
