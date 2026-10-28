@@ -98,4 +98,7 @@ jobs:
           fi
           exit $code
       - name: Type-check (tsc -b)
-        run: npm --prefix frontend exec -- tsc -b
+        # 必须设 working-directory：`npm --prefix frontend exec` 不会把 cwd 切到
+        # frontend，tsc 会在仓库根找 tsconfig.json → TS5083。（2026-10-28 实测踩到）
+        run: npx tsc -b
+        working-directory: frontend
