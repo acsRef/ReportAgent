@@ -35,6 +35,9 @@ export interface RequirementAssumption {
   alternatives: RequirementOption[]
 }
 
+/** 时间粒度（镜像 backend app/models/requirement.py::RequirementGranularity）。 */
+export type RequirementGranularity = 'day' | 'week' | 'month' | 'quarter' | 'year'
+
 export interface RequirementCard {
   id: string
   version: number
@@ -42,6 +45,7 @@ export interface RequirementCard {
   summary: string
   target_metrics: string[]
   time_range: string | null
+  granularity: RequirementGranularity | null
   scope: string[]
   dimensions: string[]
   analysis_methods: string[]

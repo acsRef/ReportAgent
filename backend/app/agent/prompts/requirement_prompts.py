@@ -47,13 +47,21 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "可用表结构中；请确认改为可用对象或补充该数据源」，"
         "\n  alternatives 给最相近的可用对象/指标选项（可为空数组）。用户确认/否决前该对象"
         "不得被当作已满足。summary 须保留该对象的原意，不得写成已替换后的指标。"
+        "\n- **业务实体缺失（同上，但用户没写「表」字）**：用户提到供应商/仓库/员工/渠道/合同/"
+        "成本中心 等业务实体时，若可用表结构里**没有**对应的 dim_*/fact_* 表，同样必须生成"
+        " `requested_object:<实体名>` assumption，并在 text 里列出**可用维度**"
+        "（区域/城市/门店/品类/品牌/客户/时间/促销），alternatives 给这些可用维度。"
+        "\n  **严禁**臆造一张并不存在的维度表（例如把「供应商」当成一张 dim_ 前缀的自造表）——"
+        "把实体当已支持，会让下游写出 JOIN 不存在表这种必然失败的 SQL。"
         "\n\n维度判断规则："
         "\n- time_range: 是否包含明确的时间范围或可推断的相对时间词（本月/上月/今年/最近30天 等）"
         "\n- scope: 是否包含明确的区域/产品/客户范围；可缺省（默认 ALL）"
         "\n- metric: 是否包含明确指标（销售额/订单数/退款率 等）；**若指标名已经出现在 "
         "target_metrics 里，即使口径有歧义也不得把 metric 列入 missing_fields**——口径歧义统一"
         "走 field_meaning assumption 的 alternatives，绝不允许同一个问题问两遍"
-        "\n- granularity: 日/周/月/季度；不指定时默认月"
+        "\n- granularity: 用户要求的时间分组粒度，取 day/week/month/quarter/year；"
+        "**用户说「每个月/按月/每周/按季度」时必须输出对应粒度**（这是卡体的显式字段，"
+        "不是缺失项）；完全不涉及时间分组时输出 null——不要默认填 month，猜错粒度会让 SQL 分组维度整体错位"
         "\n- comparison: 是否要对比（同比/环比/指定基线）；不需要则 none"
     ),
     "tool_policy": (
@@ -69,6 +77,7 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         '\n  "summary": "一句话业务目标",'
         '\n  "target_metrics": ["指标1", "指标2"],'
         '\n  "time_range": "今年" | null,'
+        '\n  "granularity": "month" | null,'
         '\n  "scope": ["华东"] | [],'
         '\n  "dimensions": ["时间", "区域"],'
         '\n  "analysis_methods": ["trend_analysis", "group_compare"],'

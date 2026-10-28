@@ -124,11 +124,9 @@ async def patch_requirement(
             metrics = sel if isinstance(sel, list) else [sel]
             card_dict["target_metrics"] = metrics
         elif key == "granularity":
-            # granularity only affects SQL, not card body; record into
-            # analysis_methods or dimensions as a hint.
-            card_dict["dimensions"] = list(
-                set(card_dict.get("dimensions", []) + [f"粒度:{sel}"]),
-            )
+            # 2026-10-28：粒度现在有卡体字段，不再塞进 dimensions 的「粒度:X」标签
+            # （标签只能给 LLM 看，结构化字段才能进 _format_confirmed_requirement）。
+            card_dict["granularity"] = sel if isinstance(sel, str) else None
         elif key == "comparison":
             card_dict["dimensions"] = list(
                 set(card_dict.get("dimensions", []) + [f"对比:{sel}"]),

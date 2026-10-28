@@ -33,7 +33,7 @@
   {
     "id": "explicit-monthly-trend-east",
     "category": "explicit_query",
-    "description": "2024年华东月度趋势 —— 单区域 + 月粒度",
+    "description": "2024年华东月度趋势 —— 单区域 + 月粒度（rows_gt=6 抓「粒度丢失」回归：曾只按年分组返回 1 行）",
     "turns": [
       {
         "query": "2024年华东地区每个月的销售额趋势",
@@ -52,7 +52,7 @@
         },
         "report": {
           "table_present": true,
-          "rows_gt": 0
+          "rows_gt": 6
         }
       }
     ]
@@ -264,10 +264,10 @@
   {
     "id": "empty-result-future-year",
     "category": "empty",
-    "description": "种子数据只到 2024 → 2025 合法零行 = EMPTY，不是错误",
+    "description": "种子数据只到 2026-10 → 2027 合法零行 = EMPTY，不是错误",
     "turns": [
       {
-        "query": "2025年各区域销售额",
+        "query": "2027年各区域销售额",
         "mode": "new"
       }
     ],
@@ -275,7 +275,7 @@
       {
         "requirement": {
           "status": "complete",
-          "time_range_equals": "2025年"
+          "time_range_equals": "2027年"
         },
         "execution": {
           "verdict": "EMPTY",

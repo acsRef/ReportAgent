@@ -187,3 +187,34 @@ def test_unselected_alternative_does_not_reach_plan_prompt() -> None:
     result = _format_confirmed_requirement(card)
     assert result is not None
     assert "请确认" not in result
+
+def test_format_confirmed_requirement_includes_granularity() -> None:
+    """B3：粒度必须进 plan prompt（否则 SQL 只按年分组）。"""
+    from app.agent.confirmed_execution_graph import _format_confirmed_requirement
+
+    card = _complete_card(
+        time_range="2024年",
+        granularity="month",
+        target_metrics=["销售额"],
+        dimensions=["时间"],
+    )
+    result = _format_confirmed_requirement(card)
+
+    assert result is not None
+    assert "时间粒度 = 月" in result
+
+def test_granularity_directive_names_the_actual_column() -> None:
+    """只写「时间粒度 = 月」模型仍按 year 分组；必须带上 dim_date.month。
+
+    2026-10-28 实测：「2024年华东地区每个月的销售额趋势」卡片 granularity=month，
+    SQL 却是 GROUP BY dim_date.year → 12 行退化成 1 行。
+    """
+    from app.agent.confirmed_execution_graph import _format_confirmed_requirement
+
+    card = _complete_card(time_range="2024年", granularity="month", target_metrics=["销售额"])
+    result = _format_confirmed_requirement(card)
+
+    assert result is not None
+    assert "时间粒度 = 月" in result
+    assert "dim_date.month" in result, "必须指名分组列，否则模型会按 year 分组"
+    assert "不要用 year" in result

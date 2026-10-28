@@ -391,17 +391,35 @@ def execute_sql(sql: str) -> str:
     return _execute_validated(sql)
 
 
+_TIME_DIM_TOKENS = (
+    "时间", "日期", "年", "月", "季度", "周", "星期",
+    "date", "time", "month", "year", "quarter", "week",
+)
+
+
+def _is_time_dimension(name: str) -> bool:
+    """列名是否像时间维度。
+
+    存在的理由（2026-10-28 实测）：`月份` 这类列的**值是 int**（1..12），
+    用「首行值是否数字」判维度会把它归成度量 → 没有分类列 → 图表退化成表格
+    （"2024年各月销售额趋势" 12 行数据画不出柱状图）。
+    """
+    low = str(name).lower()
+    return any(tok in low for tok in _TIME_DIM_TOKENS)
+
+
 def chart_advisor(sql_result: str) -> str:
     """根据已执行的查询结果推荐图表类型和配置。
     用途：SQL 执行成功并返回数据后，决定如何可视化。
     输入：sql_result（execute_sql 返回的完整 JSON，含 columns 和 rows）
-    输出：{"type": "pie"|"bar"|"table", "config": {data, dimensions}}
+    输出：{"type": "bar"|"pie"|"table", "config": {data, dimensions}}
     判断逻辑：
+      - 时间维度 + 数值字段 → 柱状图（时间序列不用饼图，行数多少都一样）
       - 1 个分类字段 + 1 个数值字段，行数 ≤ 8 → 饼图
       - 1 个分类字段 + 1 个数值字段，行数 > 8 → 柱状图
       - 无合适维度组合 → 纯表格
     数值列识别兼容 numeric 字符串（Decimal 全链字符串化后 rows 值为 str——
-    裸 isinstance((int, float)) 会把金额列漏判成非数值）。
+    裸 isinstance((int, float)) 会把金额列漏判成非数值）；时间列即使数值型也按维度处理。
     不要用来：不执行 SQL 查询、不修改数据、不生成数值摘要（用 insight_analyst）。"""
     from app.utils.numbers import is_numeric_value
 
@@ -415,21 +433,29 @@ def chart_advisor(sql_result: str) -> str:
     columns = [c["name"] if isinstance(c, dict) else c for c in columns_raw]
 
     numeric_cols = [c for c in columns if is_numeric_value(rows[0].get(c))]
-    categorical_cols = [c for c in columns if c not in numeric_cols]
+    # 时间维度按**列名**判，与列值类型无关：
+    #   - 「月份」是 int（1..12）→ 不能当度量
+    #   - 「季度」是文本 "Q1" → 不能当普通分类（饼图表达不了趋势）
+    time_cols = [c for c in columns if _is_time_dimension(c)]
+    measure_cols = [c for c in numeric_cols if c not in time_cols]
+    # 真分类列在前，时间列在后（同时存在时优先用文本分类做维度）
+    categorical_cols = [
+        c for c in columns if c not in numeric_cols and c not in time_cols
+    ] + time_cols
 
-    if categorical_cols and numeric_cols:
+    if categorical_cols and measure_cols:
         cat = categorical_cols[0]
-        num = numeric_cols[0]
-        if len(rows) <= 8:
-            return json.dumps({
-                "type": "pie",
-                "config": {"data": rows, "dimensions": {"category": cat, "value": num}},
-            }, ensure_ascii=False)
-        else:
+        num = measure_cols[0]
+        is_time_series = cat in time_cols
+        if is_time_series or len(rows) > 8:
             return json.dumps({
                 "type": "bar",
                 "config": {"data": rows, "dimensions": {"x": cat, "y": num}},
             }, ensure_ascii=False)
+        return json.dumps({
+            "type": "pie",
+            "config": {"data": rows, "dimensions": {"category": cat, "value": num}},
+        }, ensure_ascii=False)
 
     return json.dumps({"type": "table", "config": {"data": rows}}, ensure_ascii=False)
 

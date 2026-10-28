@@ -243,8 +243,14 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
 
     dictionary_context = state.get("dict_context") or ""
 
-    # P15 e2e T2：supplement 轮把上一轮已确认（status=complete）卡作为 prior_card 传给
-    # parse_requirement——presence 覆盖 / absence 继承；读失败降级为 None（不阻塞）。
+    # supplement 轮把上一轮卡作为 prior_card 传给 parse_requirement——presence 覆盖 /
+    # absence 继承；读失败降级为 None（不阻塞）。
+    #
+    # 2026-10-28 修正：此前只在 `status == "complete"` 时才继承，导致真实主线的常见
+    # 路径失效——用户第一轮拿到需求卡后**还没点确认**就接着说「再看月度趋势」，
+    # 上一轮的「2024年 / 华东」全部丢失，卡片变成空 → 时间范围被解析成"本月"
+    # （实测 SQL 过滤到 2026-10，只回 1 行）。用户已经表达过的约束不该因为"没点确认"
+    # 而消失，所以只要不是 locked（执行中）就继承。
     prior_card = None
     if state.get("mode") == "supplement":
         try:
@@ -258,7 +264,7 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
             _prior = await get_latest_card(
                 session_id=state["session_id"], user_id=_uid,
             )
-            if _prior is not None and _prior.status == "complete":
+            if _prior is not None and _prior.status != "locked":
                 prior_card = _prior
         except Exception as exc:
             logger.warning("supplement: prior card load failed: %s", exc)

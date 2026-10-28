@@ -283,17 +283,63 @@ class SQLAgentState(TypedDict, total=False):
     # P15 e2e T4 fault seam：confirmed 图 _confirmed_sql_agent 透传的 e2e 故障覆盖。
     # 必须在此声明为 channel——否则 langgraph 把未声明 key 从输入丢弃，_evaluate 收不到。
     fault_override: Optional[dict]
+    # 已确认的时间粒度（day/week/month/quarter/year）——由父图从需求卡透传，
+    # _plan 用它确定性改写 dimensions（见 _apply_confirmed_granularity）。
+    granularity: Optional[str]
 
 
 _FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
 - fact_orders: order_date→dim_date, store_id→dim_store, customer_id→dim_customer, product_id→dim_product, promotion_id→dim_promotion
 - fact_payments: payment_date→dim_date, order_id→fact_orders"""
 
+# 业务口径 → 物理字段（2026-10-28 主线修复）。
+#
+# 实测缺陷：「2024年各产品类别的销售额和退货金额对比」时模型凭空写了
+# `fact_orders.sales_amount`（该列不存在）→ EXPLAIN 报 object_not_found →
+# 烧掉 MCP schema 重检索预算 → FAILED；换一次采样又蒙对了 `quantity < 0`。
+# 也就是同一句话两种结果，靠 LLM 概率决定成败。
+#
+# 这份映射是这个星型模型的**固定业务口径**，直接钉进 plan 与 generate 两个 prompt。
+# NOTE: schema 变更（换表/换列）时必须同步这里，否则 prompt 会指向不存在的列。
+_SCHEMA_TERM_HINTS = """业务口径 → 物理字段（优先采用，禁止发明列名）:
+- 销售额/销售金额/GMV/营收 → fact_orders.order_amount
+- 实收/支付金额/到账 → fact_payments.payment_amount
+- 退货金额/退款金额 → fact_payments.payment_amount（WHERE fact_payments.status = 'REFUNDED'）
+- 订单数/单量 → COUNT(DISTINCT fact_orders.order_id)
+- 销量/件数 → SUM(fact_orders.quantity)
+- 客单价 → SUM(fact_orders.order_amount) / COUNT(DISTINCT fact_orders.order_id)
+- 区域/城市 → dim_store.region / dim_store.city
+- 品类/品牌 → dim_product.category / dim_product.brand
+- 时间维度 → dim_date.full_date（JOIN fact_orders.order_date 或 fact_payments.payment_date）
+- 促销折扣 → dim_promotion.discount_rate 是**实付比例**（0.70 = 七折）"""
+
+_GRANULARITY_DIM_LABELS: dict[str, str] = {
+    "day": "日期", "week": "周", "month": "月份", "quarter": "季度", "year": "年份",
+}
+# 计划里可能出现的「宽时间维度」写法——改写时统一替换成具体粒度
+_BROAD_TIME_DIMS = frozenset({"时间", "日期", "月份", "周", "季度", "年份", "年", "月", "日"})
+
+
+def _apply_confirmed_granularity(plan: "QueryPlanWithClarify", granularity: Optional[str]) -> "QueryPlanWithClarify":
+    """把已确认的时间粒度写进 plan.dimensions（替换宽时间维度）。
+
+    为什么不用 prompt 让 LLM 自己理解：实测「时间粒度 = 月（必须按 dim_date.month 分组）」
+    已经写进 plan prompt，模型依旧输出 dimensions=["时间","区域"] 并最终 GROUP BY year。
+    粒度是**确定性事实**（用户在需求卡里选过），不该再赌一次采样。
+    """
+    label = _GRANULARITY_DIM_LABELS.get(granularity or "")
+    if not label:
+        return plan
+    dims = [d for d in (plan.dimensions or []) if str(d) not in _BROAD_TIME_DIMS]
+    plan.dimensions = [label, *dims]
+    return plan
+
+
 _PLAN_TABLE_HINTS = """常用表速查:
 - fact_orders(订单事实), fact_payments(支付事实)
 - 维度表: dim_date, dim_store, dim_product, dim_customer, dim_promotion
 
-""" + _FK_CHAIN_HINTS
+""" + _FK_CHAIN_HINTS + "\n\n" + _SCHEMA_TERM_HINTS
 
 
 _PLAN_FEWSHOT = """[示例1]
@@ -476,6 +522,10 @@ def _plan(state: SQLAgentState) -> dict:
     if plan_dict and isinstance(plan_dict, dict):
         try:
             plan = QueryPlanWithClarify(**plan_dict)
+            # 粒度确定性改写（2026-10-28）：plan 只输出「时间」这种宽维度，
+            # generate 又严格照 plan 分组 → 用户要「每个月」时 SQL 仍是 GROUP BY year。
+            # 已经确认的粒度不该靠 LLM 二次理解，这里直接把它落到 dimensions 上。
+            plan = _apply_confirmed_granularity(plan, state.get("granularity"))
             return {
                 "query_plan": plan,
                 "retry_counters": counters,
@@ -580,7 +630,7 @@ def _generate_sql(state: SQLAgentState) -> dict:
         aggregation=plan.aggregation if plan and plan.aggregation else "",
         time_range=plan.time_range if plan and plan.time_range else None,
         schema_text=schema_text,
-        fk_chain_hints=_FK_CHAIN_HINTS,
+        fk_chain_hints=_FK_CHAIN_HINTS + "\n\n" + _SCHEMA_TERM_HINTS,
         faq_block=faq_block,
         sql_generation_rules=_SQL_GENERATION_RULES,
         repair_ctx=repair_ctx,

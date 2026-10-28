@@ -92,3 +92,48 @@ def test_trend_and_detect_accept_numeric_strings():
         {"region": f"r{i}", "v": "10"} for i in range(1, 10)
     ] + [{"region": "r-outlier", "v": "10000"}]}))
     assert "r-outlier" in det
+
+# --- 时间维度识别（2026-10-28 主线修复） ------------------------------------
+#
+# 实测缺陷：「2024年各月销售额趋势」返回 12 行（月份=int, 销售额=numeric 字符串），
+# chart_advisor 按「首行值是否数字」判维度 → 月份被当度量 → 无分类列 → 图表退化成
+# table，前端 VISUALIZATION 区块变空白表格。时间列即使数值型也必须按维度处理。
+
+
+def test_int_month_column_is_a_time_dimension_not_a_measure():
+    from app.tools.sql_tools import chart_advisor
+
+    rows = [{"月份": m, "销售额": str(1000 * m)} for m in range(1, 13)]
+    out = json.loads(chart_advisor(_result(rows, columns=[
+        {"name": "月份", "type": "int"},
+        {"name": "销售额", "type": "numeric"},
+    ])))
+
+    assert out["type"] == "bar", "12 个月的月趋势必须是柱状图，不能退化 table"
+    assert out["config"]["dimensions"] == {"x": "月份", "y": "销售额"}
+
+
+def test_short_time_series_is_bar_not_pie():
+    """行数 ≤ 8 的时间序列也不能画饼图（饼图表达不了趋势）。"""
+    from app.tools.sql_tools import chart_advisor
+
+    rows = [{"季度": f"Q{i}", "销售额": str(1000 * i)} for i in range(1, 5)]
+    out = json.loads(chart_advisor(_result(rows, columns=[
+        {"name": "季度", "type": "text"},
+        {"name": "销售额", "type": "numeric"},
+    ])))
+
+    assert out["type"] == "bar"
+
+
+def test_plain_category_still_uses_pie_when_few_rows():
+    """非时间分类（区域）行数 ≤ 8 仍走饼图——不要因为时间列修复把这条改坏。"""
+    from app.tools.sql_tools import chart_advisor
+
+    rows = [{"区域": r, "销售额": str(1000 * i)} for i, r in enumerate(["华东", "华北", "华南"], 1)]
+    out = json.loads(chart_advisor(_result(rows, columns=[
+        {"name": "区域", "type": "text"},
+        {"name": "销售额", "type": "numeric"},
+    ])))
+
+    assert out["type"] == "pie"

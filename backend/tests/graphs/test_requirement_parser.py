@@ -158,3 +158,53 @@ def test_uses_options_provider(monkeypatch) -> None:
     expected_values = {opt.value for opt in requirement_options.time_options(None)}
     actual_values = {opt.value for opt in time_mf.options}
     assert actual_values == expected_values
+
+# --- B3 边界：时间粒度必须落在卡体字段上（2026-10-28） -----------------------
+#
+# 背景：用户说「每个月」时，粒度此前只存在于 missing_fields 的选项里，
+# 用户明确回答了也只会被塞进 dimensions 的「粒度:month」字符串 →
+# _format_confirmed_requirement 读不到 → SQL 只按年分组（实测 1 行，应为 12 行）。
+
+
+def test_granularity_normalized_from_llm_output(monkeypatch) -> None:
+    _patch_llm(monkeypatch, {
+        "summary": "2024年华东每月销售额趋势",
+        "target_metrics": ["销售额"],
+        "time_range": "2024年",
+        "granularity": "月",
+        "scope": ["华东"],
+        "dimensions": ["时间", "区域"],
+        "analysis_methods": ["trend_analysis"],
+        "confidence": 0.9,
+        "missing_fields": ["granularity"],
+        "assumptions": [],
+    })
+
+    from app.agent.requirement_parser import parse_requirement
+    card = parse_requirement(user_query="2024年华东地区每个月的销售额趋势", schema_context=None)
+
+    assert card.granularity == "month", "中文粒度「月」必须归一成 month"
+    assert card.status == "complete"
+    assert all(mf.key != "granularity" for mf in card.missing_fields), (
+        "粒度已从 LLM 输出得到，不该再作为缺失项追问用户"
+    )
+
+
+def test_unrecognized_granularity_is_dropped_not_guessed(monkeypatch) -> None:
+    _patch_llm(monkeypatch, {
+        "summary": "看看趋势",
+        "target_metrics": ["销售额"],
+        "time_range": "2024年",
+        "granularity": "按心情",
+        "scope": [],
+        "dimensions": ["时间"],
+        "analysis_methods": [],
+        "confidence": 0.6,
+        "missing_fields": [],
+        "assumptions": [],
+    })
+
+    from app.agent.requirement_parser import parse_requirement
+    card = parse_requirement(user_query="看看2024年的趋势", schema_context=None)
+
+    assert card.granularity is None, "认不出的粒度宁可留空，也不能猜"

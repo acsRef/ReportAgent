@@ -121,7 +121,16 @@ def _build_sse_error(
     Always use the friendly mapping — the raw PG message (often in
     English / opaque) is kept in trace logs but never shown to end users.
     """
-    err_dict: dict = err if isinstance(err, dict) else {}
+    # 2026-10-28：入参可能是 dict（子图透传）**也可能是 Pydantic 模型**（父图
+    # `_confirmed_report_agent` 返回 ErrorDetail 实例）。此前只认 dict，模型被当成
+    # 空 dict → kind 恒 None → 用户永远看到泛化的「查询执行失败,请稍后重试」，
+    # 而不是「表/字段不存在」。真链路 fault 注入实测到过这条。
+    if isinstance(err, dict):
+        err_dict: dict = err
+    elif hasattr(err, "model_dump"):
+        err_dict = err.model_dump()
+    else:
+        err_dict = {}
     kind = normalize_kind(err_dict.get("kind"))
     code = user_code(kind)
     base_message = user_message(kind)

@@ -327,6 +327,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
         "confirmed_requirement": confirmed_requirement,
         "conversation_context": conversation_context or None,
         "assembled_context": assembled_context or None,  # P4c: 含 recall 的全景 context
+        "granularity": getattr(card, "granularity", None),  # 粒度确定性透传（_plan 改写 dimensions）
         "fault_override": state.get("fault_override"),  # P15 e2e T4: e2e fault seam 透传
     }, _callbacks_only(config))
     qr = ss.get("query_result")
@@ -350,6 +351,21 @@ _MAX_LIST_ITEM_CHARS = 80
 _MAX_ASSUMPTION_TEXT = 200
 _MAX_ASSUMPTION_TOTAL = 2000
 
+# 粒度英文值 → prompt 里的中文说法（LLM 对「时间粒度 = 月」比 "month" 更稳）
+_GRANULARITY_LABELS: dict[str, str] = {
+    "day": "日", "week": "周", "month": "月", "quarter": "季度", "year": "年",
+}
+
+# 粒度 → dim_date 的实际分组列。写进 prompt 时带上列名，否则模型仍会按 year 分组
+# （2026-10-28 实测：卡里明明是 month，SQL 却是 GROUP BY dim_date.year → 12 行变 1 行）。
+_GRANULARITY_COLUMNS: dict[str, str] = {
+    "day": "dim_date.full_date",
+    "week": "dim_date.week_of_year",
+    "month": "dim_date.month",
+    "quarter": "dim_date.quarter",
+    "year": "dim_date.year",
+}
+
 
 def _format_confirmed_requirement(card) -> str | None:
     """把 PATCH 确认后的 RequirementCard 序列化成 SQL plan prompt
@@ -365,6 +381,14 @@ def _format_confirmed_requirement(card) -> str | None:
     parts: list[str] = []
     if card.time_range:
         parts.append(f"时间范围 = {str(card.time_range)[:_MAX_FIELD_VALUE_CHARS]}")
+    if card.granularity:
+        # 2026-10-28：粒度此前只存在于 dimensions 的「粒度:month」标签里，用户明说
+        # 「每个月」时卡片没有字段承载 → SQL 只按年分组（实测 1 行，应为 12 行）。
+        # 光写「时间粒度 = 月」模型仍会按 year 分组，所以直接把分组列写死。
+        label = _GRANULARITY_LABELS.get(card.granularity, card.granularity)
+        column = _GRANULARITY_COLUMNS.get(card.granularity)
+        suffix = f"（时间维度必须按 {column} 分组，不要用 year）" if column else ""
+        parts.append(f"时间粒度 = {label}{suffix}")
     if card.scope:
         parts.append(f"数据范围 = [{_join(card.scope, 20)}]")
     if card.target_metrics:
@@ -429,6 +453,20 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
         err_field = qr.get("error")
         if isinstance(err_field, dict):
             err = ErrorDetail.model_validate(err_field)
+
+    # 续命：SQL 子图在 clarify / fail 分支是直接 END 的，不会走 build_output，
+    # 于是 query_result=None —— 此前这里只从 qr 取 error，**上游的 error_kind 被丢掉**，
+    # 用户看到的是笼统的「查询执行失败,请稍后重试」，而不是「表/字段不存在」。
+    # 现在 qr 缺失时回落到父 state 的 error（子图 _confirmed_sql_agent 已透传）。
+    if err is None and qr is None:
+        upstream = state.get("error")
+        if isinstance(upstream, ErrorDetail):
+            err = upstream
+        elif isinstance(upstream, dict):
+            try:
+                err = ErrorDetail.model_validate(upstream)
+            except Exception:  # noqa: BLE001 - 形状不符就保持 None（不阻塞报告壳）
+                err = None
 
     # Three-state verdict:
     # - FAILED  : err is set OR query_result never produced (sub-graph

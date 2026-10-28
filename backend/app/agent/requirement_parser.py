@@ -88,17 +88,41 @@ def _dim_kind(dim: str) -> str:
     return "base"
 
 
+_GRANULARITY_ALIASES: dict[str, str] = {
+    "day": "day", "日": "day", "每日": "day", "按日": "day", "天": "day",
+    "week": "week", "周": "week", "每周": "week", "按周": "week",
+    "month": "month", "月": "month", "每月": "month", "按月": "month", "月份": "month",
+    "quarter": "quarter", "季度": "quarter", "按季度": "quarter",
+    "year": "year", "年": "year", "按年": "year", "每年": "year",
+}
+
+
+def _normalize_granularity(raw: object) -> str | None:
+    """把 LLM 输出的时间粒度归一成 RequirementGranularity（中文/英文/空）。
+
+    认不出来就返回 None（不猜）——猜错粒度会让 SQL 的分组维度整体错位。
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if not text:
+        return None
+    return _GRANULARITY_ALIASES.get(text)
+
+
 def _merge_prior_card(card: RequirementCard, prior: RequirementCard) -> None:
     """supplement 继承：presence（新值非空）覆盖 / absence（空）继承 prior。
 
     P15 e2e T2 语义：第 1 轮已确认约束默认沿用，只有本轮明确改写才覆盖。
-    granularity/comparison 不在卡体显式字段，走 dimensions kind 标签并集（同 kind 覆盖）。
-    调用方随后重算 missing_fields + status。
+    comparison 不在卡体显式字段，走 dimensions kind 标签并集（同 kind 覆盖）；
+    granularity 自 2026-10-28 起是卡体字段（granularity），直接按 presence 继承。
     """
     if not card.target_metrics and prior.target_metrics:
         card.target_metrics = list(prior.target_metrics)
     if card.time_range is None and prior.time_range:
         card.time_range = prior.time_range
+    if card.granularity is None and prior.granularity:
+        card.granularity = prior.granularity
     if not card.scope and prior.scope:
         card.scope = list(prior.scope)
     if not card.analysis_methods and prior.analysis_methods:
@@ -127,6 +151,8 @@ def _merge_prior_card(card: RequirementCard, prior: RequirementCard) -> None:
         satisfied.add("granularity")
     if any(_dim_kind(d) == "comparison" for d in card.dimensions):
         satisfied.add("comparison")
+    if card.granularity:
+        satisfied.add("granularity")
     card.missing_fields = [mf for mf in card.missing_fields if mf.key not in satisfied]
 
 
@@ -256,6 +282,7 @@ def parse_requirement(
     time_range = parsed.get("time_range")
     if time_range is not None:
         time_range = str(time_range)[:64]
+    granularity = _normalize_granularity(parsed.get("granularity"))
 
     # status: complete requires NO missing fields AND all assumptions
     # explicitly accepted. If the LLM left assumptions unresolved
@@ -275,6 +302,7 @@ def parse_requirement(
         summary=summary,
         target_metrics=target_metrics,
         time_range=time_range,
+        granularity=granularity,
         scope=scope,
         dimensions=dimensions,
         analysis_methods=analysis_methods,
@@ -288,12 +316,33 @@ def parse_requirement(
     # missing_fields（_merge_prior_card 内按继承结果移除已满足 key）+ status。
     if prior_card is not None:
         _merge_prior_card(card, prior_card)
+    # LLM 会自相矛盾：既输出了某个维度的值，又把它列进 missing_fields
+    # （2026-10-28 实测：「granularity: 月」且 missing_fields 含 granularity）。
+    # 卡体已经有答案的维度一律不再追问，否则用户会被要求回答一个已经答过的字段。
+    _drop_satisfied_missing_fields(card)
     unresolved = [a for a in card.assumptions if a.accepted is None]
     if card.missing_fields or unresolved:
         card.status = "missing"
     else:
         card.status = "complete"
     return card
+
+
+def _drop_satisfied_missing_fields(card: RequirementCard) -> None:
+    """移除卡体已能回答的 missing_fields（time_range / scope / metric / granularity）。"""
+    satisfied: set[str] = set()
+    if card.time_range:
+        satisfied.add("time_range")
+    if card.scope:
+        satisfied.add("scope")
+    if card.target_metrics:
+        satisfied.add("metric")
+    if card.granularity:
+        satisfied.add("granularity")
+    if satisfied:
+        card.missing_fields = [
+            mf for mf in card.missing_fields if mf.key not in satisfied
+        ]
 
 
 def _fallback_missing_card(user_query: str) -> RequirementCard:

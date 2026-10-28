@@ -337,3 +337,40 @@ def test_persist_report_routes_success_to_persist_confirmed_run():
     conf_run.assert_awaited_once()
     empty_run.assert_not_called()
     err_run.assert_not_called()
+
+def test_build_sse_error_accepts_pydantic_error_detail():
+    """SSE error 必须能消费 Pydantic ErrorDetail（父图返回的是模型，不是 dict）。
+
+    2026-10-28 真链路 fault 注入实测：`result["error"]` 是 ErrorDetail 实例，
+    `_build_sse_error` 只认 dict → 当空 dict → kind=other → 用户看到泛化文案，
+    真实原因（表不存在）被吞掉。
+    """
+    import json
+
+    from app.main import _build_sse_error
+    from app.models.contracts import ErrorDetail
+
+    evt = _build_sse_error(
+        ErrorDetail(code="EXECUTION_ERROR",
+                    message='relation "dim_supplier" does not exist',
+                    kind="object_not_found"),
+        "SELECT * FROM dim_supplier",
+        "sql",
+    )
+    payload = json.loads(evt["data"])
+
+    assert payload["kind"] == "object_not_found"
+    assert payload["code"] == "QUERY_OBJECT"
+    assert "不存在" in payload["message"], "应给出「表或字段不存在」而不是泛化失败"
+    assert "查询执行失败" not in payload["message"]
+    assert "dim_supplier" in payload["sql"]
+
+
+def test_build_sse_error_keeps_generic_path_for_none():
+    import json
+
+    from app.main import _build_sse_error
+
+    payload = json.loads(_build_sse_error(None, None, "sql")["data"])
+    assert payload["kind"] == "other"
+    assert payload["code"] == "QUERY_FAILED"

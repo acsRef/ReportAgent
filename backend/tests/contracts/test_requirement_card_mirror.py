@@ -41,6 +41,7 @@ TS_REQUIREMENT_CARD_FIELDS = (
     "summary",
     "target_metrics",
     "time_range",
+    "granularity",
     "scope",
     "dimensions",
     "analysis_methods",
@@ -50,6 +51,9 @@ TS_REQUIREMENT_CARD_FIELDS = (
     "confidence",
     "confirmed_at",
 )
+
+# 与 app/models/requirement.py::RequirementGranularity 一字不差
+TS_REQUIREMENT_GRANULARITIES = ("day", "week", "month", "quarter", "year")
 
 TS_REQUIREMENT_MISSING_FIELD_FIELDS = ("key", "label", "kind", "options", "selected_value")
 TS_REQUIREMENT_ASSUMPTION_FIELDS = ("key", "text", "accepted", "alternatives")
@@ -70,6 +74,11 @@ def test_field_key_literal_parity() -> None:
 def test_field_kind_literal_parity() -> None:
     from app.models.requirement import RequirementFieldKind
     assert tuple(RequirementFieldKind.__args__) == TS_REQUIREMENT_FIELD_KINDS
+
+
+def test_granularity_literal_parity() -> None:
+    from app.models.requirement import RequirementGranularity
+    assert tuple(RequirementGranularity.__args__) == TS_REQUIREMENT_GRANULARITIES
 
 
 def test_card_field_parity() -> None:

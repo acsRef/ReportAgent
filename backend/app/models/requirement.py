@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field, model_validator
 
 
 RequirementStatus = Literal["missing", "complete", "locked"]
+# 时间粒度：用户要求「按月/每周/按季度」时的时间分组单位。
+# 之所以要独立字段：time_range 只表达范围（"2024年"），不表达粒度；
+# 之前粒度只作为 missing_field 存在，用户明说「每个月」时无处存放 →
+# 需求卡丢信息 → SQL 只按年分组（2026-10-28 实测 1 行，应为 12 行）。
+RequirementGranularity = Literal["day", "week", "month", "quarter", "year"]
 RequirementFieldKey = Literal[
     "time_range",
     "scope",
@@ -52,6 +57,7 @@ class RequirementCard(BaseModel):
     summary: str
     target_metrics: list[str] = Field(default_factory=list)
     time_range: str | None = None
+    granularity: RequirementGranularity | None = None
     scope: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     analysis_methods: list[str] = Field(default_factory=list)

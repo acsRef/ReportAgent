@@ -77,3 +77,79 @@ async def test_new_mode_does_not_load_prior(monkeypatch):
     }
     await g._requirement_parse(dict(state))
     assert seen.get("prior_card") is None, "mode=new 不应加载上一轮卡（避免跨轮污染）"
+
+@pytest.mark.asyncio
+async def test_supplement_inherits_even_when_prior_card_not_confirmed(monkeypatch):
+    """主线段：上一轮卡还是 missing（用户没点确认）也要继承。
+
+    2026-10-28 实测缺陷：用户第一轮拿到需求卡后直接说「再看月度趋势」，
+    上一轮的「2024年 / 华东」全丢 → 时间范围被当成"本月" → SQL 只查当月（1 行）。
+    继承的判据是"用户表达过"，不是"用户点过确认"。
+    """
+    from app.agent import requirement_analysis_graph as g
+
+    prior = RequirementCard(
+        id="draft-1", version=1, status="missing", summary="2024年华东销售额",
+        target_metrics=["销售额"], time_range="2024年", scope=["华东"],
+        missing_fields=[], assumptions=[],
+    )
+
+    async def fake_get_latest_card(*, session_id, user_id):
+        return prior
+
+    seen: dict = {}
+
+    def fake_parse_requirement(**kwargs):
+        seen["prior_card"] = kwargs.get("prior_card")
+        return RequirementCard(
+            id="draft-2", version=2, status="missing", summary=kwargs.get("user_query", ""),
+            missing_fields=[], assumptions=[],
+        )
+
+    monkeypatch.setattr("app.context.runtime.ContextRuntime", _FakeContextRuntime)
+    monkeypatch.setattr("app.services.requirement_service.get_latest_card", fake_get_latest_card)
+    monkeypatch.setattr(g, "parse_requirement", fake_parse_requirement)
+
+    state = {
+        "session_id": "s1", "user_id": 1, "user_query": "再看月度趋势",
+        "mode": "supplement", "schema_context": None, "dict_context": "",
+    }
+    await g._requirement_parse(dict(state))
+
+    assert seen.get("prior_card") is prior, "未确认的上一轮卡也必须继承（否则约束丢失）"
+
+
+@pytest.mark.asyncio
+async def test_supplement_ignores_locked_prior_card(monkeypatch):
+    """执行中（locked）的卡不继承——那代表另一条执行链正在用它。"""
+    from app.agent import requirement_analysis_graph as g
+
+    locked = RequirementCard(
+        id="draft-1", version=1, status="locked", summary="执行中的需求",
+        target_metrics=["销售额"], time_range="2024年", scope=["华东"],
+        missing_fields=[], assumptions=[], confirmed_at="2026-10-28T00:00:00",
+    )
+
+    async def fake_get_latest_card(*, session_id, user_id):
+        return locked
+
+    seen: dict = {}
+
+    def fake_parse_requirement(**kwargs):
+        seen["prior_card"] = kwargs.get("prior_card")
+        return RequirementCard(
+            id="draft-2", version=2, status="missing", summary=kwargs.get("user_query", ""),
+            missing_fields=[], assumptions=[],
+        )
+
+    monkeypatch.setattr("app.context.runtime.ContextRuntime", _FakeContextRuntime)
+    monkeypatch.setattr("app.services.requirement_service.get_latest_card", fake_get_latest_card)
+    monkeypatch.setattr(g, "parse_requirement", fake_parse_requirement)
+
+    state = {
+        "session_id": "s1", "user_id": 1, "user_query": "再看月度趋势",
+        "mode": "supplement", "schema_context": None, "dict_context": "",
+    }
+    await g._requirement_parse(dict(state))
+
+    assert seen.get("prior_card") is None, "locked 卡不得被继承（执行链正在使用）"

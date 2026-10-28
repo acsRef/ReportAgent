@@ -471,3 +471,68 @@ def test_generate_sql_multi_join_schema_listed_in_prompt(monkeypatch) -> None:
     for table in ("fact_sales", "dim_region", "dim_product",
                   "dim_customer", "dim_date"):
         assert f"表 {table}" in prompt
+
+# --- 业务口径 → 物理字段映射（2026-10-28 主线修复） -------------------------
+#
+# 缺陷：模型对「销售额/退货金额」凭空造列（fact_orders.sales_amount），EXPLAIN 报
+# object_not_found → 烧完 MCP 重检索预算 → FAILED；换个采样又蒙对 `quantity < 0`。
+# 修法：把固定口径钉进 plan 与 generate 两个 prompt（由调用方注入，见
+# sql_graph._plan 传 _PLAN_TABLE_HINTS、_generate_sql 传 _FK_CHAIN_HINTS+_SCHEMA_TERM_HINTS）。
+
+
+def test_business_term_glossary_in_plan_prompt() -> None:
+    from app.agent.prompts import build_sql_plan_prompt
+    from app.agent.sql_graph import _PLAN_TABLE_HINTS
+
+    prompt = build_sql_plan_prompt(
+        "2026-10-28", "2024年各品类销售额和退货金额对比", "schema",
+        plan_table_hints=_PLAN_TABLE_HINTS,
+    )
+
+    assert "fact_orders.order_amount" in prompt, "销售额 → order_amount 必须显式给出"
+    assert "REFUNDED" in prompt, "退货金额 → payment_amount WHERE status='REFUNDED' 必须给出"
+    assert "禁止发明列名" in prompt
+
+
+def test_business_term_glossary_in_generate_prompt() -> None:
+    from app.agent.prompts import build_sql_generate_prompt
+    from app.agent.sql_graph import _FK_CHAIN_HINTS, _SCHEMA_TERM_HINTS
+
+    prompt = build_sql_generate_prompt(
+        "2026-10-28", "销售额与退货金额", ["品类"], [], "sum", "2024年", "schema",
+        fk_chain_hints=_FK_CHAIN_HINTS + "\n\n" + _SCHEMA_TERM_HINTS,
+    )
+
+    assert "fact_orders.order_amount" in prompt
+    assert "REFUNDED" in prompt
+    assert "SUM(fact_orders.quantity)" in prompt, "销量 → quantity 必须给出"
+
+# --- 已确认粒度的确定性改写（2026-10-28） ------------------------------------
+#
+# 实测：plan prompt 里已经写了「时间粒度 = 月（必须按 dim_date.month 分组）」，模型
+# 依旧输出 dimensions=["时间","区域"]，generate 严格照 plan 写 SQL → GROUP BY year。
+# 粒度是用户在需求卡里选过的事实，不该再赌一次采样。
+
+
+def test_confirmed_granularity_rewrites_plan_dimensions() -> None:
+    from app.agent.sql_graph import QueryPlanWithClarify, _apply_confirmed_granularity
+
+    plan = QueryPlanWithClarify(target_metric="销售额", dimensions=["时间", "区域"])
+    out = _apply_confirmed_granularity(plan, "month")
+
+    assert out.dimensions == ["月份", "区域"], "宽时间维度必须被替换成具体粒度"
+
+
+def test_confirmed_granularity_supports_quarter() -> None:
+    from app.agent.sql_graph import QueryPlanWithClarify, _apply_confirmed_granularity
+
+    plan = QueryPlanWithClarify(dimensions=["时间"])
+    assert _apply_confirmed_granularity(plan, "quarter").dimensions == ["季度"]
+
+
+def test_absent_granularity_leaves_plan_untouched() -> None:
+    from app.agent.sql_graph import QueryPlanWithClarify, _apply_confirmed_granularity
+
+    plan = QueryPlanWithClarify(dimensions=["时间", "区域"])
+    assert _apply_confirmed_granularity(plan, None).dimensions == ["时间", "区域"]
+    assert _apply_confirmed_granularity(plan, "unknown").dimensions == ["时间", "区域"]

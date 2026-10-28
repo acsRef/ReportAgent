@@ -54,6 +54,7 @@ const REQUIREMENT: RequirementCard = {
   summary: 'x',
   target_metrics: ['销售额'],
   time_range: '2024年',
+  granularity: null,
   scope: ['华东'],
   dimensions: [],
   analysis_methods: [],

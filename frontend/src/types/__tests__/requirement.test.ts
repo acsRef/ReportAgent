@@ -9,6 +9,7 @@ function makeCard(overrides: Partial<RequirementCard> = {}): RequirementCard {
     summary: '分析 2024 年华东销售',
     target_metrics: ['销售额'],
     time_range: null,
+    granularity: null,
     scope: [],
     dimensions: ['时间', '区域'],
     analysis_methods: ['trend_analysis'],

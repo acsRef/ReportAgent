@@ -13,6 +13,7 @@ function makeCard(overrides: Partial<RequirementCard> = {}): RequirementCard {
     summary: '分析 2024 年华东区域的销售表现',
     target_metrics: ['销售额', '毛利额'],
     time_range: null,
+    granularity: null,
     scope: [],
     dimensions: ['时间', '区域'],
     analysis_methods: ['月度趋势', '区域贡献'],

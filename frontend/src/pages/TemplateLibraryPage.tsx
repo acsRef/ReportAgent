@@ -26,6 +26,7 @@ function buildMinimalRequirement(): RC {
     summary: '新建模板',
     target_metrics: [],
     time_range: null,
+    granularity: null,
     scope: [],
     dimensions: [],
     analysis_methods: [],

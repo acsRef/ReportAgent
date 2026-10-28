@@ -21,6 +21,7 @@ function makeRequirement(version = 1, status: 'missing' | 'complete' | 'locked' 
     summary: 'test',
     target_metrics: [],
     time_range: null,
+    granularity: null,
     scope: [],
     dimensions: [],
     analysis_methods: [],

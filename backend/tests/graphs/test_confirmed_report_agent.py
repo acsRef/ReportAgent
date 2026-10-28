@@ -144,3 +144,46 @@ def test_report_agent_no_result() -> None:
         ceg.build_report_graph = original
 
     assert result["execution_status"] == "FAILED"
+
+def test_no_query_result_preserves_upstream_error_kind() -> None:
+    """qr=None 时不能把上游的 error_kind 丢掉（2026-10-28 实测缺陷）。
+
+    场景：模型凭空写 JOIN dim_supplier → EXPLAIN 报 object_not_found →
+    diagnose 走 clarify/fail 直接 END，不走 build_output → query_result=None。
+    此前这里只从 qr 取 error，于是用户看到笼统的「查询执行失败,请稍后重试」
+    而不是「表/字段不存在」，也无法按 kind 渲染 ErrorCard。
+    """
+    import asyncio
+
+    from app.agent.confirmed_execution_graph import _confirmed_report_agent
+    from app.models.contracts import ErrorDetail
+
+    def _stub_report_graph():
+        class FakeGraph:
+            async def ainvoke(self, state, *a, **k):
+                return {"chart_config": None, "insight": ""}
+        return FakeGraph()
+
+    import app.agent.confirmed_execution_graph as ceg
+    original = ceg.build_report_graph
+    ceg.build_report_graph = _stub_report_graph
+    try:
+        result = asyncio.run(_confirmed_report_agent({
+            "user_query": "2024年各供应商的采购金额",
+            "user_id": 1,
+            "session_id": "sid",
+            "trace_id": "t",
+            "query_result": None,
+            "error": ErrorDetail(
+                code="EXECUTION_ERROR",
+                message='relation "dim_supplier" does not exist',
+                kind="object_not_found",
+            ),
+        }))
+    finally:
+        ceg.build_report_graph = original
+
+    assert result["execution_status"] == "FAILED"
+    assert result["error"] is not None, "上游 error 必须被保留"
+    assert result["error"].kind == "object_not_found", "kind 决定用户看到的错误文案"
+    assert "dim_supplier" in result["report_payload"]["error"]["message"]
