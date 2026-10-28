@@ -1,6 +1,11 @@
 import RadioGroup from '../atelier/RadioGroup'
 import CheckboxGroup from '../atelier/CheckboxGroup'
-import { isDraftReadyForReview, type RequirementCard as RC } from '../../types/requirement'
+import {
+  isDraftReadyForReview,
+  type RequirementAssumption,
+  type RequirementCard as RC,
+  type RequirementOption,
+} from '../../types/requirement'
 
 interface Props {
   card: RC
@@ -44,6 +49,29 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
     })
   }
 
+  /**
+   * 一键定口径：点候选项 = 接受该假设 + 把口径写进假设正文。
+   *
+   * 为什么不新增字段：`_format_confirmed_requirement` 只把「已接受假设的 text」拼进
+   * SQL plan prompt——写进 text 才真正到达下游；新增字段要同时改后端模型、格式化器、
+   * PII/安全闸与镜像测试，为一个 UI 动作扩大契约面不值得。
+   * 重复点击先剥掉旧的「→ 已选：...」，避免后缀叠加。
+   */
+  function chooseAssumptionAlternative(
+    assumption: RequirementAssumption,
+    option: RequirementOption,
+  ) {
+    const baseText = assumption.text.replace(/\s*→\s*已选：.*$/, '')
+    onChange({
+      ...card,
+      assumptions: card.assumptions.map((item) =>
+        item.key === assumption.key
+          ? { ...item, accepted: true, text: `${baseText} → 已选：${option.label}` }
+          : item,
+      ),
+    })
+  }
+
   function handleReview() {
     onChange({ ...card, status: 'complete', confirmed_at: null })
   }
@@ -82,7 +110,15 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
               <span className="wb-chip">{card.time_range ?? '时间待补充'}</span>
               {card.scope.length > 0
                 ? card.scope.map((item) => <span key={item} className="wb-chip">{item}</span>)
-                : <span className="wb-chip">范围待补充</span>}
+                // 后端契约：scope 为空 = 未限定（默认 ALL），不是缺失。只有真的出现在
+                // missing_fields 里才是「待补充」——否则会把「全国/全品类」误读成让你填。
+                : (
+                  <span className="wb-chip">
+                    {card.missing_fields.some((field) => field.key === 'scope')
+                      ? '范围待补充'
+                      : '未限定（全部区域）'}
+                  </span>
+                )}
             </div>
           </div>
           <div>
@@ -140,7 +176,24 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
 
             {card.assumptions.map((assumption) => (
               <div key={assumption.key} className="wb-assumption" style={{ marginBottom: 6 }}>
-                <span>Agent 暂时假设：{assumption.text}</span>
+                <div>
+                  <span>Agent 暂时假设：{assumption.text}</span>
+                  {assumption.alternatives.length > 0 && assumption.accepted !== true && (
+                    <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {assumption.alternatives.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className="wb-chip method"
+                          title={option.value}
+                          onClick={() => chooseAssumptionAlternative(assumption, option)}
+                        >
+                          选：{option.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <span className="wb-assumption-actions">
                   <button
                     type="button"

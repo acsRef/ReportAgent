@@ -35,9 +35,11 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "\n  alternatives 给「实时流聚合服务 / 离线 ETL 同步表（需先建）/ 用户提供的其他查询路径」之类。"
         "\n  释义本身的 field_meaning 假设仍可生成（用户可采用），但 data_source assumption 与 "
         "field_meaning 是两个独立概念。"
-        "\n- 用户提及的字段在字典中无释义或释义歧义时，输出 assumption："
+        "\n- 用户提及的字段/指标在字典中无释义，或存在多种合理口径（如「销量」= 订单数 or 商品件数）时，输出 assumption："
         "\n  key 固定为 \"field_meaning:<字段名>\"，text 写你的最佳猜测释义（注明「请确认」），"
-        "\n  alternatives 给候选释义（可为空数组）。用户确认前该字段含义不得用于 SQL 生成"
+        "\n  **alternatives 必须给 2-3 个候选口径**：label 用用户能看懂的中文，value 写可直接落到 SQL 的"
+        "口径表达（如 \"COUNT(*)\" / \"SUM(quantity)\"）。用户点一下即可定口径，不要让他手打。"
+        "\n  只有确实想不出任何候选时才允许空数组。用户确认或选出候选前，该字段含义不得用于 SQL 生成"
         "\n- **点名对象缺失（禁止静默替换）**：用户明确点名要查的表/对象/「xxx表」若不在"
         "可用表结构（或数据字典）里——**禁止**把它当噪声丢弃，也**禁止**悄悄替换成别的"
         "指标/表后把需求当作已确认。必须生成 assumption："
@@ -48,7 +50,9 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "\n\n维度判断规则："
         "\n- time_range: 是否包含明确的时间范围或可推断的相对时间词（本月/上月/今年/最近30天 等）"
         "\n- scope: 是否包含明确的区域/产品/客户范围；可缺省（默认 ALL）"
-        "\n- metric: 是否包含明确指标（销售额/订单数/退款率 等）"
+        "\n- metric: 是否包含明确指标（销售额/订单数/退款率 等）；**若指标名已经出现在 "
+        "target_metrics 里，即使口径有歧义也不得把 metric 列入 missing_fields**——口径歧义统一"
+        "走 field_meaning assumption 的 alternatives，绝不允许同一个问题问两遍"
         "\n- granularity: 日/周/月/季度；不指定时默认月"
         "\n- comparison: 是否要对比（同比/环比/指定基线）；不需要则 none"
     ),
@@ -57,8 +61,11 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "若 schema 信息明显不足，可在 assumption 里提议 search_schema，但本 Agent 不直接调工具。"
     ),
     "output_schema": (
+        # NOTE: 本段不参与 .format()（见 build_requirement_parse_prompt 只 format
+        # task_contract），因此 JSON 示例必须写单大括号——历史遗留的 {{ }} 会原样
+        # 进 prompt，诱导模型输出非法 JSON。改这里不要加转义。
         "输出 JSON（禁止解释，禁止 markdown，禁止换行）："
-        "\n{{"
+        "\n{"
         '\n  "summary": "一句话业务目标",'
         '\n  "target_metrics": ["指标1", "指标2"],'
         '\n  "time_range": "今年" | null,'
@@ -68,9 +75,14 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         '\n  "confidence": 0.85,'
         '\n  "missing_fields": ["time_range", "metric"],'
         '\n  "assumptions": ['
-        '\n    {{"key": "scope_default", "text": "未指定范围，使用全部区域", "alternatives": [...]}}'
+        '\n    {"key": "field_meaning:销量",'
+        '\n     "text": "销量可能指订单数量或商品件数，请确认",'
+        '\n     "alternatives": ['
+        '\n       {"label": "订单数（按订单计数）", "value": "COUNT(*)"},'
+        '\n       {"label": "商品件数（按销量求和）", "value": "SUM(quantity)"}'
+        "\n     ]}"
         "\n  ]"
-        "\n}}"
+        "\n}"
     ),
     "safety_policy": (
         "Do NOT invent tables/columns（任何引用的表/字段都必须在可用表结构或字典里）。"

@@ -88,13 +88,53 @@ describe('RequirementCardView — prototype structure', () => {
     expect(screen.getByText('选项由后端根据当前问题返回')).toBeTruthy()
   })
 
-  it('renders structured chips incl. 时间待补充/范围待补充 placeholders', () => {
+  it('renders 时间待补充 placeholder but shows 未限定 for empty scope (not 待补充)', () => {
     renderCard()
     expect(screen.getByText('核心指标')).toBeTruthy()
     expect(screen.getByText('销售额')).toBeTruthy()
     expect(screen.getByText('时间待补充')).toBeTruthy()
-    expect(screen.getByText('范围待补充')).toBeTruthy()
+    // scope 为空且不在 missing_fields 里 → 未限定（默认全部），不是"待补充"
+    expect(screen.getByText('未限定（全部区域）')).toBeTruthy()
+    expect(screen.queryByText('范围待补充')).toBeNull()
     expect(screen.getByText('预计报告内容')).toBeTruthy()
+  })
+
+  it('shows 范围待补充 only when scope is a real missing field', () => {
+    renderCard({
+      card: makeCard({
+        missing_fields: [
+          { key: 'scope', label: '范围', kind: 'multiple', options: [], selected_value: null },
+        ],
+      }),
+    })
+    expect(screen.getByText('范围待补充')).toBeTruthy()
+    expect(screen.queryByText('未限定（全部区域）')).toBeNull()
+  })
+
+  it('one-click 口径 alternative: accepts the assumption and records choice into text', () => {
+    const card = makeCard({
+      assumptions: [
+        {
+          key: 'field_meaning:销量',
+          text: '销量可能指订单数量或商品件数，请确认',
+          accepted: null,
+          alternatives: [
+            { label: '订单数（按订单计数）', value: 'COUNT(*)' },
+            { label: '商品件数（按销量求和）', value: 'SUM(quantity)' },
+          ],
+        },
+      ],
+    })
+    const { onChange } = renderCard({ card })
+
+    fireEvent.click(screen.getByText('选：商品件数（按销量求和）'))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as RequirementCard
+    expect(next.assumptions[0].accepted).toBe(true)
+    expect(next.assumptions[0].text).toBe(
+      '销量可能指订单数量或商品件数，请确认 → 已选：商品件数（按销量求和）',
+    )
   })
 
   it('review button disabled until field selected AND assumption resolved', () => {

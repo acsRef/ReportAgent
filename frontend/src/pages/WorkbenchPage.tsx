@@ -25,6 +25,7 @@ import { openChat } from '../api/analysisClient'
 import { postConfirmStream } from '../api/confirmStream'
 import { armStream, abortStream } from '../api/streamAbort'
 import { stageFromTrace, liveDetailFromEntry } from '../components/workbench/progressModel'
+import { createSendTimeoutGuard } from '../utils/sendTimeout'
 import {
   handleSSEEvent,
   loadSessionSnapshot,
@@ -137,6 +138,8 @@ export default function WorkbenchPage() {
   const [lastQuestion, setLastQuestion] = useState<string | null>(null)
   const composerRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // P-17：单次发送的「响应过慢」提示闸（只提示，不改 sending / 不断流）。
+  const sendTimeoutRef = useRef(createSendTimeoutGuard(DONE_TIMEOUT_MS))
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -172,6 +175,7 @@ export default function WorkbenchPage() {
   function handleStop() {
     // 「后台跑完」语义：停止只断开本连接的渲染，后端任务继续跑到落库。
     abortStream()
+    sendTimeoutRef.current.clear()
     setConfirming(false)
     // P11 Review-1 P1-2：adjust 路径先前 stop 不 setSending(false)——UI 卡在「处理中」
     // 直到 60s timeout；同时停止必须同步关掉 streaming 标记，否则确认按钮被锁。
@@ -259,24 +263,25 @@ export default function WorkbenchPage() {
         session_id: sid,
         base_report_version: mode === 'adjust' ? selectedReportVersion : undefined,
       },
-      (evt) => handleSSEEvent(evt, {
-        msgApi: toast,
-        sessionId: sid,
-        setSending,
-        setCasualReply,
-        onTrace: handleProgress,
-      }),
+      (evt) => {
+        // 终态到达即撤掉「响应过慢」提示闸——否则它的 timer 会误伤后续某一轮。
+        if (evt.type === 'done' || evt.type === 'error') sendTimeoutRef.current.clear()
+        handleSSEEvent(evt, {
+          msgApi: toast,
+          sessionId: sid,
+          setSending,
+          setCasualReply,
+          onTrace: handleProgress,
+        })
+      },
     )
     armStream(controller)
-    setTimeout(() => {
-      setSending((cur) => {
-        if (cur) {
-          toast.error('请求超时，请稍后重试')
-          return false
-        }
-        return cur
-      })
-    }, DONE_TIMEOUT_MS)
+    // P-17：这里**只提示**，不改 sending、不 abort 流。此前裸 setTimeout 会在 60s 后
+    // 弹「请求超时」并解锁发送框，但 SSE 仍在跑 —— 用户于是看到「说超时了结果又出来了」，
+    // 而且解锁后可重复提交。任务终态由 done / error 收尾。
+    sendTimeoutRef.current.arm(() => {
+      toast.error('响应时间较长，任务仍在处理中；结果到达后会自动显示')
+    })
   }
 
   function handleSelectSession(sessionId: string) {
