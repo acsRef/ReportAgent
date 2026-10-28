@@ -32,7 +32,7 @@ User ←SSE→ React+Vite (:3000) → proxy /api → FastAPI+LangGraph (:8100)
 
 ## Setup & Environment
 
-Requirements: Python 3.11, Node.js 18+, Docker, MiniMax + SiliconFlow API keys. Create `.env` at repo root (see `backend/.env.example`).
+Requirements: Python 3.11, Node.js 18+, Docker, a SiliconFlow API key (LLM + embedding share one key). Create `.env` at repo root (see `backend/.env.example`).
 
 ```bash
 conda create -n agent python=3.11 && conda activate agent
@@ -46,7 +46,7 @@ docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_b
 docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/setup_app_role.sql
 ```
 
-Key `.env` vars: `LLM_API_KEY` (falls back to `MINIMAX_API_KEY`), `LLM_MODEL`, `LLM_BASE_URL` (MiniMax), `SILICONFLOW_API_KEY` + `EMBEDDING_MODEL` (must match `EMBEDDING_DIM=1536`/`VECTOR(1536)`), `DATABASE_URL`, `JWT_SECRET`, `DEFAULT_USERNAME`/`DEFAULT_PASSWORD`, `APP_ENV` + `ALLOW_INSECURE_DEFAULT_AUTH=1` (dev escape hatch), `MEM0_ENABLED` (optional L3 extractor, default false). Auth startup gate is fail-closed: non-dev envs refuse to start with weak secret/password.
+Key `.env` vars: `LLM_API_KEY` (SiliconFlow key; falls back to legacy `MINIMAX_API_KEY`), `LLM_MODEL` (`deepseek-ai/DeepSeek-V3`), `LLM_BASE_URL` (`https://api.siliconflow.cn/v1`), `LLM_CONTEXT_WINDOW` (`65536` matches DeepSeek-V3), `SILICONFLOW_API_KEY` + `EMBEDDING_MODEL` (must match `EMBEDDING_DIM=1536`/`VECTOR(1536)`), `DATABASE_URL`, `JWT_SECRET`, `DEFAULT_USERNAME`/`DEFAULT_PASSWORD`, `APP_ENV` + `ALLOW_INSECURE_DEFAULT_AUTH=1` (dev escape hatch), `MEM0_ENABLED` (optional L3 extractor, default false). Auth startup gate is fail-closed: non-dev envs refuse to start with weak secret/password.
 
 ## Commands
 
@@ -209,7 +209,7 @@ Each plan doc uses these sections:
 - Session persisted in `localStorage` key `ragent_session_id` (Zustand, 24h TTL). Auth store key: `ragent_auth`
 - Frontend TypeScript ~6.0; lint uses oxlint, not eslint
 - TSD-encrypted `.py` files: read via `git show HEAD:<path>` instead of working tree bytes
-- Embedding uses SiliconFlow API (`.env`: `SILICONFLOW_API_KEY`), separate from LLM (MiniMax). Falls back to `ILIKE ANY($1::text[])` on failure; startup degrades to keyword matching (non-blocking) if embedding dimension mismatches
+- Embedding uses SiliconFlow API (`.env`: `SILICONFLOW_API_KEY`); the chat LLM now also runs on SiliconFlow (`LLM_BASE_URL=https://api.siliconflow.cn/v1`, model `deepseek-ai/DeepSeek-V3`), so one key serves both. Falls back to `ILIKE ANY($1::text[])` on failure; startup degrades to keyword matching (non-blocking) if embedding dimension mismatches
 - No `pyproject.toml`, `Makefile`, `docker-compose.yml`, or CI configs exist
 - `backend/app/db.py` + `backend/report.duckdb` are a **legacy DuckDB compat path**; PostgreSQL is the only active database — don't build new features on it
 - Checkpoint persistence (`app/infra/checkpoint/factory.py`): dev uses `MemorySaver`, non-dev uses `AsyncPostgresSaver` (checkpoints survive restarts)

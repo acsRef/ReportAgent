@@ -35,12 +35,12 @@ def _get_client():
         from mem0 import Memory
 
         api_key = os.getenv("LLM_API_KEY") or os.getenv("MINIMAX_API_KEY")
-        base_url = os.getenv("LLM_BASE_URL", "https://api.minimax.chat/v1")
+        base_url = os.getenv("LLM_BASE_URL", "https://api.siliconflow.cn/v1")
         config = {
             "llm": {
                 "provider": "openai",
                 "config": {
-                    "model": os.getenv("LLM_MODEL", "MiniMax-M2.7-highspeed"),
+                    "model": os.getenv("LLM_MODEL", "deepseek-ai/DeepSeek-V3"),
                     "api_key": api_key,
                     "base_url": base_url,
                 },

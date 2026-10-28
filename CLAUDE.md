@@ -233,7 +233,7 @@ User ←SSE→ React + Vite (:3000) → /api proxy → FastAPI + LangGraph (:810
 
 ## Setup and Commands
 
-Requirements: Python 3.11, Node.js 18+, Docker, a MiniMax API key, and a SiliconFlow API key. There is no `.env.example` for the root; create `.env` at the repository root (a backend-focused example lives at [backend/.env.example](backend/.env.example)).
+Requirements: Python 3.11, Node.js 18+, Docker, and a SiliconFlow API key (LLM + embedding share it). There is no `.env.example` for the root; create `.env` at the repository root (a backend-focused example lives at [backend/.env.example](backend/.env.example)).
 
 ```bash
 # Python environment and dependencies
@@ -317,10 +317,11 @@ Important root `.env` variables:
 
 | Variable | Default / behavior |
 | --- | --- |
-| `MINIMAX_API_KEY` | Primary LLM key |
-| `LLM_API_KEY` | Alternative key; falls back to `MINIMAX_API_KEY` |
-| `LLM_MODEL` | `MiniMax-M3` in code; configurable |
-| `LLM_BASE_URL` | `https://api.minimax.chat/v1` |
+| `LLM_API_KEY` | Primary LLM key（现为 SiliconFlow key） |
+| `MINIMAX_API_KEY` | 历史别名；仅当 `LLM_API_KEY` 缺失时回退读取（勿新填） |
+| `LLM_MODEL` | `deepseek-ai/DeepSeek-V3` in code; configurable |
+| `LLM_BASE_URL` | `https://api.siliconflow.cn/v1` |
+| `LLM_CONTEXT_WINDOW` | `131072` in code（对应 MiniMax 旧默认）；本机 `.env` 设 `65536` 对齐 DeepSeek-V3 |
 | `SILICONFLOW_API_KEY` | Embedding provider key |
 | `EMBEDDING_MODEL` | `Qwen/Qwen2.5-7B-Instruct` in code |
 | `EMBEDDING_DIM` | `1536`; must match `VECTOR(1536)` in `init_pg.sql` |
@@ -333,7 +334,7 @@ Important root `.env` variables:
 | `MAX_TASK_DURATION` | `600`; background confirm/adjust task total budget (P9); on expiry → FAILED persist + `TASK_TIMEOUT` SSE error |
 | `MAX_SQL_REPAIR_RETRIES` / `MAX_PLAN_RETRIES` | `2` / `1`; SQL repair & replan budgets (P8), pinned against `reliability/retry.RETRY_BUDGETS` |
 
-> **P6 注记**：上表 `MINIMAX_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` 将随 Unified LLM Migration 收敛为 `LLM_*` settings（宪法 §8）；届时当天更新本表。
+> **P6 注记（2026-10-28 已落地）**：上表 provider 已切至 SiliconFlow（`LLM_API_KEY` / `LLM_MODEL=deepseek-ai/DeepSeek-V3` / `LLM_BASE_URL=https://api.siliconflow.cn/v1`），`MINIMAX_*` 仅作历史别名保留（`test_llm_adapter.py` 钉住回退行为）。Embedding 仍走同一 SiliconFlow key。
 
 Startup runs the **fail-closed auth gate** ([backend/app/infra/auth/startup_guard.py](backend/app/infra/auth/startup_guard.py)) before anything else: in non-dev environments it refuses to boot when `JWT_SECRET` is missing / equals the public dev default / is shorter than 32 chars, or when `DEFAULT_PASSWORD` is still `admin123` (even for an already-existing admin row). Local development therefore needs `APP_ENV=development` + `ALLOW_INSECURE_DEFAULT_AUTH=1` in `.env`. After the gate, startup initializes the async PostgreSQL pool, creates the default user if missing, checks embedding dimensions, and compiles the graphs. Embedding failures degrade memory search to keyword matching rather than blocking startup.
 

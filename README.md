@@ -115,14 +115,14 @@ flowchart TB
 | 认证 | JWT（PyJWT，单 token，无 refresh，24h）；fail-closed 启动安全闸 |
 | Agent | LangGraph 双图 + psycopg2 + sqlglot；checkpoint 默认 MemorySaver（dev）/ PostgresSaver（非 dev + 已配 `DATABASE_URL`，未配时降级 MemorySaver + warning——见「checkpoint 持久化」节） |
 | 记忆 | 分层对话上下文（L1 原始 / L2 摘要覆盖重写 / L2.5 归档 / L3 结构化事实）+ pgvector 语义召回（语义主导，LFU/LRU 作排序因子 + 容量上限淘汰）；mem0 可选作 L3 抽取引擎（`MEM0_ENABLED`） |
-| LLM | OpenAI 兼容（MiniMax，可配置） |
+| LLM | OpenAI 兼容（SiliconFlow / `deepseek-ai/DeepSeek-V3`，可配置；`MINIMAX_*` 仅作历史别名回退） |
 | Embedding | SiliconFlow API（pgvector 语义搜索，当前默认模型 `Qwen/Qwen3-Embedding-8B` 实测输出 **1536 维**，三处同源：`.env` `EMBEDDING_DIM` / `init_pg.sql` `VECTOR(n)` / `main.py` 启动校验；改维度必须三处一起改。失败降级关键字匹配） |
 | 数据库 | PostgreSQL 15 + pgvector（`public` 星型模型：2 事实 + 5 维度零售订单，见 `backend/scripts/seed_business_p15prelude.sql`；数据覆盖 2024） |
 | 测试 | 分层：离线 gate（`pytest` backend/tests，含真 PG persistence）+ Contract E2E（Playwright，mock LLM，per-PR CI）+ Live evaluation（`REPORTAGENT_E2E=1`，真实 LLM/MCP/PG，夜间/手动） |
 
 ## 环境要求
 
-Miniconda（Python 3.11）、Node.js 18+、Docker、MiniMax API Key、SiliconFlow API Key。
+Miniconda（Python 3.11）、Node.js 18+、Docker、SiliconFlow API Key（LLM 与 embedding 共用同一 key）。
 
 ## 快速开始
 
@@ -139,10 +139,13 @@ docker run -d --name ragent-postgres \
 仓库根创建 `.env`（可参考 [backend/.env.example](backend/.env.example)）：
 
 ```bash
-MINIMAX_API_KEY=your-minimax-key
+# LLM 与 embedding 共用同一个 SiliconFlow key
+LLM_API_KEY=your-siliconflow-key
+LLM_MODEL=deepseek-ai/DeepSeek-V3
+LLM_BASE_URL=https://api.siliconflow.cn/v1
+LLM_CONTEXT_WINDOW=65536          # DeepSeek-V3 = 64K
 SILICONFLOW_API_KEY=your-siliconflow-key
 DATABASE_URL=postgresql://ragent:ragent@localhost:5432/ragent
-# LLM_MODEL / LLM_BASE_URL / SILICONFLOW_BASE_URL 可选
 # Embedding：当前默认模型 `Qwen/Qwen3-Embedding-8B` 实测输出 1536 维（与
 # `.env.example EMBEDDING_DIM=1536`、`init_pg.sql` 两处 `VECTOR(1536)`、
 # `main.py` 启动校验 `VECTOR_DIM` 三处同源；真改维度必须三处一起改，缺一启动失败）。

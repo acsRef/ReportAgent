@@ -5,10 +5,10 @@ import os
 
 class LLMConfig:
     def __init__(self) -> None:
-        self.model: str = os.getenv("LLM_MODEL") or os.getenv("MINIMAX_MODEL") or "MiniMax-M2.7-highspeed"
+        self.model: str = os.getenv("LLM_MODEL") or os.getenv("MINIMAX_MODEL") or "deepseek-ai/DeepSeek-V3"
         self.api_key: str | None = os.getenv("LLM_API_KEY") or os.getenv("MINIMAX_API_KEY")
-        self.base_url: str = os.getenv("LLM_BASE_URL") or os.getenv("MINIMAX_BASE_URL") or "https://api.minimax.chat/v1"
-        self.provider: str = os.getenv("LLM_PROVIDER", "minimax")
+        self.base_url: str = os.getenv("LLM_BASE_URL") or os.getenv("MINIMAX_BASE_URL") or "https://api.siliconflow.cn/v1"
+        self.provider: str = os.getenv("LLM_PROVIDER", "siliconflow")
         self.timeout: float = float(os.getenv("LLM_TIMEOUT", "60"))
         # 宪法 §11 契约值：LLM transient retry 预算 2（P9 自 P6 遗留默认 5 收敛）。
         self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
