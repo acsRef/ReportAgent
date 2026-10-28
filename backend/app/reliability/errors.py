@@ -195,6 +195,10 @@ _USER_MESSAGES: dict[str, str] = {
     "permission": "权限不足,无法执行该查询",
     "syntax":     "SQL 语法错误,请调整查询条件后重试",
     "object":     "查询引用的表/列不存在,请检查维度后重试",
+    # P15 新增两 kind 的用户视图（此前漏配 → user_message 直接 KeyError：
+    # normalize_kind 放行 8 kind，而本表只有 6 个 key）。
+    "object_not_found": "查询引用的表或字段不存在,请检查维度后重试",
+    "object_ambiguous": "字段名存在歧义,请明确指定要查询的列后重试",
     "other":      "查询执行失败,请稍后重试或调整需求",
 }
 
@@ -204,6 +208,10 @@ _USER_CODES: dict[str, str] = {
     "permission": "QUERY_PERMISSION",
     "syntax":     "QUERY_SYNTAX",
     "object":     "QUERY_OBJECT",
+    # 刻意复用 QUERY_OBJECT：kind 已经区分了 object_not_found / object_ambiguous
+    # （SSE payload 里带 kind 字段），codes 是稳定契约，不扩新码值。
+    "object_not_found": "QUERY_OBJECT",
+    "object_ambiguous": "QUERY_OBJECT",
     "other":      "QUERY_FAILED",
 }
 

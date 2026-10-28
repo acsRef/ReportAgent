@@ -56,7 +56,16 @@ export interface AnalysisError {
    *  retry-button affordance. Optional for backward compatibility —
    *  legacy events (HTTP_ERROR / NETWORK_ERROR / INTERNAL) have no
    *  kind and fall back to a generic title. */
-  kind?: 'timeout' | 'syntax' | 'object' | 'connection' | 'permission' | 'other' | null
+  kind?:
+    | 'timeout'
+    | 'syntax'
+    | 'object'
+    | 'object_not_found'
+    | 'object_ambiguous'
+    | 'connection'
+    | 'permission'
+    | 'other'
+    | null
   /** The SQL the agent actually tried, clipped to ≤200 chars by the
    *  backend. Used by ErrorCard's collapsible "查看 SQL" disclosure. */
   sql?: string | null

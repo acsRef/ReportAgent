@@ -4,7 +4,16 @@ interface Props {
    *  kind (timeout / connection / permission / etc.) shows distinct,
    *  actionable copy. Optional — legacy callers fall back to a generic
    *  title. */
-  kind?: 'timeout' | 'syntax' | 'object' | 'connection' | 'permission' | 'other' | null
+  kind?:
+    | 'timeout'
+    | 'syntax'
+    | 'object'
+    | 'object_not_found'
+    | 'object_ambiguous'
+    | 'connection'
+    | 'permission'
+    | 'other'
+    | null
   /** SQL the agent actually tried, clipped to ≤200 chars by the
    *  backend. Shown in a collapsible disclosure so it's there when
    *  the user needs to debug without spamming the toast / card. */
@@ -14,12 +23,14 @@ interface Props {
 }
 
 const KIND_TITLE: Record<NonNullable<Props['kind']>, string> = {
-  timeout:    '查询超时',
-  connection: '数据库连接失败',
-  permission: '权限不足',
-  syntax:     'SQL 语法错误',
-  object:     '查询对象不存在',
-  other:      '查询执行失败',
+  timeout:          '查询超时',
+  connection:       '数据库连接失败',
+  permission:       '权限不足',
+  syntax:           'SQL 语法错误',
+  object:           '查询对象不存在',
+  object_not_found: '查询的表或字段不存在',
+  object_ambiguous: '字段名有歧义',
+  other:            '查询执行失败',
 }
 
 /** error-phase card — red .progress-card with 重试当前任务.

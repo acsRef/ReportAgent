@@ -233,3 +233,27 @@ def test_user_code_exact_pinned_values():
     assert user_code("syntax") == "QUERY_SYNTAX"
     assert user_code("object") == "QUERY_OBJECT"
     assert user_code("other") == "QUERY_FAILED"
+
+
+# --- 用户视图必须覆盖**全部** SQL_ERROR_KINDS（B4 边界） -----------------------
+#
+# 背景（2026-10-28 实测发现的真 bug）：normalize_kind 放行 8 个 kind，但
+# _USER_MESSAGES / _USER_CODES 只有 6 个 key —— P15 新增的 object_not_found /
+# object_ambiguous 一旦走到 _build_sse_error 就是 KeyError（SSE 流直接断）。
+# 这条参数化测试是"词表扩了、用户视图没扩"的守门人。
+
+
+@pytest.mark.parametrize("kind", SQL_ERROR_KINDS)
+def test_user_view_covers_every_sql_error_kind(kind):
+    message = user_message(kind)
+    code = user_code(kind)
+    assert isinstance(message, str) and message.strip(), f"{kind}: 用户文案为空"
+    assert code.startswith("QUERY_"), f"{kind}: 用户码异常 {code!r}"
+
+
+def test_user_view_new_kinds_pinned():
+    """P15 两个新 kind 的文案钉住（码值复用 QUERY_OBJECT，kind 字段才区分）。"""
+    assert user_message("object_not_found") == "查询引用的表或字段不存在,请检查维度后重试"
+    assert user_code("object_not_found") == "QUERY_OBJECT"
+    assert user_message("object_ambiguous") == "字段名存在歧义,请明确指定要查询的列后重试"
+    assert user_code("object_ambiguous") == "QUERY_OBJECT"

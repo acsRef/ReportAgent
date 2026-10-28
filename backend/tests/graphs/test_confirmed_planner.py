@@ -136,3 +136,54 @@ def test_planner_synthesises_query_when_user_query_empty(monkeypatch) -> None:
     assert "华东" in captured["user_query"]
     assert "销售额" in captured["user_query"]
     assert captured["confirmed_requirement"] is not None
+
+# --- B3 边界：一键选口径必须能到达 SQL plan prompt ---------------------------
+#
+# 链路（2026-10-28 新增）：
+#   RequirementCardView 点候选 → assumption.accepted=True + text 追加「→ 已选：{label}」
+#   → PATCH 落库 → `_format_confirmed_requirement` 只拼「已接受假设的 text」
+#   → sql_graph._plan 的 prompt。
+# 这条测试钉的就是最后一跳：选中的口径不能停在 UI，必须进 prompt。
+
+
+def test_selected_metric_alternative_reaches_plan_prompt() -> None:
+    from app.agent.confirmed_execution_graph import _format_confirmed_requirement
+
+    card = _complete_card(
+        target_metrics=["销量"],
+        dimensions=["时间", "品类"],
+        assumptions=[
+            RequirementAssumption(
+                key="field_meaning:销量",
+                text="销量可能指订单数量或商品件数，请确认 → 已选：商品件数（按销量求和）",
+                accepted=True,
+            )
+        ],
+    )
+
+    result = _format_confirmed_requirement(card)
+
+    assert result is not None
+    assert "商品件数（按销量求和）" in result, "选中的口径必须出现在 plan prompt 里"
+    assert "核心指标 = [销量]" in result
+    assert "分析维度 = [时间, 品类]" in result
+
+
+def test_unselected_alternative_does_not_reach_plan_prompt() -> None:
+    """没表态的假设（accepted=None）不得进入 prompt——口径未定就不能生成 SQL。"""
+    from app.agent.confirmed_execution_graph import _format_confirmed_requirement
+
+    card = _complete_card(
+        target_metrics=["销量"],
+        assumptions=[
+            RequirementAssumption(
+                key="field_meaning:销量",
+                text="销量可能指订单数量或商品件数，请确认",
+                accepted=None,
+            )
+        ],
+    )
+
+    result = _format_confirmed_requirement(card)
+    assert result is not None
+    assert "请确认" not in result

@@ -163,10 +163,15 @@ function readReportPayload(payload: Record<string, unknown>): ReportEventPayload
   }
 }
 
+// 必须与后端 `reliability/errors.py::SQL_ERROR_KINDS`（8 个）保持一致。
+// 2026-10-28：P15 新增的 object_not_found / object_ambiguous 此前漏在这里，
+// 后端发了 kind、前端白名单不认 → 被降级成 null，ErrorCard 只能显示通用标题。
 const ERROR_KINDS: ReadonlySet<string> = new Set([
   'timeout',
   'syntax',
   'object',
+  'object_not_found',
+  'object_ambiguous',
   'connection',
   'permission',
   'other',

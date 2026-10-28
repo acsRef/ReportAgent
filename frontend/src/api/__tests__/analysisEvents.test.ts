@@ -44,6 +44,21 @@ describe('analysisEvents — error envelope', () => {
     expect(err?.sql).toBe('SELECT 1')
   })
 
+  it('accepts every backend SQL_ERROR_KIND (8), not just the legacy 6', () => {
+    // 与 backend/app/reliability/errors.py::SQL_ERROR_KINDS 一一对应。
+    // P15 的 object_not_found / object_ambiguous 曾漏在白名单外 → 被降级成 null。
+    const kinds = [
+      'syntax', 'object', 'object_not_found', 'object_ambiguous',
+      'timeout', 'connection', 'permission', 'other',
+    ]
+    for (const kind of kinds) {
+      const err = readAnalysisError({
+        code: 'QUERY_OBJECT', message: 'x', recoverable: true, failed_action: 'sql', kind,
+      })
+      expect(err?.kind, `kind=${kind} 被丢弃`).toBe(kind)
+    }
+  })
+
   it('drops the frame when required fields are missing', () => {
     expect(readAnalysisError({ code: 'X', message: 'x', recoverable: true })).toBeNull()
     expect(readAnalysisError({
