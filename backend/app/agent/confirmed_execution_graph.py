@@ -427,6 +427,7 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
     tell the two cases apart and the front-end can render distinct UX.
     """
     report_graph = build_report_graph()
+    card = state.get("requirement_card")
     rs = await report_graph.ainvoke({
         "query_result": state.get("query_result"),
         "user_query": state["user_query"],
@@ -441,6 +442,10 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
         # 召回 preference（memory-architecture §三 Report = Semantic ✅ Preference）。
         "session_id": state.get("session_id"),
         "user_id": state.get("user_id"),
+        # 2026-11-02：需求卡透传（报告规划要 analysis_methods/dimensions/summary）
+        "requirement_card": (
+            card.model_dump() if hasattr(card, "model_dump") else card
+        ),
     }, _callbacks_only(config))
 
     qr = state.get("query_result")

@@ -113,6 +113,30 @@ def test_int_month_column_is_a_time_dimension_not_a_measure():
     assert out["config"]["dimensions"] == {"x": "月份", "y": "销售额"}
 
 
+def test_constant_text_dimension_falls_back_to_time_column():
+    """常量文本维度不能吃掉图表维度（2026-11-02 实测缺陷）。
+
+    「分析2024年华东销售趋势」返回 月份/区域/支付金额：区域被 scope 过滤成常量
+    （只有「华东」），旧逻辑「文本分类优先」于是画出一根柱子——趋势图彻底失真。
+    """
+    from app.tools.sql_tools import chart_advisor
+
+    rows = [
+        {"月份": m, "区域": "华东", "支付金额": str(5_000_000 + m * 1000)}
+        for m in range(1, 13)
+    ]
+    out = json.loads(chart_advisor(_result(rows, columns=[
+        {"name": "月份", "type": "int"},
+        {"name": "区域", "type": "text"},
+        {"name": "支付金额", "type": "numeric"},
+    ])))
+
+    assert out["type"] == "bar"
+    assert out["config"]["dimensions"] == {"x": "月份", "y": "支付金额"}, (
+        "常量区域列不能被当成图表维度"
+    )
+
+
 def test_short_time_series_is_bar_not_pie():
     """行数 ≤ 8 的时间序列也不能画饼图（饼图表达不了趋势）。"""
     from app.tools.sql_tools import chart_advisor

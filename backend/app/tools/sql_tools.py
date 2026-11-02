@@ -438,10 +438,17 @@ def chart_advisor(sql_result: str) -> str:
     #   - 「季度」是文本 "Q1" → 不能当普通分类（饼图表达不了趋势）
     time_cols = [c for c in columns if _is_time_dimension(c)]
     measure_cols = [c for c in numeric_cols if c not in time_cols]
-    # 真分类列在前，时间列在后（同时存在时优先用文本分类做维度）
-    categorical_cols = [
-        c for c in columns if c not in numeric_cols and c not in time_cols
-    ] + time_cols
+    text_cols = [c for c in columns if c not in numeric_cols and c not in time_cols]
+
+    def _distinct(col: str) -> int:
+        return len({str(row.get(col)) for row in rows})
+
+    # 2026-11-02 实测：「分析2024年华东销售趋势」返回 月份(int)/区域/支付金额，
+    # 区域被 scope 过滤成常量（只有"华东"），旧逻辑「文本分类优先」于是画出
+    # 一根柱子——趋势图彻底失真。规则改为：**只把真正会变化的文本列当分类维度**，
+    # 全部是常量时回落到时间列。
+    varying_text = [c for c in text_cols if _distinct(c) > 1]
+    categorical_cols = varying_text + time_cols
 
     if categorical_cols and measure_cols:
         cat = categorical_cols[0]

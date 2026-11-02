@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -40,6 +40,9 @@ class ReportAgentState(TypedDict):
     session_id: Optional[str]
     user_id: Optional[int]
     report_preferences: list[str]
+    # 2026-11-02：需求卡透传——报告规划需要 analysis_methods / dimensions / summary，
+    # 否则「分析趋势和异常」只会产出一张图 + 一张表。
+    requirement_card: Optional[dict]
 
 
 def _validate_qr(qr_raw) -> Optional[QueryResult]:
@@ -102,10 +105,16 @@ async def _plan_analysis(state: ReportAgentState) -> dict:
 
     col_names = [c.get("name", "") if isinstance(c, dict) else str(c) for c in qr.columns]
 
+    # 2026-11-02：把「用户到底要什么」带进报告规划——此前只有列名+行数，
+    # 模型无从知道要趋势/异常，只能出一张图一张表。
+    card = state.get("requirement_card") or {}
     prompt = build_report_plan_prompt(
         column_names=col_names,
         row_count=qr.row_count,
         tools_block=_format_tools_for_prompt(),
+        requirement_summary=str(card.get("summary") or ""),
+        analysis_methods=list(card.get("analysis_methods") or []),
+        dimensions=list(card.get("dimensions") or []),
     )
 
     raw = call_llm(prompt, max_tokens=1500)
