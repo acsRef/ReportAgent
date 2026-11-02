@@ -22,6 +22,39 @@ class TurnSpec(BaseModel):
     mode: Literal["new", "supplement", "adjust"] = "new"
 
 
+class FaultSpec(BaseModel):
+    """故障注入规格 —— 把「这条 case 靠什么 header 造故障」写进数据集。
+
+    两个 seam 都在 backend 侧 fail-closed（必须 `REPORTAGENT_E2E=1`，否则
+    header 恒被忽略，生产零行为变化）：
+
+    - `fault`    → `X-E2E-Fault: kind=<kind>;mode=<mode>`（`reliability/fault_inject.py`）
+    - `mcp_down` → `X-E2E-McpDown: on`（`reliability/mcp_down.py`）
+
+    `on` 决定头挂到哪个请求：`confirm` 测执行层，`chat` 测需求层检索，
+    `both` 两层一起降级。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    seam: Literal["fault", "mcp_down"] = "fault"
+    kind: Literal["object_not_found", "permission"] = "permission"
+    mode: Literal["once", "persistent"] = "persistent"
+    on: Literal["chat", "confirm", "both"] = "both"
+
+    def header(self) -> dict[str, str]:
+        """该规格对应的唯一请求头。"""
+        if self.seam == "mcp_down":
+            return {"X-E2E-McpDown": "on"}
+        return {"X-E2E-Fault": f"kind={self.kind};mode={self.mode}"}
+
+    def headers_for(self, request: Literal["chat", "confirm"]) -> dict[str, str]:
+        """该请求是否需要带头（`on` 不覆盖此请求时返回空 dict）。"""
+        if self.on not in ("both", request):
+            return {}
+        return self.header()
+
+
 class BehaviorExpectation(BaseModel):
     """行为期望。memory/retrieval 属内部观测 → P13 前一律 deferred。"""
 
@@ -75,6 +108,15 @@ class BaselineCase(BaseModel):
     expectations: list[TurnExpectation] = Field(min_length=1)
     known_gap: bool = False
     requires_fault_injection: bool = False
+    # 2026-11-02：故障用例必须给出注入规格，否则 runner 只能 skip——
+    # 「占位 skip」在报告里看起来像“跑过了”，实际错误路径零覆盖。
+    fault: FaultSpec | None = None
+
+    @model_validator(mode="after")
+    def _fault_spec_marks_case(self) -> "BaselineCase":
+        if self.fault is not None:
+            self.requires_fault_injection = True
+        return self
 
     @model_validator(mode="after")
     def _check_expectation_len(self) -> "BaselineCase":

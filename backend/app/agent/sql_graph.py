@@ -697,15 +697,25 @@ def _evaluate(state: SQLAgentState) -> dict:
                 ).model_dump(),
                 "execution_status": "SQL_SYNTAX_ERROR",
             }
+        # 注入失败必须与真实失败**同形**：真实路径（下方 error 分支）除了
+        # evaluate_result 还会把 `error` 写进 state；否则 `_diagnose` 的 fail
+        # 分支拿不到 err → persist_error_run 只能落 `kind="other"` 兜底，SSE
+        # 也退化成通用 QUERY_FAILED。此前 permission 注入就丢在这一跳。
+        _injected_err = ErrorDetail(
+            code="EXECUTION_ERROR",
+            message=(
+                "权限不足，无法执行该查询"
+                if _fk == "permission"
+                else f"查询执行失败（{_fk}）"
+            ),
+            kind=_fk,
+        )
         return {
             "evaluate_result": EvaluateResult(
-                status="FAILED", kind=_fk,
-                error=ErrorDetail(
-                    code="SQL_EXECUTION_ERROR",
-                    message=f"E2E fault injection ({_fk})", kind=_fk,
-                ),
+                status="FAILED", kind=_fk, error=_injected_err,
             ).model_dump(),
             "execution_status": "FAILED",
+            "error": _injected_err,
         }
     # R1: validation_failed 必须优先于 sql_result 检查——上一轮 execution
     # 留下的 stale sql_result 不能污染本轮 evaluate 判断。修复前 _evaluate

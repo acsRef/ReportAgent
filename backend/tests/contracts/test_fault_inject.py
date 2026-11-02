@@ -83,6 +83,29 @@ def test_evaluate_injects_permission_as_execution_failed(monkeypatch):
     assert ev["kind"] == "permission"
 
 
+def test_evaluate_injected_permission_carries_state_error(monkeypatch):
+    """注入失败必须与真实失败**同形**：state["error"] 也要带 kind=permission。
+
+    修复前只写 evaluate_result → `_diagnose` 的 fail 分支 `state.get("error")`
+    为 None → `persist_error_run` 落 `kind="other"`、SSE 退化成通用
+    QUERY_FAILED。真链路实测（2026-11-02）：permission 注入报的是
+    「查询执行失败」，而不是「权限不足」。
+    """
+    from app.agent.sql_graph import _evaluate
+    from app.reliability.errors import user_code, user_message
+
+    monkeypatch.setenv("REPORTAGENT_E2E", "1")
+    out = _evaluate({
+        "fault_override": {"kind": "permission", "mode": "persistent"},
+        "retry_counters": {"sql_generation": 3},
+        "validation_result": {"valid": True}, "sql_result": "",
+    })
+    err = out["error"]
+    assert err.kind == "permission"
+    assert user_code(err.kind) == "QUERY_PERMISSION"
+    assert "权限不足" in user_message(err.kind)
+
+
 def test_evaluate_no_override_when_once_counter_advanced(monkeypatch):
     """once 已消费（counter=2）→ 不再注入，走真实路径（此处空 sql_result → kind other）。"""
     from app.agent.sql_graph import _evaluate

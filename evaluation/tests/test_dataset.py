@@ -42,11 +42,40 @@ def test_categories_in_whitelist(cases):
 def test_fault_injection_count(cases):
     fi = [c.id for c in cases if c.requires_fault_injection]
     assert sorted(fi) == [
-        "mcp-failure-timeout",
+        "mcp-down-requirement-scope",
         "mcp-failure-unavailable",
         "sql-failure-fault-injection",
         "sql-repair-recovers",
     ]
+
+
+def test_fault_cases_declare_injection_spec(cases):
+    """故障用例必须带 `fault` 规格 —— 否则 runner 只能 skip，报告里像“跑过了”。
+
+    （2026-11-02：此前 4 例都是占位，runner 见 flag 直接 skip，错误路径零覆盖。）
+    """
+    for c in cases:
+        if c.requires_fault_injection:
+            assert c.fault is not None, f"{c.id}: 只标了 requires_fault_injection 却没给 fault 规格"
+            assert c.fault.header(), f"{c.id}: fault 规格产不出请求头"
+
+
+def test_fault_spec_header_shapes(cases):
+    by_id = {c.id: c for c in cases}
+    assert by_id["sql-failure-fault-injection"].fault.header() == {
+        "X-E2E-Fault": "kind=permission;mode=persistent",
+    }
+    assert by_id["sql-repair-recovers"].fault.header() == {
+        "X-E2E-Fault": "kind=object_not_found;mode=once",
+    }
+    mcp = by_id["mcp-failure-unavailable"].fault
+    assert mcp.header() == {"X-E2E-McpDown": "on"}
+    # on=both 两个请求都带头；on=chat 时 confirm 不带头
+    assert mcp.headers_for("chat") == {"X-E2E-McpDown": "on"}
+    assert mcp.headers_for("confirm") == {"X-E2E-McpDown": "on"}
+    chat_only = by_id["mcp-down-requirement-scope"].fault
+    assert chat_only.headers_for("chat") == {"X-E2E-McpDown": "on"}
+    assert chat_only.headers_for("confirm") == {}
 
 
 def test_every_case_has_nonempty_expectation_content(cases):

@@ -43,8 +43,9 @@ def _login(client: httpx.Client) -> str:
 def _stream_sse(
     client: httpx.Client, method: str, url: str, token: str, *,
     json_body: dict | None = None, timeout: float = 180.0,
+    extra_headers: dict[str, str] | None = None,
 ) -> Iterator[dict]:
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", **(extra_headers or {})}
     with client.stream(method, url, json=json_body, headers=headers, timeout=timeout) as resp:
         resp.raise_for_status()
         ev_name = None
@@ -197,13 +198,16 @@ def _compute_dim_results(
 
 
 def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, Any]:
-    if case.requires_fault_injection:
+    # 2026-11-02：只有「声明了故障却没有注入规格」才 skip——这类 case 是
+    # 真 deferred（例如 MCP_TIMEOUT 没有注入形态）。有 `fault` 规格的一律真跑。
+    if case.requires_fault_injection and case.fault is None:
         return {
             "case_id": case.id, "category": case.category, "status": "skip",
-            "reason": "requires_fault_injection", "sections": {}, "deferred": [],
+            "reason": "requires_fault_injection_without_spec", "sections": {}, "deferred": [],
             "dim_results": _compute_dim_results({}, []),  # 11-slot 全 0
             "sql_executed": False, "latency_ms": None,
         }
+    fault = case.fault
 
     sid = f"eval-{case.id[:24]}-{uuid.uuid4().hex[:8]}"
     sections_all: dict[str, str] = {}
@@ -222,6 +226,7 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
                 json_body={
                     "user_query": turn.query, "mode": turn.mode, "session_id": sid,
                 },
+                extra_headers=fault.headers_for("chat") if fault else None,
             ))
             exp_idx = i if len(case.expectations) == len(case.turns) else len(case.expectations) - 1
             exp = case.expectations[exp_idx]
@@ -249,6 +254,7 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
                 }]
                 cf_events = list(_stream_sse(
                     client, "POST", f"/api/v1/sessions/{sid}/confirm", token,
+                    extra_headers=fault.headers_for("confirm") if fault else None,
                 ))
                 events = events + cf_events
 
@@ -320,12 +326,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default=None, help="JSON 结果路径")
     ap.add_argument("--md", default=None, help="Markdown 报告路径")
     ap.add_argument("--only-category", default=None)
+    ap.add_argument("--only-id", default=None, help="只跑指定 case id（迭代单例用）")
     ap.add_argument("--list", action="store_true", help="只列出案例不执行")
     args = ap.parse_args(argv)
 
     cases = load_all(args.dataset)
     if args.only_category:
         cases = [c for c in cases if c.category == args.only_category]
+    if args.only_id:
+        cases = [c for c in cases if c.id == args.only_id]
 
     if args.list:
         for c in cases:
