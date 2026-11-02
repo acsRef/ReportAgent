@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import ReportPaper from '../ReportPaper'
 import { ToastProvider } from '../../atelier/Toast'
-import { fetchReportVersion } from '../../../api/sessionsClient'
+import { fetchReportVersion, downloadReportXlsx, setReportFavorite } from '../../../api/sessionsClient'
 import type { RequirementCard } from '../../../types/requirement'
 
 vi.mock('echarts-for-react', () => ({
@@ -13,10 +13,45 @@ vi.mock('echarts-for-react', () => ({
 
 vi.mock('../../../api/sessionsClient', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/sessionsClient')>()
-  return { ...actual, fetchReportVersion: vi.fn() }
+  return {
+    ...actual,
+    fetchReportVersion: vi.fn(),
+    downloadReportXlsx: vi.fn(),
+    setReportFavorite: vi.fn(),
+  }
 })
 
 const mockFetch = vi.mocked(fetchReportVersion)
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+/** jsdom 缺 createObjectURL，导出 HTML 的落盘动作在这里被截获。 */
+function stubObjectUrl(): ReturnType<typeof vi.fn> {
+  const createObjectURL = vi.fn(() => 'blob:mock')
+  Object.defineProperty(URL, 'createObjectURL', {
+    value: createObjectURL,
+    configurable: true,
+    writable: true,
+  })
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    value: vi.fn(),
+    configurable: true,
+    writable: true,
+  })
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  return createObjectURL
+}
+
+async function readBlob(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsText(blob)
+  })
+}
 
 const PAYLOAD = {
   answer: {
@@ -183,8 +218,7 @@ describe('ReportPaper — prototype shell with real payload', () => {
     expect(screen.queryByText(/SQL 已校验/)).toBeNull()
   })
 
-  it('status=error (historical FAILED version) renders error band with tried SQL', async () => {
-    // When the user revisits an old failed version from the right rail,
+  it('status=error (historical FAILED version) renders error band with tried SQL', async () => {    // When the user revisits an old failed version from the right rail,
     // ReportPaper must render the error band with the tried SQL —
     // distinct from the live SSE error event.
     mockFetch.mockResolvedValue({
@@ -227,5 +261,48 @@ describe('ReportPaper — prototype shell with real payload', () => {
     expect(screen.getByText(/SELECT pg_sleep\(60\)/)).toBeTruthy()
     // No EVIDENCE section for failed runs.
     expect(screen.queryByText(/EVIDENCE/)).toBeNull()
+  })
+})
+
+// 2026-11-02 工具栏接线：三个按钮原来都是壳（toast / window.open / blocks:[]）。
+describe('ReportPaper — toolbar wiring', () => {
+  it('收藏走真实 PATCH：星标翻转并落库，不再只弹 toast', async () => {
+    vi.mocked(setReportFavorite).mockResolvedValue({ version: 2, favorite: true })
+    renderPaper()
+    fireEvent.click(await screen.findByText('☆ 收藏'))
+    await waitFor(() => expect(setReportFavorite).toHaveBeenCalledWith('sid-1', 2, true))
+    expect(await screen.findByText('★ 已收藏')).toBeTruthy()
+  })
+
+  it('收藏失败时回滚星标并提示', async () => {
+    vi.mocked(setReportFavorite).mockRejectedValue(new Error('HTTP 500'))
+    renderPaper()
+    fireEvent.click(await screen.findByText('☆ 收藏'))
+    await waitFor(() => expect(setReportFavorite).toHaveBeenCalled())
+    expect(await screen.findByText('☆ 收藏')).toBeTruthy()
+    expect(screen.queryByText('★ 已收藏')).toBeNull()
+  })
+
+  it('导出 Excel 走带 token 的下载函数（不再 window.open 裸跳转）', async () => {
+    vi.mocked(downloadReportXlsx).mockResolvedValue(undefined)
+    renderPaper()
+    fireEvent.click(await screen.findByText('导出 Excel'))
+    await waitFor(() =>
+      expect(downloadReportXlsx).toHaveBeenCalledWith('sid-1', 2, 'report-v2.xlsx'),
+    )
+  })
+
+  it('导出 HTML 内含真实表格与洞察（不再是空壳）', async () => {
+    const createObjectURL = stubObjectUrl()
+    renderPaper()
+    fireEvent.click(await screen.findByText('导出 HTML'))
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
+
+    const blob = createObjectURL.mock.calls[0][0] as Blob
+    const html = await readBlob(blob)
+    expect(html).toContain('华东区域销售经营分析')
+    expect(html).toContain('<table')
+    expect(html).toContain('华东')
+    expect(html).toContain('AI 洞察')
   })
 })

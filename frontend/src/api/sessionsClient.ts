@@ -2,6 +2,7 @@
  * REST client for `/api/v1/sessions/*` and `/api/v1/sessions/{sid}/reports/{v}`.
  */
 import { handleUnauthorized } from './unauthorized'
+import { downloadBlob } from '../utils/download'
 
 function getAuthToken(): string | null {
   try {
@@ -101,6 +102,55 @@ export function fetchReportVersion(
   return jsonFetch(
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/reports/${version}`,
   )
+}
+
+/**
+ * Star / unstar one report version.
+ *
+ * `agent.report_version.favorite` existed since P10 but had no writer route —
+ * the workbench "收藏" button only fired a toast, so the flag never moved.
+ */
+export function setReportFavorite(
+  sessionId: string,
+  version: number,
+  favorite: boolean,
+): Promise<{ version: number; favorite: boolean }> {
+  return jsonFetch(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/reports/${version}/favorite`,
+    { method: 'PATCH', body: JSON.stringify({ favorite }) },
+  )
+}
+
+/**
+ * Download the report's raw query result as xlsx.
+ *
+ * Uses fetch + Bearer instead of `window.open`: the export route is behind
+ * `get_current_user` (`Authorization` header only), so a plain navigation
+ * always returned 401. The backend reads the full `query_snapshot` (not the
+ * 5000-row UI cap) and builds the workbook off the event loop.
+ *
+ * Throws with the backend's `detail` code (`VERSION_NOT_FOUND` /
+ * `NO_QUERY_SNAPSHOT`) so the caller can show a specific toast.
+ */
+export async function downloadReportXlsx(
+  sessionId: string,
+  version: number,
+  filename: string,
+): Promise<void> {
+  const url = `/api/v1/sessions/${encodeURIComponent(sessionId)}/reports/${version}/export.xlsx`
+  const token = getAuthToken()
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error(`${url} failed: 401`)
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: string }
+    throw new Error(body.detail ?? `${url} failed: ${res.status}`)
+  }
+  downloadBlob(await res.blob(), filename)
 }
 
 export async function patchRequirement(

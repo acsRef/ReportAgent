@@ -5,7 +5,7 @@ import ChartBlock from '../report/blocks/ChartBlock'
 import TableBlock from '../report/blocks/TableBlock'
 import Spinner from '../atelier/Spinner'
 import { useToast } from '../atelier/useToast'
-import { fetchReportVersion, type ReportVersionDetail } from '../../api/sessionsClient'
+import { fetchReportVersion, downloadReportXlsx, setReportFavorite, type ReportVersionDetail } from '../../api/sessionsClient'
 import { adaptReport } from '../../adapter/reportAdapter'
 import type { ReportBlock } from '../../types/report'
 import type { RequirementCard } from '../../types/requirement'
@@ -37,6 +37,9 @@ export default function ReportPaper({
   const [detail, setDetail] = useState<ReportVersionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [favorite, setFavorite] = useState(false)
+  const [favoriteBusy, setFavoriteBusy] = useState(false)
+  const [exporting, setExporting] = useState<'xlsx' | 'html' | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -44,7 +47,10 @@ export default function ReportPaper({
     setError(null)
     fetchReportVersion(sessionId, version)
       .then((response) => {
-        if (!cancelled) setDetail(response.report)
+        if (!cancelled) {
+          setDetail(response.report)
+          setFavorite(Boolean(response.report.favorite))
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(String(err).slice(0, 200))
@@ -142,6 +148,63 @@ export default function ReportPaper({
   const insight = typeof answer.insight === 'string' && answer.insight ? answer.insight : null
   const isEmpty = verdict === 'EMPTY'
 
+  /** 收藏：乐观更新 + 失败回滚（PATCH 幂等，重试安全）。 */
+  const toggleFavorite = async () => {
+    if (favoriteBusy) return
+    const next = !favorite
+    setFavorite(next)
+    setFavoriteBusy(true)
+    try {
+      await setReportFavorite(sessionId, detail.version, next)
+      toast.success(next ? '已加入收藏' : '已取消收藏')
+    } catch {
+      setFavorite(!next)
+      toast.error('收藏失败，请稍后重试')
+    } finally {
+      setFavoriteBusy(false)
+    }
+  }
+
+  /** 导出 Excel：必须带 Bearer 取 blob，`window.open` 会落到 401 JSON 页。 */
+  const exportXlsx = async () => {
+    if (exporting) return
+    setExporting('xlsx')
+    try {
+      await downloadReportXlsx(sessionId, detail.version, `report-v${detail.version}.xlsx`)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      const message =
+        reason === 'NO_QUERY_SNAPSHOT'
+          ? '该版本没有可导出的原始数据'
+          : reason === 'VERSION_NOT_FOUND'
+            ? '报告版本不存在或已删除'
+            : `导出失败：${reason.slice(0, 80)}`
+      toast.error(message)
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  /** 导出 HTML：喂真实 blocks（原来传空数组，导出的文件只有标题+时间戳）。 */
+  const exportHtml = () => {
+    if (exporting) return
+    setExporting('html')
+    import('../../utils/export')
+      .then(({ exportReportHTML }) => {
+        exportReportHTML({
+          id: `${detail.session_id}-v${detail.version}`,
+          query: detail.title || '分析报告',
+          content: insight ?? '',
+          blocks,
+          steps: [],
+          timestamp: Date.parse(detail.created_at) || Date.now(),
+          status: 'done',
+        })
+      })
+      .catch(() => toast.error('导出失败'))
+      .finally(() => setExporting(null))
+  }
+
   const metaPairs: Array<[string, string]> = [
     ['数据范围', requirement?.time_range ?? '—'],
     ['分析范围', requirement?.scope?.length ? requirement.scope.join(' · ') : '—'],
@@ -165,42 +228,25 @@ export default function ReportPaper({
           <button
             type="button"
             className="wb-quiet-btn"
-            onClick={() => toast.success('报告已加入收藏')}
+            aria-pressed={favorite}
+            disabled={favoriteBusy}
+            onClick={toggleFavorite}
           >
-            ☆ 收藏
+            {favorite ? '★ 已收藏' : '☆ 收藏'}
           </button>
           <button
             type="button"
             className="wb-quiet-btn"
-            onClick={() => {
-              // /api/v1/sessions/{sid}/reports/{v}/export.xlsx —— 后端用
-              // openpyxl 把 query_snapshot（不受 5000 行展示上限影响）写成
-              // xlsx，浏览器自动用 JWT cookie 发起下载。
-              const url = `/api/v1/sessions/${sessionId}/reports/${detail.version}/export.xlsx`
-              window.open(url, '_blank')
-            }}
+            disabled={exporting !== null}
+            onClick={exportXlsx}
           >
-            导出 Excel
+            {exporting === 'xlsx' ? '导出中…' : '导出 Excel'}
           </button>
           <button
             type="button"
             className="wb-quiet-btn"
-            onClick={() => {
-              if (typeof window !== 'undefined' && detail) {
-                // HTML 备选：纯前端生成、只截前 50 行（轻量分享场景）。
-                import('../../utils/export').then(({ exportReportHTML }) => {
-                  exportReportHTML({
-                    id: `r-${detail.version}`,
-                    title: detail.title ?? '报告',
-                    query: '',
-                    blocks: [],
-                    steps: [],
-                    timestamp: Date.now(),
-                    status: 'done',
-                  } as any)
-                })
-              }
-            }}
+            disabled={exporting !== null}
+            onClick={exportHtml}
           >
             导出 HTML
           </button>

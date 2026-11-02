@@ -445,6 +445,12 @@ class ChatRequest(BaseModel):
     base_report_version: int | None = None
 
 
+class FavoriteRequest(BaseModel):
+    """报告版本收藏开关（P10 起 `agent.report_version.favorite` 一直无写入口）。"""
+
+    favorite: bool = True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent
@@ -1222,6 +1228,37 @@ async def get_session(
     if snap is None:
         raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
     return snap
+
+
+@app.patch("/api/v1/sessions/{session_id}/reports/{version}/favorite")
+async def set_report_favorite(
+    session_id: str,
+    version: int,
+    req: FavoriteRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Star / unstar one report version.
+
+    `agent.report_version.favorite` has existed since P10 but had no writer
+    anywhere — the workbench "收藏" button only fired a toast. Owner
+    isolation comes from the UPDATE predicate `(session_id, user_id,
+    version)`; a miss is a flat 404 VERSION_NOT_FOUND, deliberately not
+    distinguishing "no such version" from "not yours" (no enumeration).
+    """
+    from app.infra.db.postgres import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        updated = await report_version_repository.set_favorite(
+            conn,
+            session_id=session_id,
+            user_id=user["id"],
+            version=version,
+            favorite=req.favorite,
+        )
+    if not updated:
+        raise HTTPException(status_code=404, detail="VERSION_NOT_FOUND")
+    return {"version": version, "favorite": req.favorite}
 
 
 @app.get("/api/v1/sessions/{session_id}/reports/{version}")
