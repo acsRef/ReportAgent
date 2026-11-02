@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -110,6 +111,38 @@ def _normalize_granularity(raw: object) -> str | None:
     return _GRANULARITY_ALIASES.get(text)
 
 
+_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+_CN_MONTHS = {
+    "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+    "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
+}
+
+
+def _inherit_year(card: RequirementCard, prior: RequirementCard) -> None:
+    """补充轮只说了月份（「七月份」）时，把上一轮的时间范围里的**年份**带过来。
+
+    2026-11-02 实测缺陷：首轮「2024年华东销售趋势」，追问「详细讲一下七月份」→
+    新卡 time_range='七月份'（丢了年份）→ SQL 生成器按 today(2026) 解析成
+    `order_date >= '2026-07-01'`，静默返回**另一年**的数字。这类"数字看着正常
+    但年份错了"的错最危险，必须在需求层确定性补齐。
+    """
+    current = card.time_range
+    if not current or _YEAR_RE.search(str(current)):
+        return
+    prior_text = str(prior.time_range or "")
+    match = _YEAR_RE.search(prior_text)
+    if not match:
+        return
+    year = match.group(0)
+    text = str(current).strip()
+    # 「七月份」「七月」→ 7月，让下游更容易解析
+    cn = re.match(r"^([一二三四五六七八九十]{1,2})月", text)
+    if cn and cn.group(1) in _CN_MONTHS:
+        card.time_range = f"{year}年{_CN_MONTHS[cn.group(1)]}月"
+    else:
+        card.time_range = f"{year}年{text}"
+
+
 def _merge_prior_card(card: RequirementCard, prior: RequirementCard) -> None:
     """supplement 继承：presence（新值非空）覆盖 / absence（空）继承 prior。
 
@@ -121,6 +154,9 @@ def _merge_prior_card(card: RequirementCard, prior: RequirementCard) -> None:
         card.target_metrics = list(prior.target_metrics)
     if card.time_range is None and prior.time_range:
         card.time_range = prior.time_range
+    elif card.time_range:
+        # 只说了月份 → 继承上一轮的年份（否则按 today 解析成另一年）
+        _inherit_year(card, prior)
     if card.granularity is None and prior.granularity:
         card.granularity = prior.granularity
     if not card.scope and prior.scope:

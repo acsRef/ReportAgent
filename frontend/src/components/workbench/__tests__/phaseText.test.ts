@@ -44,7 +44,9 @@ describe('canvasKicker', () => {
 
 describe('chatModeForPhase', () => {
   it('idle → new', () => expect(chatModeForPhase('idle')).toBe('new'))
-  it('report_ready → adjust', () => expect(chatModeForPhase('report_ready')).toBe('adjust'))
+  // 2026-11-02：出报告后的追问必须回需求层重新解析（否则只是重跑旧卡）
+  it('report_ready → supplement（不是 adjust）', () =>
+    expect(chatModeForPhase('report_ready')).toBe('supplement'))
   it('awaiting phases → supplement', () => {
     expect(chatModeForPhase('awaiting_missing')).toBe('supplement')
     expect(chatModeForPhase('awaiting_confirm')).toBe('supplement')

@@ -64,6 +64,9 @@ export const EXAMPLES: WorkbenchExample[] = [
 /** Which /chat mode a composer submit should use in each phase. */
 export function chatModeForPhase(phase: AnalysisPhase): NonNullable<ChatRequest['mode']> {
   if (phase === 'idle') return 'new'
-  if (phase === 'report_ready') return 'adjust'
+  // 2026-11-02：report_ready 之后的追问必须回到需求层（supplement：继承上一轮卡片
+  // 重新解析），此前后续用 adjust 直接重跑旧卡 —— 用户说「详细讲一下七月份」
+  // 得到的是同一张 2024 全年卡的第二份报告，SQL 一模一样。
+  if (phase === 'report_ready') return 'supplement'
   return 'supplement'
 }
