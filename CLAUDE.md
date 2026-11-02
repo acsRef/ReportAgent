@@ -283,7 +283,7 @@ cd frontend && npm run test:run  # vitest one-shot (`npm run test` for watch mod
 
 ### Testing
 
-Backend tests use pytest ([backend/pytest.ini](backend/pytest.ini): `asyncio_mode = auto`, `testpaths = tests`, `--strict-markers`); suites live in `backend/tests/{smoke,contracts,persistence,graphs,e2e}`. Frontend tests use vitest (jsdom, `src/**/__tests__/*.{test,spec}.{ts,tsx}`).
+Backend tests use pytest (配置在**仓库根** [pytest.ini](pytest.ini)——**不在** `backend/` 下：`pytest.ini` 必须位于 rootdir 才生效，否则 `asyncio_mode = auto` 失效、async 测试全部不被识别。`asyncio_mode = auto`, `testpaths = backend/tests`, `--strict-markers`); suites live in `backend/tests/{smoke,contracts,persistence,graphs,e2e}`. Frontend tests use vitest (jsdom, `src/**/__tests__/*.{test,spec}.{ts,tsx}`).
 
 ```bash
 # Backend (run from backend/)

@@ -5,7 +5,7 @@ import pytest
 pytestmark = pytest.mark.contracts
 
 from app.tools import register_all_tools
-from app.tools.registry import registry
+from app.tools.registry import ToolContractError, registry
 
 
 @pytest.fixture
@@ -64,3 +64,17 @@ def test_all_registered_tools_metadata_complete(registered):
             assert meta.permission or meta.permission_required, (
                 f"{name}: high risk must have permission"
             )
+
+
+def test_register_all_tools_fails_fast_on_incomplete_metadata(monkeypatch, registered):
+    """注册结束即校验：Metadata 缺失必须**启动时抛错**，不能只靠测试兜。
+
+    2026-11-02 之前 `registry.validate()` 没有任何生产 caller——新增工具漏写
+    `preconditions` 之类会静默注册成功，Agent 拿不到边界信息也可能乱调。
+    """
+    monkeypatch.setattr(
+        registry, "validate", lambda: ["fake_tool: preconditions empty"],
+    )
+    with pytest.raises(ToolContractError) as exc:
+        register_all_tools()
+    assert "preconditions empty" in str(exc.value)

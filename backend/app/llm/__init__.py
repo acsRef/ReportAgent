@@ -41,10 +41,19 @@ _INTENT_TOOL_WHITELIST = {
     "insight_analyst",
 }
 
-_TOOLS_BLOCK_CACHE: dict[frozenset, str] = {}
+_TOOLS_BLOCK_CACHE: str | None = None
 
 
-def _format_tools_for_prompt(whitelist: set[str] | None = None) -> str:
+def _format_tools_for_prompt() -> str:
+    """渲染可被端到端分发的 5 个分析工具清单，供 intent / report prompt 注入。
+
+    只保留 `_INTENT_TOOL_WHITELIST` 里的工具——plan / report 阶段能调的就这 5 个。
+    2026-11-02：删掉一直没人传的 `whitelist` 参数（两处 caller 都不传；它只是
+    让缓存多一个 key，对应测试 `test_whitelist_parameter_filters` 同步删除）。
+    """
+    global _TOOLS_BLOCK_CACHE
+    if _TOOLS_BLOCK_CACHE is not None:
+        return _TOOLS_BLOCK_CACHE
     import logging
 
     try:
@@ -53,25 +62,19 @@ def _format_tools_for_prompt(whitelist: set[str] | None = None) -> str:
         register_all_tools()
     except Exception as exc:
         logging.getLogger(__name__).warning("register_all_tools failed: %s", exc)
-    allowed = whitelist if whitelist is not None else _INTENT_TOOL_WHITELIST
-    cache_key = frozenset(allowed)
-    cached = _TOOLS_BLOCK_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
     try:
         from app.tools.registry import registry
 
         blocks = []
         for name, meta in registry.all_tools().items():
-            if name not in allowed:
+            if name not in _INTENT_TOOL_WHITELIST:
                 continue
             desc = (meta.description or "").strip()
             if not desc:
                 continue
             blocks.append(f"- {name}: {desc}")
-        result = "\n".join(blocks)
-        _TOOLS_BLOCK_CACHE[cache_key] = result
-        return result
+        _TOOLS_BLOCK_CACHE = "\n".join(blocks)
+        return _TOOLS_BLOCK_CACHE
     except Exception as exc:
         logging.getLogger(__name__).warning("registry unavailable for _format_tools_for_prompt: %s", exc)
         return ""

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from app.tools import data_tools, faq_tools, interface_dict_tools, report_tools, sql_tools
-from app.tools.registry import ToolMetadata, registry
+from app.tools.registry import ToolContractError, ToolMetadata, registry
 
 
 def register_all_tools():
+    """注册全部内置工具，并在注册结束时校验 Metadata 完整性。
+
+    校验失败抛 `ToolContractError`：Tool Description 是 Agent Contract，缺
+    `purpose`/`preconditions`/四问等字段会让 Agent 乱调或让上层拿不到边界信息，
+    这类问题必须在启动/构图时暴露，而不是等某个测试或线上行为异常。
+    """
     registry.register(
         "search_tables",
         data_tools.search_tables,
@@ -416,3 +422,11 @@ def register_all_tools():
             examples=["detect_anomaly(json) → '发现 2 个异常值...'"],
         ),
     )
+
+    errors = registry.validate()
+    if errors:
+        raise ToolContractError(
+            "tool metadata 不完整（Tool Description 是 Agent Contract）："
+            + "; ".join(errors)
+        )
+    return registry

@@ -5,6 +5,15 @@ from typing import Any, Callable, Optional
 from pydantic import BaseModel, Field
 
 
+class ToolContractError(RuntimeError):
+    """Tool Metadata 不完整。
+
+    Tool Description 是 Agent Contract（CLAUDE.md §7）：字段缺失时 Agent 会乱调，
+    因此 `register_all_tools()` 在注册结束时一次性校验并**启动即失败**，而不是
+    只在测试里拦——2026-11-02 之前 `validate()` 没有任何生产 caller。
+    """
+
+
 class ToolMetadata(BaseModel):
     model_config = {"populate_by_name": True}
 

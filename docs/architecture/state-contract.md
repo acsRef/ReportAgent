@@ -21,7 +21,7 @@ RuntimeState     trace_id, active_agent, memory_context, tool_calls, mcp_calls
 
 | 规则 | 内容 |
 |---|---|
-| immutable | `original_query` 一经写入不得修改；所有改写只落 `current_query` |
+| immutable | `original_query` 一经写入不得修改；所有改写只落 `current_query`。**注（2026-11-02）：该字段目前只存在于 legacy 图（`legacy/agents/parent_graph.py`），现役 v2 主链的 state 不携带 `original_query`/`current_query`**——契约保留，但不要为它写「永远绿」的测试；要么在 v2 补回该字段，要么把本条标注为 legacy-only |
 | 单一写者 | 每个字段只有一个节点/阶段负责写入；跨块读取必须显式声明依赖 |
 | 生命周期 | RequestState 随请求生灭；RequirementState 随 session 草稿生灭（draft lock 保护）；ExecutionState / ReportState 随一次 confirm/adjust 生灭并落 append-only ReportVersion；RuntimeState 纯进程内 |
 | 边界传递 | 块与块之间通过显式字段交接，不允许一个节点整包重写他块状态 |

@@ -1,8 +1,8 @@
 """P2 MCP Schema Contract Freeze（docs/plans/2026-08-26-p2-rag-mcp-boundary.md 决策 5 钉子 3）。
 
 与 Task 2 已有测试的分工：
-- test_mcp_client.py::TestValidateMatchesContract —— helper 函数级行为（14 例，
-  「validator 逻辑对不对」）；
+- test_mcp_client.py::TestValidateMatchesContract —— helper 函数级行为（2026-11-02
+  边界收敛后为 6 例，此前 14 例；「validator 逻辑对不对」）；
 - 本文件 —— **契约面冻结**（「稳定/内部字段表这个架构不变量还在不在」）：
   1. `_INTERNAL_RESULT_FIELDS` 快照冻结（同 LEGACY BRIDGE 快照手法）——
      任何增删必须显式改快照并同步 Task 4 mcp-contract.md 字段表；

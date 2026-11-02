@@ -1,6 +1,6 @@
 # 测试收敛：删掉边界外用例，保留「变红即承诺破了」的
 
-> 状态: 进行中
+> 状态: 已完成
 
 ## Context
 
@@ -134,3 +134,34 @@ python -m pytest -q                     # 期望：N passed / 1 skipped / 0 fail
 - `docs/testing-boundaries.md` §三 的数字口径（函数个数 vs 用例数）、§六 现状数据全部失效；§3.2「shadowed 死用例」前提不成立（AST 实测零重名）。
 - `tests/contracts/test_mcp_contract_schema.py` docstring 写「14 例」，实际 6 例。
 - `AGENTS.md` / `CLAUDE.md` 仍写 `backend/pytest.ini`，实际配置在仓库根 `pytest.ini`。
+
+## 落地记录（2026-11-02，第 2 轮：守卫 + 文档）
+
+### 守卫：把「只在测试里成立」的承诺挪到运行时
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| `registry.validate()` | 无任何生产 caller，删测试后即零守卫 | `register_all_tools()` 末尾校验，失败抛 `ToolContractError`（启动/构图即失败）。实测当前 12 个工具 0 错误 |
+| `_format_tools_for_prompt(whitelist=…)` | 死参数（两处 caller 都不传），只为缓存多开一个 key | 删掉参数，缓存简化为单个字符串；对应测试已在上轮删除 |
+| `original_query` immutable | 文档写「一经写入不得修改」，但**现役 v2 主链根本不携带该字段**（只有 legacy 图有） | 不写假测试；在 `state-contract.md` §二 标注为 legacy-only，并说明要补就补字段、别补「永远绿」的测试 |
+
+新增测试 1 条：`test_register_all_tools_fails_fast_on_incomplete_metadata`（monkeypatch `validate` 返回错误 → 断言抛 `ToolContractError`），钉住「注册即校验」这条接线本身。
+
+### 文档：4 处会误导人的失真
+
+| 文件 | 失真 | 修法 |
+|---|---|---|
+| `docs/testing-boundaries.md` | §三 用函数个数当用例数、§3.2 的 shadowed 死用例结论不成立、§六 现状数据全部过期 | §三 改成实测表（246→72）+ 作废声明；§四 标掉已补项、补上 B5 那条；§六 换成 1050 用例的实测分布 |
+| `CLAUDE.md` | 写配置在 `backend/pytest.ini`，实际在仓库根 | 改成仓库根 `pytest.ini`，并说明为什么不能挪（挪了 `asyncio_mode=auto` 失效，async 测试全部不被识别） |
+| `docs/hand-off.md` | 停在 2026-07-24：「31/31 通过」、分支与工作树状态、待办全过期 | 重写为索引式 hand-off（30 秒状态 + 怎么跑 + 已知缺口 + 文档地图），数字只指向命令 |
+| `tests/contracts/test_mcp_contract_schema.py` | docstring 写 `TestValidateMatchesContract —— 14 例` | 改为 6 例并注明收敛日期 |
+
+### 第 2 轮回归
+
+- backend **1050 收集 / 1049 passed / 1 skipped / 0 failed**
+- evaluation `80 passed / 25 skipped`（未改动）
+- 前端未改动
+
+## 最终状态
+
+两轮合计：**246 → 72 个用例（−174）**，全套 **1223 → 1050**；新增 3 个真守卫（`KIND_MARKERS` 对齐、注册即校验、prompt 输出键≠文案子串），修掉 3 个假覆盖用例，4 份文档改到与现实一致。
