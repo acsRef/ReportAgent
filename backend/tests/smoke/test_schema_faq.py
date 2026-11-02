@@ -1,4 +1,4 @@
-"""Schema RAG Phase 1：FAQ 知识库检索测试（faq_tools 后端 + MCP registry parity）。
+"""Schema RAG Phase 1：FAQ 知识库检索测试（faq_tools 后端 + MCP server registry）。
 
 离线，读 backend/scripts/schema_faq.json；不打真实 API、不连 PG。
 
@@ -25,7 +25,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # --- faq_tools（SQL Agent 使用路径：注册工具 + 纯检索） ---
 
 
-def test_search_faq_rows_matches_refund_rate():
+def test_search_faq_rows_local_seed_ranking():
+    """本地 seed 检索：命中 / 排序 / top_k 上限 / 无命中返回 []。"""
     rows = faq_tools._search_faq_rows("退款率", top_k=3)
     assert rows
     top = rows[0]
@@ -36,22 +37,18 @@ def test_search_faq_rows_matches_refund_rate():
     assert "SELECT" in top["text"]
     assert "退款率" in top["text"]  # note 也在 text 里
 
+    # 排序：最匹配的排第一
+    ranked = faq_tools._search_faq_rows("各区域销售额排名", top_k=3)
+    assert ranked
+    assert ranked[0]["question"] == "各区域销售额排名"
+    assert len(ranked) <= 3
 
-def test_search_faq_rows_no_match_returns_empty():
+    # top_k 上限
+    bounded = faq_tools._search_faq_rows("销售 区域 退货 库存 考勤 毛利率", top_k=20)
+    assert 0 < len(bounded) <= 20
+
+    # 完全无命中 → []
     assert faq_tools._search_faq_rows("完全无关的乱码词汇xyz", top_k=3) == []
-
-
-def test_search_faq_rows_sales_ranking_ranked_first():
-    rows = faq_tools._search_faq_rows("各区域销售额排名", top_k=3)
-    assert rows
-    assert rows[0]["question"] == "各区域销售额排名"
-    assert len(rows) <= 3
-
-
-def test_search_faq_rows_top_k_bounds():
-    rows = faq_tools._search_faq_rows("销售 区域 退货 库存 考勤 毛利率", top_k=20)
-    assert len(rows) <= 20
-    assert len(rows) > 0
 
 
 def test_search_faq_rows_missing_file_degrades(monkeypatch):
@@ -68,49 +65,6 @@ def test_search_faq_rows_missing_file_degrades(monkeypatch):
         faq_tools._FAQ_ENTRIES = None
 
 
-def test_search_faq_tool_invoke_returns_json_matches(monkeypatch):
-    """@tool 契约：.invoke 返回 JSON 字符串，matches 为命中案例。
-
-    P2：必须 mock MCP（否则 dispatcher 真起 ragent-py 子进程 15s 超时）。
-    mock 真实命中 → Tool Contract {question, text, score} 验证。
-    """
-    from unittest.mock import MagicMock
-    fake = MagicMock()
-    fake.call_tool.return_value = {"matches": [
-        {
-            "chunk_id": "c1",
-            "document_id": "d1",
-            "title": "区域退款率",
-            "text": "# 退款率\n示例 SQL:\nSELECT rc.region_name...\n要点: 退款率 = 退货金额/销售额",
-            "score": 0.8,
-        },
-    ]}
-    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
-
-    raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
-    assert isinstance(raw, str)
-    parsed = json.loads(raw)
-    assert isinstance(parsed.get("matches"), list)
-    assert parsed["matches"]
-    # Tool Contract P2：{question, text, score}——SELECT 在 text 里
-    assert "SELECT" in parsed["matches"][0]["text"]
-    assert "退款率" in parsed["matches"][0]["question"]
-    # 必须没有 sql/note/tables 顶层字段（已规范化）
-    for forbidden in ("sql", "note", "tables"):
-        assert forbidden not in parsed["matches"][0]
-
-
-def test_search_faq_tool_invoke_no_match_empty(monkeypatch):
-    from unittest.mock import MagicMock
-    fake = MagicMock()
-    fake.call_tool.return_value = {"matches": []}
-    monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
-
-    raw = faq_tools.search_faq.invoke({"query": "完全无关的乱码词汇xyz", "top_k": 3})
-    parsed = json.loads(raw)
-    assert parsed["matches"] == []
-
-
 def test_search_faq_registered_in_tool_registry(monkeypatch):
     """一等注册工具：register_all_tools 后 registry 能取到 search_faq。"""
     from app.tools import register_all_tools
@@ -123,11 +77,15 @@ def test_search_faq_registered_in_tool_registry(monkeypatch):
     assert meta is not None and meta.capability == "faq_search"
 
 
-# --- MCP registry parity ---
+# --- MCP server 侧活路径 ---
 
 
-def test_mcp_registry_search_faq(monkeypatch):
-    # MCP package 在仓库根，不在 backend/ 测试路径；临时挂上去验证 parity。
+def test_mcp_server_search_faq_returns_seed_sql(monkeypatch):
+    """server 侧活路径：registry.search_faq 直跑 seed（返回 sql/note/tables 形态）。
+
+    注：这是 MCP server 端点自己的检索实现，不与 backend faq_tools 对比。
+    """
+    # MCP package 在仓库根，不在 backend/ 测试路径；临时挂上去验证可调用。
     if str(_REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(_REPO_ROOT))
     from mcp_schema_server.registry import registry
@@ -135,7 +93,7 @@ def test_mcp_registry_search_faq(monkeypatch):
     rows = registry.search_faq("退款率", top_k=3)
     assert rows
     assert "SELECT" in rows[0]["sql"]
-    # 与后端路径口径一致：命中的是退款率 FAQ
+    # 命中的是退款率 FAQ
     assert "退款率" in rows[0]["question"]
 
 
@@ -159,31 +117,48 @@ class TestSearchFaqDispatcher:
     """search_faq 的 MCP-first dispatcher + catch 收紧行为。
 
     契约（docs/plans/2026-08-26-p2-rag-mcp-boundary.md 决策 1/4 + Q6 决议）：
-      - MCP 成功 → 走 MCP 路径
+      - MCP 成功 → 走统一 client，输出恰为 {question, text, score}
       - MCPBoundaryError(UNAVAILABLE) + fallback → 本地 seed 兜底
       - MCPBoundaryError(UNAVAILABLE) + flag 锁定 → JSON error 含 MCP code
       - MCPBoundaryError(INVALID_RESPONSE) → JSON error（不 retry 不 fallback）
       - 其它 Exception（非 MCPBoundaryError）→ 不再被 catch，向上抛（fail loud）
+      - MCP 合法空命中 → matches=[]（空 ≠ 错）
     """
 
-    def test_mcp_path_used_when_available(self, monkeypatch):
-        fake = _mock_mcp(monkeypatch, matches=[
-            {
-                "chunk_id": "c1",
-                "document_id": "d1",
-                "title": "区域退款率",
-                "text": "# 退款率\n示例 SQL:\nSELECT ...\n要点: 退款率 = 退货金额/销售额",
-                "score": 0.8,
-            },
-        ])
-        raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
-        parsed = json.loads(raw)
-        assert parsed["matches"]
-        assert parsed["matches"][0]["question"] == "区域退款率"
-        # MCP 必被调
-        fake.call_tool.assert_called_once_with(
-            "search_faq", {"query": "退款率", "top_k": 3}
-        )
+    def test_mcp_path_uses_unified_client_contract(self, monkeypatch):
+        """统一 client + 参数形态 + 输出恰为 {question, text, score}。"""
+        fake = MagicMock()
+        fake.call_tool.return_value = {
+            "matches": [
+                {
+                    "chunk_id": "c-internal",
+                    "document_id": "d-internal",
+                    "section_path": "internal/path",
+                    "title": "区域退款率",
+                    "text": "# 退款率\n示例 SQL:\nSELECT rc.region_name...\n要点: 退款率 = 退货金额/销售额",
+                    "score": 0.8,
+                },
+            ],
+            "degraded": False,  # mcp_client runtime annotation
+            "_note": "internal",
+        }
+        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+
+        for query, top_k in (("退款率", 3), ("q", 2)):
+            fake.call_tool.reset_mock()
+            raw = faq_tools.search_faq.invoke({"query": query, "top_k": top_k})
+            # 统一 client（非旧 shim 的 search_faq 方法）：工具名 + 参数形态
+            fake.call_tool.assert_called_once_with(
+                "search_faq", {"query": query, "top_k": top_k}
+            )
+            parsed = json.loads(raw)
+            assert parsed["matches"]
+            assert "SELECT" in parsed["matches"][0]["text"]
+            assert "退款率" in parsed["matches"][0]["question"]
+            # Tool Contract P2：恰为 {question, text, score}；内部字段与顶层
+            # annotation（degraded/_note）都不进
+            assert set(parsed["matches"][0].keys()) == {"question", "text", "score"}
+            assert set(parsed.keys()) == {"matches"}
 
     def test_fallback_to_local_on_mcp_unavailable(self, monkeypatch):
         """MCP UNAVAILABLE + fallback allowed → 本地 seed（既有契约）。"""
@@ -201,36 +176,36 @@ class TestSearchFaqDispatcher:
         # Tool Contract P2：{question, text, score}——SELECT 在 text 里
         assert "SELECT" in parsed["matches"][0]["text"]
 
-    def test_flag_locked_returns_error_json(self, monkeypatch):
-        """flag 锁定 → MCP UNAVAILABLE → 返回 JSON error，不落本地。"""
+    def test_flag_locked_and_invalid_return_error_json(self, monkeypatch):
+        """显式 error JSON：含 code、无 MCP_MCP_ 前缀；flag 放行也不 fallback INVALID。"""
+        # flag 锁定 → UNAVAILABLE → error（不落本地）
         _mock_mcp(
             monkeypatch,
             side_effect=MCPBoundaryError(MCPErrorCode.MCP_UNAVAILABLE, "down"),
         )
         monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: False)
 
-        raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
-        parsed = json.loads(raw)
+        parsed = json.loads(faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3}))
         assert "error" in parsed
         # code.value 已是 "MCP_UNAVAILABLE"；f-string 不应再加 "MCP_" 前缀
         assert "MCP_UNAVAILABLE:" in parsed["error"], (
             f"错误码前缀去重失败（避免 MCP_MCP_UNAVAILABLE）: {parsed!r}"
         )
         assert "MCP_MCP_" not in parsed["error"]
+        assert set(parsed.keys()) == {"error"}  # 不伪装成空结果
 
-    def test_invalid_response_returns_error_json_without_fallback(self, monkeypatch):
-        """MCP INVALID_RESPONSE → 显式 error，不 fallback（即使 fallback 放行）。"""
+        # INVALID_RESPONSE → error，即使 fallback 放行也不 fallback
         _mock_mcp(
             monkeypatch,
             side_effect=MCPBoundaryError(MCPErrorCode.MCP_INVALID_RESPONSE, "bad json"),
         )
         monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-        raw = faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3})
-        parsed = json.loads(raw)
+        parsed = json.loads(faq_tools.search_faq.invoke({"query": "退款率", "top_k": 3}))
         assert "error" in parsed
         assert "MCP_INVALID_RESPONSE:" in parsed["error"]
         assert "MCP_MCP_" not in parsed["error"]
+        assert set(parsed.keys()) == {"error"}
 
     def test_catch_tightens_to_mcp_boundary_error_only(self, monkeypatch):
         """收紧：只 catch MCPBoundaryError；其它 Exception 向上抛（fail loud）。"""
@@ -242,25 +217,14 @@ class TestSearchFaqDispatcher:
         with pytest.raises(RuntimeError, match="parse bug"):
             faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
 
-    def test_mcp_empty_matches_returns_empty(self, monkeypatch):
-        """MCP 合法空命中（matches=[]）→ 返回空 matches（不算错）。"""
+    def test_mcp_empty_matches_is_not_error(self, monkeypatch):
+        """MCP 合法空命中（matches=[]）→ matches=[]，不算错。"""
         _mock_mcp(monkeypatch, matches=[])
-        raw = faq_tools.search_faq.invoke({"query": "完全不存在的查询", "top_k": 3})
-        parsed = json.loads(raw)
+        parsed = json.loads(
+            faq_tools.search_faq.invoke({"query": "完全不存在的查询", "top_k": 3})
+        )
         assert parsed["matches"] == []
-
-    def test_uses_unified_mcp_client_not_faq_shim(self, monkeypatch):
-        """dispatcher 必须用 get_rag_mcp_client（统一单例），不用旧 shim 的 search_faq 方法。"""
-        # 旧 shim: get_mcp_faq_client().search_faq(q, top_k) — string 返回
-        # 新统一: get_rag_mcp_client().call_tool("search_faq", {...}) — dict 返回
-        fake = MagicMock()
-        fake.call_tool.return_value = {"matches": []}
-        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
-        # 显式验证 call_tool 被调、参数形态
-        raw = faq_tools.search_faq.invoke({"query": "q", "top_k": 2})
-        fake.call_tool.assert_called_once_with("search_faq", {"query": "q", "top_k": 2})
-        parsed = json.loads(raw)
-        assert "matches" in parsed
+        assert "error" not in parsed
 
 
 class TestMcpResponseSchemaValidation:
@@ -271,59 +235,21 @@ class TestMcpResponseSchemaValidation:
     「protocol error 伪装成 empty result」风险）。
     """
 
-    def test_missing_text_field_raises_invalid_response(self, monkeypatch):
-        """MCP 返回 items 缺 text → 显式 error JSON（不静默空结果）。"""
+    def test_bad_items_return_error_json(self, monkeypatch):
+        """缺 text / 缺 score / matches 非 list → 显式 error（不静默空结果）。"""
+        bad_results = (
+            {"matches": [{"score": 0.9, "title": "x"}]},  # 缺 text
+            {"matches": [{"text": "hello", "title": "x"}]},  # 缺 score
+            {"matches": "not a list"},  # matches 形态错
+        )
         fake = MagicMock()
-        fake.call_tool.return_value = {"matches": [{"score": 0.9, "title": "x"}]}
         monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
-        monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)  # 即使放行也不 fallback
-
-        raw = faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
-        parsed = json.loads(raw)
-        assert "error" in parsed
-        assert "MCP_INVALID_RESPONSE" in parsed["error"]
-
-    def test_missing_score_field_raises_invalid_response(self, monkeypatch):
-        """MCP 返回 items 缺 score → 显式 error JSON。"""
-        fake = MagicMock()
-        fake.call_tool.return_value = {"matches": [{"text": "hello", "title": "x"}]}
-        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
+        # 即使 fallback 放行也不 fallback
         monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
 
-        raw = faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
-        parsed = json.loads(raw)
-        assert "error" in parsed
-        assert "MCP_INVALID_RESPONSE" in parsed["error"]
-
-    def test_matches_not_list_raises_invalid_response(self, monkeypatch):
-        """MCP 返回 matches 是 string 不是 list → 显式 error。"""
-        fake = MagicMock()
-        fake.call_tool.return_value = {"matches": "not a list"}
-        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
-        monkeypatch.setattr(faq_tools, "_fallback_allowed", lambda: True)
-
-        raw = faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
-        parsed = json.loads(raw)
-        assert "error" in parsed
-        assert "MCP_INVALID_RESPONSE" in parsed["error"]
-
-    def test_extra_internal_fields_passed_through_to_text(self, monkeypatch):
-        """MCP 内部字段（chunk_id/document_id/section_path/_note）不影响校验。"""
-        fake = MagicMock()
-        fake.call_tool.return_value = {
-            "matches": [{
-                "text": "hello",
-                "score": 0.9,
-                "chunk_id": "c-internal",
-                "document_id": "d-internal",
-                "section_path": "internal/path",
-            }],
-            "degraded": False,  # mcp_client runtime annotation
-            "_note": "internal",
-        }
-        monkeypatch.setattr(faq_tools, "get_rag_mcp_client", lambda: fake)
-
-        raw = faq_tools.search_faq.invoke({"query": "x", "top_k": 3})
-        parsed = json.loads(raw)
-        # 暴露给 tool 的 contract 仍只 {question, text, score}（内部字段不进）
-        assert set(parsed["matches"][0].keys()) == {"question", "text", "score"}
+        for result in bad_results:
+            fake.call_tool.return_value = result
+            parsed = json.loads(faq_tools.search_faq.invoke({"query": "x", "top_k": 3}))
+            assert "error" in parsed, result
+            assert "MCP_INVALID_RESPONSE" in parsed["error"], result
+            assert "matches" not in parsed, result

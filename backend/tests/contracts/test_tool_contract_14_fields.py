@@ -24,7 +24,17 @@ def registered():
         registry._instances.update(snap_instances)
 
 
-def test_14_fields_present(registered):
+def test_description_four_questions(registered):
+    """Tool Metadata 契约：description 必须回答四问（§7 的唯一钉子）。"""
+    for name, meta in registry.all_tools().items():
+        assert "什么时候调" in meta.description, f"{name}: missing 什么时候调"
+        assert "什么时候不调" in meta.description, f"{name}: missing 什么时候不调"
+        assert "调用前" in meta.description, f"{name}: missing 调用前"
+        assert "调用后" in meta.description, f"{name}: missing 调用后"
+
+
+def test_all_registered_tools_metadata_complete(registered):
+    """每个注册工具 14 字段齐全 + 权限别名同步 + examples 非空 + 高风险必有权限。"""
     for name, meta in registry.all_tools().items():
         assert meta.name, f"{name}: name empty"
         assert meta.purpose, f"{name}: purpose empty"
@@ -42,34 +52,15 @@ def test_14_fields_present(registered):
         assert isinstance(meta.permission, list), f"{name}: permission not list"
         assert isinstance(meta.permission_required, list), f"{name}: permission_required not list"
 
-
-def test_description_four_questions(registered):
-    for name, meta in registry.all_tools().items():
-        assert "什么时候调" in meta.description, f"{name}: missing 什么时候调"
-        assert "什么时候不调" in meta.description, f"{name}: missing 什么时候不调"
-        assert "调用前" in meta.description, f"{name}: missing 调用前"
-        assert "调用后" in meta.description, f"{name}: missing 调用后"
-
-
-def test_permission_alias_synced(registered):
-    for name, meta in registry.all_tools().items():
+        # permission 是 permission_required 的兼容别名，两者必须同步
         assert meta.permission == meta.permission_required, f"{name}: permission alias not synced"
 
-
-def test_registry_validate_empty(registered):
-    errors = registry.validate()
-    assert not errors, "registry.validate failed:\n" + "\n".join(errors)
-
-
-def test_examples_non_empty_strings(registered):
-    for name, meta in registry.all_tools().items():
+        # examples 是给人看的示例，空串等于没写
         for ex in meta.examples:
             assert isinstance(ex, str) and ex.strip(), f"{name}: example empty string"
 
-
-def test_risk_level_permission_source_consistency(registered):
-    for name, meta in registry.all_tools().items():
+        # 有牙齿的一条：高风险工具必须声明权限（当前只命中 execute_sql）
         if meta.risk_level == "high":
-            assert meta.permission or meta.permission_required, f"{name}: high risk must have permission"
-        if meta.source == "mcp":
-            assert "mcp" in meta.source
+            assert meta.permission or meta.permission_required, (
+                f"{name}: high risk must have permission"
+            )

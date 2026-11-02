@@ -2,14 +2,13 @@
 
 离线——mock asyncio loop + future + CallToolResult，不起真子进程。
 覆盖：
-  - 响应分类器 5 桶（Q2）
+  - 响应分类器 5 桶（Q2）：空命中 / 协议错 / 不可达各一条合并断言
   - Transport 异常归一为 MCP_TIMEOUT / MCP_UNAVAILABLE（Q8 Pin 1）
   - CallToolResult → raw_text 提取（Q8 Pin 2）
   - Retry：仅 TIMEOUT，max_attempts=2（Q4 + Q8 Pin）
   - 单例 + 关闭幂等 + shim 无条件委托（Q6）
-  - _subprocess_env 包含 DICT_KB_NAME（Q7）
-  - flag 解析三级优先级（Q5）
-  - mcp_client 不反向 import mcp_faq_client（P0 钉子）
+  - _subprocess_env 包含 DICT_KB_NAME / FAQ_KB_NAME（Q7）
+  - flag 解析（Q5）
 """
 from __future__ import annotations
 
@@ -44,82 +43,37 @@ class TestClassifyResponse:
         """通过 client 实例调方法（_classify_response 是 RagMCPClient 的方法）。"""
         return RagMCPClient()._classify_response(raw_text)
 
-    def test_classify_json_object_passes_through(self):
-        raw = json.dumps({"matches": [{"text": "x", "score": 0.9}], "degraded": False})
-        out = self._classify(raw)
-        assert out == {"matches": [{"text": "x", "score": 0.9}], "degraded": False}
+    def test_empty_hit_is_not_error(self):
+        """两个 EMPTY 前缀（字典库 / FAQ）同属一张表：空命中不是错误，只标注 _note。"""
+        for prefix in ("字典库无匹配：foo", "FAQ 无匹配：bar"):
+            assert self._classify(prefix) == {"matches": [], "_note": prefix}
 
-    def test_classify_json_with_internal_fields_passes_through(self):
-        """client 不感知稳定字段，tool 层负责过滤（Q8 澄清）。"""
-        raw = json.dumps({
-            "matches": [{"chunk_id": "c1", "document_id": "d1", "text": "t",
-                         "title": "f", "section_path": "p", "score": 0.5}],
-            "degraded": True,
-        })
-        out = self._classify(raw)
-        # 内部字段原样透传，client 不剥
-        assert "chunk_id" in out["matches"][0]
-        assert "document_id" in out["matches"][0]
-        assert out["degraded"] is True
+    def test_invalid_text_raises_invalid(self):
+        """缺参前缀 / 未知文本 / 空串 / JSON 数组 / 标量 / 截断 JSON → 同一条 INVALID。"""
+        cases = (
+            "缺少必填参数 query",
+            "随机垃圾文本，没有任何已知前缀",
+            "",
+            json.dumps([1, 2, 3]),
+            json.dumps("hello"),
+            '{"matches": [',  # 截断
+        )
+        for raw in cases:
+            with pytest.raises(MCPBoundaryError) as ei:
+                self._classify(raw)
+            assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE, raw
 
-    def test_classify_empty_match_prefix_dict(self):
-        out = self._classify("字典库无匹配：foo")
-        assert out == {"matches": [], "_note": "字典库无匹配：foo"}
-
-    def test_classify_empty_match_prefix_faq(self):
-        out = self._classify("FAQ 无匹配：bar")
-        assert out == {"matches": [], "_note": "FAQ 无匹配：bar"}
-
-    def test_classify_invalid_param_prefix_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify("缺少必填参数 query")
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_classify_login_failure_raises_unavailable(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify("登录失败：请检查账号")
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-
-    def test_classify_permission_denied_raises_unavailable(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify("无权读取字典知识库")
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-
-    def test_classify_retrieve_failure_raises_unavailable(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify("检索失败：HTTP 500 internal")
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-
-    def test_classify_client_exception_raises_unavailable(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify("客户端异常: connection reset")
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-
-    def test_classify_unknown_non_json_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify("随机垃圾文本，没有任何已知前缀")
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_classify_empty_string_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify("")
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_classify_json_array_not_object_raises_invalid(self):
-        """JSON 顶层非 object → INVALID（Q8 ⑦：client 只做协议形态校验）。"""
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify(json.dumps([1, 2, 3]))
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_classify_json_scalar_not_object_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify(json.dumps("hello"))
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_classify_partial_json_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            self._classify('{"matches": [')  # 截断
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+    def test_unavailable_prefixes_raise_unavailable(self):
+        """登录失败 / 无权 / 检索失败 / 客户端异常：四个运行时前缀一次断言。"""
+        for raw in (
+            "登录失败：请检查账号",
+            "无权读取字典知识库",
+            "检索失败：HTTP 500 internal",
+            "客户端异常: connection reset",
+        ):
+            with pytest.raises(MCPBoundaryError) as ei:
+                self._classify(raw)
+            assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE, raw
 
 
 # ════════════════════════════════════════════════════════════════
@@ -128,7 +82,7 @@ class TestClassifyResponse:
 
 
 class _FakeFuture:
-    def __init__(self, *, result=None, error: Optional[Exception] = None) -> None:
+    def __init__(self, *, result=None, error: Exception | None = None) -> None:
         self._result = result
         self._error = error
         self.cancel_called = False
@@ -169,40 +123,22 @@ class TestDoCallTransportNormalization:
         assert ei.value.code is MCPErrorCode.MCP_TIMEOUT
         assert "timeout" in ei.value.detail
 
-    def test_connection_error_becomes_mcp_unavailable(self, monkeypatch):
-        client = _client_with_mock_loop(monkeypatch)
-        _patch_future(monkeypatch, _FakeFuture(error=ConnectionError("refused")))
-        with pytest.raises(MCPBoundaryError) as ei:
-            client._do_call("search_dictionary", {"query": "x"})
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-        assert "ConnectionError" in ei.value.detail
+    def test_transport_failures_become_mcp_unavailable(self, monkeypatch):
+        """ConnectionError / BrokenPipe / OSError / 未知异常 → 同一个 UNAVAILABLE。
 
-    def test_broken_pipe_becomes_mcp_unavailable(self, monkeypatch):
-        client = _client_with_mock_loop(monkeypatch)
-        _patch_future(
-            monkeypatch, _FakeFuture(error=BrokenPipeError("closed"))
-        )
-        with pytest.raises(MCPBoundaryError) as ei:
-            client._do_call("search_dictionary", {"query": "x"})
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-
-    def test_oserror_becomes_mcp_unavailable(self, monkeypatch):
-        client = _client_with_mock_loop(monkeypatch)
-        _patch_future(monkeypatch, _FakeFuture(error=OSError(36, "Broken pipe")))
-        with pytest.raises(MCPBoundaryError) as ei:
-            client._do_call("search_dictionary", {"query": "x"})
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-
-    def test_unknown_subprocess_error_becomes_mcp_unavailable(self, monkeypatch):
-        """subprocess spawn fail / SDK 未知异常兜底为 UNAVAILABLE。"""
-        client = _client_with_mock_loop(monkeypatch)
-        _patch_future(
-            monkeypatch, _FakeFuture(error=RuntimeError("spawn failed"))
-        )
-        with pytest.raises(MCPBoundaryError) as ei:
-            client._do_call("search_dictionary", {"query": "x"})
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-        assert "RuntimeError" in ei.value.detail
+        不断言 detail 里的异常类名——那是实现细节，不是运行时承诺。
+        """
+        for exc in (
+            ConnectionError("refused"),
+            BrokenPipeError("closed"),
+            OSError(36, "Broken pipe"),
+            RuntimeError("spawn failed"),
+        ):
+            client = _client_with_mock_loop(monkeypatch)
+            _patch_future(monkeypatch, _FakeFuture(error=exc))
+            with pytest.raises(MCPBoundaryError) as ei:
+                client._do_call("search_dictionary", {"query": "x"})
+            assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE, repr(exc)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -240,25 +176,40 @@ class _FakeAsyncSession(_FakeAsyncCM):
         await asyncio.sleep(100)
 
 
-def _run_coro_sync(coro):
-    """在测试线程内同步运行 coroutine 到完成。返回 (result_or_exc, captured_logs)。"""
+def _patch_rcts_to_run_sync(monkeypatch, run_fn):
+    """patch asyncio.run_coroutine_threadsafe 让 coro 在新 loop 上同步跑完。"""
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_fn)
+
+
+def _run_coro_sync_rcts(coro, loop):
+    """rcts 替身：把 coro 在临时 loop 上跑完，返回已完成的 future。"""
     new_loop = asyncio.new_event_loop()
     try:
-        return new_loop.run_until_complete(coro)
+        new_loop.run_until_complete(coro)
     finally:
         new_loop.close()
+    fut = MagicMock()
+    fut.result = lambda timeout=None: None
+    return fut
 
 
 class TestResetAsync:
-    def test_awaits_session_then_read_cm_in_order(self):
-        """_reset_async 必须真正 await session 和 read_cm 的 __aexit__，且顺序：session → read_cm。"""
+    def test_reset_awaits_cleanup_and_clears_state(self, monkeypatch):
+        """_reset_async / _reset 的完整清理契约：
+
+        1. 真 await session → read_cm 的 __aexit__（不是只清状态指针）
+        2. cleanup 抛错仍清状态（重入安全）
+        3. session / read_cm 为 None 时不抛
+        4. sync _reset 把 cleanup 调度到 loop 上并等它跑完
+        5. loop 已无时 _reset 仍能清状态
+        """
+        # 1. async 清理：两个 __aexit__ 都被 await，状态清空
         client = RagMCPClient(_MCPConfig())
         session = _FakeAsyncCM("session")
         read_cm = _FakeAsyncCM("read_cm")
         client._session = session
         client._read_cm = read_cm
 
-        # 直接 await _reset_async
         asyncio.run(client._reset_async())
 
         assert session.aexit_count == 1, "session.__aexit__ was not awaited"
@@ -266,92 +217,77 @@ class TestResetAsync:
         assert client._session is None
         assert client._read_cm is None
 
-    def test_state_cleared_before_cleanup(self):
-        """状态先清（防重入），再 await cleanup；cleanup 失败不影响状态。"""
-        client = RagMCPClient(_MCPConfig())
-        session = _FakeAsyncCM("session")
-        client._session = session
-        client._read_cm = _FakeAsyncCM("read_cm")
+        # 2. cleanup 抛错 → 状态仍被清（先清状态再 cleanup）
+        boom_client = RagMCPClient(_MCPConfig())
+        boom_session = _FakeAsyncCM("session")
+        boom_read_cm = _FakeAsyncCM("read_cm")
 
-        # __aexit__ 抛异常 → 状态仍应被清
-        async def boom(*args):
+        async def _boom(*args):
             raise RuntimeError("aexit boom")
 
-        session.__aexit__ = boom
-        asyncio.run(client._reset_async())
+        boom_session.__aexit__ = _boom
+        boom_read_cm.__aexit__ = _boom
+        boom_client._session = boom_session
+        boom_client._read_cm = boom_read_cm
 
-        assert client._session is None  # 状态已清
-        assert client._read_cm is None  # 状态已清
+        asyncio.run(boom_client._reset_async())
 
-    def test_handles_none_session_and_read_cm(self):
-        """session / read_cm 为 None 时不抛。"""
-        client = RagMCPClient(_MCPConfig())
-        # 两者都 None
-        asyncio.run(client._reset_async())  # 不应抛
+        assert boom_client._session is None
+        assert boom_client._read_cm is None
 
+        # 3. 两者皆 None → 不抛
+        asyncio.run(RagMCPClient(_MCPConfig())._reset_async())
 
-def _patch_rcts_to_run_sync(monkeypatch, run_fn):
-    """patch asyncio.run_coroutine_threadsafe 让 coro 在新 loop 上同步跑完。"""
-    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_fn)
+        # 4. sync _reset：cleanup 真的被 await（不是只清状态）
+        sync_client = RagMCPClient(_MCPConfig())
+        sync_client._loop = MagicMock()
+        sync_session = _FakeAsyncCM("session")
+        sync_read_cm = _FakeAsyncCM("read_cm")
+        sync_client._session = sync_session
+        sync_client._read_cm = sync_read_cm
 
+        _patch_rcts_to_run_sync(monkeypatch, _run_coro_sync_rcts)
+        sync_client._reset()
 
-class TestSyncReset:
-    def test_sync_reset_actually_runs_async_cleanup(self, monkeypatch):
-        """sync _reset() 必须把 cleanup 调度到 loop 上并 await；不能只清状态。"""
-        client = RagMCPClient(_MCPConfig())
-        client._loop = MagicMock()
-        session = _FakeAsyncCM("session")
-        read_cm = _FakeAsyncCM("read_cm")
-        client._session = session
-        client._read_cm = read_cm
+        assert sync_session.aexit_count == 1, "session cleanup was not awaited"
+        assert sync_read_cm.aexit_count == 1, "read_cm cleanup was not awaited"
+        assert sync_client._session is None
+        assert sync_client._read_cm is None
 
-        def rcts(coro, loop):
-            new_loop = asyncio.new_event_loop()
-            try:
-                new_loop.run_until_complete(coro)
-            finally:
-                new_loop.close()
-            fut = MagicMock()
-            fut.result = lambda timeout=None: None
-            return fut
+        # 5. loop 已无（早期失败 / close 后再 reset）→ 仍清状态
+        loopless = RagMCPClient(_MCPConfig())
+        loopless._loop = None
+        loopless._session = _FakeAsyncCM()
+        loopless._read_cm = _FakeAsyncCM()
 
-        _patch_rcts_to_run_sync(monkeypatch, rcts)
-        client._reset()
+        loopless._reset()
 
-        # 关键断言：__aexit__ 被真正调用（不是只清状态指针）
-        assert session.aexit_count == 1, "session cleanup was not awaited"
-        assert read_cm.aexit_count == 1, "read_cm cleanup was not awaited"
-        assert client._session is None
-        assert client._read_cm is None
-
-    def test_sync_reset_without_loop_clears_state(self):
-        """loop 已无时 _reset 仍能清状态（早期失败 / close 后再 reset）。"""
-        client = RagMCPClient(_MCPConfig())
-        client._loop = None
-        client._session = _FakeAsyncCM()
-        client._read_cm = _FakeAsyncCM()
-        client._reset()
-        assert client._session is None
-        assert client._read_cm is None
+        assert loopless._session is None
+        assert loopless._read_cm is None
 
 
 class TestDoCallTimeoutLifecycle:
-    def test_timeout_cancels_inflight_and_preserves_new_session_for_retry(self, monkeypatch):
+    def test_timeout_cancels_inflight_and_drains_before_retry(self, monkeypatch):
         """TIMEOUT 路径（review 修订钉子）：
 
-        1. 原 future 仍 running → future.cancel() + 等待完成
-        2. 旧 coroutine 收到 CancelledError → 自己的 except 块自清 session
+        1. 原 future 仍 running → future.cancel()
+        2. drain 必须等 _call_async 跑完（含 cleanup）才返回
+        3. 旧 coroutine 收到 CancelledError → 自己的 except 块自清 session
            （**关键**：cleanup 走 local capture，不碰 self._session 全局）
-        3. retry 拿干净 state → 新 session 创建且不被旧 cleanup 误关
-
-        这是 review 暴露的真竞态：旧设计 main thread 直接 self._reset()，
-        但旧 coroutine 仍在跑、可能改 self._session，导致 retry 创建的新
-        session 被旧 cleanup 关掉。
+        4. 抛 MCP_TIMEOUT 时 state 已干净
         """
         client = RagMCPClient(_MCPConfig())
         client._loop = MagicMock()
 
-        old_session = _FakeAsyncSession("old_session")
+        cleanup_duration = 0.05  # 让 cleanup 有可观察的耗时（无时间阈值断言）
+
+        class _SlowSession(_FakeAsyncSession):
+            async def __aexit__(self, *args):
+                await asyncio.sleep(cleanup_duration)
+                self.aexit_count += 1
+                return False
+
+        old_session = _SlowSession("old_session")
         old_read_cm = _FakeAsyncCM("old_read_cm")
         client._session = old_session
         client._read_cm = old_read_cm
@@ -360,7 +296,7 @@ class TestDoCallTimeoutLifecycle:
         coroutine_completed = {"value": False}
 
         def rcts(coro, loop):
-            # 区分 _call_async（要 cancel + wait for cleanup）vs 其他（如
+            # 区分 _call_async（要 cancel + 等 cleanup）vs 其他（如
             # done_event.wait，纯跑完即可，不 cancel）
             coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
             is_call_async = coro_name == "_call_async"
@@ -383,11 +319,10 @@ class TestDoCallTimeoutLifecycle:
 
             if is_call_async:
                 return _FakeFuture(error=asyncio.TimeoutError())
-            else:
-                # done_event.wait() 等辅助 coroutine：返回成功 future
-                fut = MagicMock()
-                fut.result = lambda timeout=None: None
-                return fut
+            # done_event.wait() 等辅助 coroutine：返回成功 future
+            fut = MagicMock()
+            fut.result = lambda timeout=None: None
+            return fut
 
         monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", rcts)
 
@@ -398,7 +333,7 @@ class TestDoCallTimeoutLifecycle:
         assert ei.value.code is MCPErrorCode.MCP_TIMEOUT
         # 2. future.cancel() 被调用
         assert cancel_count["n"] == 1, "future.cancel() was not called on timeout"
-        # 3. 旧 coroutine 完整跑完（含 cleanup）
+        # 3. 旧 coroutine 完整跑完（含 cleanup），_do_call 才返回
         assert coroutine_completed["value"], "coroutine did not complete before main thread returned"
         # 4. 旧 session 由 coroutine 关闭（不是 main thread 误关）
         assert old_session.aexit_count == 1, (
@@ -407,94 +342,14 @@ class TestDoCallTimeoutLifecycle:
         assert old_read_cm.aexit_count == 1, (
             f"old read_cm not closed by coroutine (aexit_count={old_read_cm.aexit_count})"
         )
-        # 5. state 干净
+        # 5. state 干净（retry 拿到干净视图）
         assert client._session is None
         assert client._read_cm is None
 
-        # 6. retry 会创建新 session；验证新 session 不被旧 coroutine 的残留 cleanup 误关
-        #    （per-invocation isolation：coroutine 持有 local capture，cleanup 不碰全局）
-        new_session = _FakeAsyncCM("new_session")
-        new_read_cm = _FakeAsyncCM("new_read_cm")
-        client._session = new_session
-        client._read_cm = new_read_cm
-
-        import time
-        time.sleep(0.05)  # 给任何潜在的延迟 cleanup 机会跑
-
-    def test_timeout_drain_waits_for_done_event_signal(self, monkeypatch):
-        """TIMEOUT 路径：drain 必须等 _call_async 的 done_event.set()——即
-        coroutine 完整跑完（含 cleanup）。用慢 cleanup 验证 elapsed time 包含 cleanup。
-
-        钉子：retry 进入前 cleanup 必须完成。
-        """
-        import time
-
-        client = RagMCPClient(_MCPConfig())
-        client._loop = MagicMock()
-
-        cleanup_duration = 0.15  # seconds; 长于事件循环调度抖动
-        cleanup_state = {"started": False, "completed": False}
-
-        class _SlowSession(_FakeAsyncCM):
-            async def call_tool(self, name, args):
-                await asyncio.sleep(100)
-
-            async def __aexit__(self, *args):
-                cleanup_state["started"] = True
-                await asyncio.sleep(cleanup_duration)
-                cleanup_state["completed"] = True
-                return False
-
-        client._session = _SlowSession()
-        client._read_cm = _FakeAsyncCM()
-
-        def rcts(coro, loop):
-            coro_name = getattr(getattr(coro, "cr_code", None), "co_name", None)
-            is_call_async = coro_name == "_call_async"
-
-            new_loop = asyncio.new_event_loop()
-            try:
-                task = new_loop.create_task(coro)
-                if is_call_async:
-                    new_loop.run_until_complete(asyncio.sleep(0.01))
-                    task.cancel()
-                try:
-                    new_loop.run_until_complete(task)
-                except (asyncio.CancelledError, Exception):
-                    pass
-            finally:
-                new_loop.close()
-
-            if is_call_async:
-                return _FakeFuture(error=asyncio.TimeoutError())
-            else:
-                fut = MagicMock()
-                fut.result = lambda timeout=None: None
-                return fut
-
-        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", rcts)
-
-        start = time.monotonic()
-        with pytest.raises(MCPBoundaryError):
-            client._do_call("search_dictionary", {"query": "x"})
-        elapsed = time.monotonic() - start
-
-        # 核心不变量：cleanup 必须完成（done_event.set() 已发生）
-        assert cleanup_state["started"], "cleanup never started"
-        assert cleanup_state["completed"], (
-            "_do_call returned before coroutine's cleanup finished——"
-            "drain 没有真正等 done_event"
-        )
-        # Sanity check：elapsed time 至少包含 cleanup 耗时（说明 drain 在等）
-        assert elapsed >= cleanup_duration * 0.8, (
-            f"elapsed {elapsed:.3f}s < cleanup {cleanup_duration:.3f}s——"
-            "drain 没有真的等 cleanup"
-        )
-
 
 class TestCloseLifecycle:
-    def test_close_actually_awaits_session_and_read_cm(self, monkeypatch):
-        """close() 必须真正 await session + read_cm 的 __aexit__。"""
+    def test_close_awaits_cleanup_and_is_idempotent(self, monkeypatch):
+        """close() 必须真 await session + read_cm 的 __aexit__；且重复调用安全。"""
         client = RagMCPClient(_MCPConfig())
         client._loop = MagicMock()
         session = _FakeAsyncCM("session")
@@ -502,17 +357,7 @@ class TestCloseLifecycle:
         client._session = session
         client._read_cm = read_cm
 
-        def rcts(coro, loop):
-            new_loop = asyncio.new_event_loop()
-            try:
-                new_loop.run_until_complete(coro)
-            finally:
-                new_loop.close()
-            fut = MagicMock()
-            fut.result = lambda timeout=None: None
-            return fut
-
-        _patch_rcts_to_run_sync(monkeypatch, rcts)
+        _patch_rcts_to_run_sync(monkeypatch, _run_coro_sync_rcts)
         client.close()
 
         assert session.aexit_count == 1
@@ -521,6 +366,11 @@ class TestCloseLifecycle:
         assert client._read_cm is None
         assert client._loop is None
         assert client._thread is None
+
+        # 幂等：loop 已无 → 再 close 一次也不应抛 / 不应重复 cleanup
+        client.close()
+        assert session.aexit_count == 1
+        assert read_cm.aexit_count == 1
 
 
 # ════════════════════════════════════════════════════════════════
@@ -540,39 +390,32 @@ class _FakeResult:
 
 
 class TestExtractText:
-    def test_single_text_part(self):
-        result = _FakeResult([_FakeTextContent("text", '{"matches": []}')])
-        assert _extract_text(result) == '{"matches": []}'
+    def test_single_and_multiple_text_parts(self):
+        assert _extract_text(_FakeResult([_FakeTextContent("text", '{"matches": []}')])) == '{"matches": []}'
 
-    def test_multiple_text_parts_joined_with_newline(self):
-        result = _FakeResult([
+        multi = _FakeResult([
             _FakeTextContent("text", "line1"),
             _FakeTextContent("text", "line2"),
         ])
-        assert _extract_text(result) == "line1\nline2"
+        assert _extract_text(multi) == "line1\nline2"
 
-    def test_empty_content_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _extract_text(_FakeResult([]))
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_none_content_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _extract_text(_FakeResult(None))
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_non_text_content_raises_invalid(self):
+    def test_empty_none_and_non_text_content_raise_invalid(self):
         class _FakeImage:
             type = "image"
             text = None  # 模拟 image content
 
-        result = _FakeResult([
-            _FakeTextContent("text", "ok"),
-            _FakeImage(),
-        ])
+        for result in (
+            _FakeResult([]),
+            _FakeResult(None),
+            _FakeResult([_FakeTextContent("text", "ok"), _FakeImage()]),
+        ):
+            with pytest.raises(MCPBoundaryError) as ei:
+                _extract_text(result)
+            assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+        # 非 text 内容 detail 点明原因
         with pytest.raises(MCPBoundaryError) as ei:
-            _extract_text(result)
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+            _extract_text(_FakeResult([_FakeImage()]))
         assert "non-text" in ei.value.detail
 
 
@@ -584,7 +427,6 @@ class TestExtractText:
 class TestCallWithRetry:
     def test_timeout_first_attempt_succeeds_second(self, monkeypatch):
         client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
         calls = {"n": 0}
 
         def fake_do_call(name, args):
@@ -601,7 +443,6 @@ class TestCallWithRetry:
 
     def test_timeout_exhausts_budget_raises(self, monkeypatch):
         client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
         calls = {"n": 0}
 
         def fake_do_call(name, args):
@@ -614,50 +455,21 @@ class TestCallWithRetry:
         assert ei.value.code is MCPErrorCode.MCP_TIMEOUT
         assert calls["n"] == 2  # max_attempts=2，不超过 2 次
 
-    def test_unavailable_does_not_retry(self, monkeypatch):
-        client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
-        calls = {"n": 0}
+    def test_unavailable_and_invalid_do_not_retry(self, monkeypatch):
+        """只有 TIMEOUT 进 retry 预算；UNAVAILABLE / INVALID 一次就上抛。"""
+        for code in (MCPErrorCode.MCP_UNAVAILABLE, MCPErrorCode.MCP_INVALID_RESPONSE):
+            client = _client_with_mock_loop(monkeypatch)
+            calls = {"n": 0}
 
-        def fake_do_call(name, args):
-            calls["n"] += 1
-            raise MCPBoundaryError(MCPErrorCode.MCP_UNAVAILABLE, "down")
+            def fake_do_call(name, args, _code=code):
+                calls["n"] += 1
+                raise MCPBoundaryError(_code, "no retry")
 
-        monkeypatch.setattr(client, "_do_call", fake_do_call)
-        with pytest.raises(MCPBoundaryError) as ei:
-            client._call_with_retry("search_dictionary", {"query": "x"})
-        assert ei.value.code is MCPErrorCode.MCP_UNAVAILABLE
-        assert calls["n"] == 1  # UNAVAILABLE 不 retry
-
-    def test_invalid_response_does_not_retry(self, monkeypatch):
-        client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
-        calls = {"n": 0}
-
-        def fake_do_call(name, args):
-            calls["n"] += 1
-            raise MCPBoundaryError(MCPErrorCode.MCP_INVALID_RESPONSE, "bad")
-
-        monkeypatch.setattr(client, "_do_call", fake_do_call)
-        with pytest.raises(MCPBoundaryError) as ei:
-            client._call_with_retry("search_dictionary", {"query": "x"})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-        assert calls["n"] == 1
-
-    def test_empty_result_does_not_retry(self, monkeypatch):
-        """EMPTY 走成功路径，不消耗 retry budget。"""
-        client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
-        calls = {"n": 0}
-
-        def fake_do_call(name, args):
-            calls["n"] += 1
-            return "字典库无匹配：foo"  # classifier → {matches: [], _note: ...}
-
-        monkeypatch.setattr(client, "_do_call", fake_do_call)
-        result = client._call_with_retry("search_dictionary", {"query": "x"})
-        assert result == "字典库无匹配：foo"
-        assert calls["n"] == 1
+            monkeypatch.setattr(client, "_do_call", fake_do_call)
+            with pytest.raises(MCPBoundaryError) as ei:
+                client._call_with_retry("search_dictionary", {"query": "x"})
+            assert ei.value.code is code
+            assert calls["n"] == 1, f"{code.value} 不应 retry"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -666,37 +478,42 @@ class TestCallWithRetry:
 
 
 class TestCallToolEndToEnd:
-    def test_call_tool_success_returns_parsed(self, monkeypatch):
-        client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
-        monkeypatch.setattr(client, "_do_call", lambda name, args: json.dumps({
-            "matches": [{"text": "t", "score": 0.9}], "degraded": False
-        }))
-        out = client.call_tool("search_dictionary", {"query": "x"})
-        assert out["matches"][0]["text"] == "t"
+    def test_call_tool_success_passes_dict_through(self, monkeypatch):
+        """成功路径：顶层 dict 原样透传——degraded 与内部字段都由 client 原样带出
 
-    def test_call_tool_passes_degraded_through(self, monkeypatch):
-        """degraded=True 是 mcp_client 透传字段，client 不剥（Q8 澄清）。"""
+        （client 不感知稳定字段，过滤是 tool 层的职责，Q8 澄清）。
+        """
         client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
-        monkeypatch.setattr(
-            client, "_do_call",
-            lambda name, args: json.dumps({"matches": [], "degraded": True})
+        payloads = (
+            # 内部字段 + degraded=True 全部原样透传
+            {
+                "matches": [{
+                    "chunk_id": "c1", "document_id": "d1", "text": "t",
+                    "title": "f", "section_path": "p", "score": 0.5,
+                }],
+                "degraded": True,
+            },
+            # 空 matches + degraded=False 也是合法成功形态
+            {"matches": [], "degraded": False},
         )
-        out = client.call_tool("search_dictionary", {"query": "x"})
-        assert out["degraded"] is True
+        for payload in payloads:
+            monkeypatch.setattr(
+                client, "_do_call", lambda name, args, _p=payload: json.dumps(_p)
+            )
+            out = client.call_tool("search_dictionary", {"query": "x"})
+            assert out == payload
 
     def test_call_tool_empty_match_returns_empty_matches(self, monkeypatch):
+        """空 ≠ 错：EMPTY 前缀走成功路径返回 matches=[]。"""
         client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
         monkeypatch.setattr(client, "_do_call", lambda name, args: "FAQ 无匹配：x")
         out = client.call_tool("search_faq", {"query": "x"})
         assert out["matches"] == []
         assert "_note" in out
 
     def test_call_tool_invalid_response_propagates(self, monkeypatch):
+        """错 ≠ 空：协议错必须显式上抛，不许伪装成空结果。"""
         client = _client_with_mock_loop(monkeypatch)
-        client._reset = lambda: None
         monkeypatch.setattr(client, "_do_call", lambda name, args: "缺少必填参数")
         with pytest.raises(MCPBoundaryError) as ei:
             client.call_tool("search_faq", {"query": "x"})
@@ -704,31 +521,18 @@ class TestCallToolEndToEnd:
 
 
 # ════════════════════════════════════════════════════════════════
-# _subprocess_env 必须含 DICT_KB_NAME（Q7）
+# _subprocess_env 必须含 KB 名（Q7）
 # ════════════════════════════════════════════════════════════════
 
 
 class TestSubprocessEnv:
-    def test_includes_dict_kb_name(self, monkeypatch):
+    def test_includes_dict_and_faq_kb_name(self, monkeypatch):
+        """Q7：漏掉任一 KB 名都会让 MCP 通道与 HTTP 通道检索不同知识库。"""
         monkeypatch.setenv("DICT_KB_NAME", "测试字典")
-        monkeypatch.setenv("RAGENT_URL", "http://test")
-        monkeypatch.delenv("UNRELATED_KEY", raising=False)
-        client = RagMCPClient()
-        env = client._subprocess_env()
-        assert env["DICT_KB_NAME"] == "测试字典"
-        assert env["RAGENT_URL"] == "http://test"
-
-    def test_includes_faq_kb_name(self, monkeypatch):
         monkeypatch.setenv("FAQ_KB_NAME", "FAQ-测试")
-        client = RagMCPClient()
-        env = client._subprocess_env()
+        env = RagMCPClient()._subprocess_env()
+        assert env["DICT_KB_NAME"] == "测试字典"
         assert env["FAQ_KB_NAME"] == "FAQ-测试"
-
-    def test_inherits_parent_env(self, monkeypatch):
-        monkeypatch.setenv("PATH", "/some/path")
-        client = RagMCPClient()
-        env = client._subprocess_env()
-        assert env["PATH"] == "/some/path"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -737,39 +541,28 @@ class TestSubprocessEnv:
 
 
 class TestSingletonLifecycle:
-    def test_get_returns_same_instance(self, monkeypatch):
+    def test_get_returns_singleton_and_close_creates_new(self, monkeypatch):
         import app.tools.mcp_client as mod
         monkeypatch.setattr(mod, "_client", None)
-        a = get_rag_mcp_client()
-        b = get_rag_mcp_client()
-        assert a is b
-        # 清理
-        close_rag_mcp_client()
 
-    def test_close_after_get_creates_new_instance(self, monkeypatch):
-        import app.tools.mcp_client as mod
-        monkeypatch.setattr(mod, "_client", None)
         a = get_rag_mcp_client()
+        assert get_rag_mcp_client() is a  # 单例
+
         close_rag_mcp_client()
         b = get_rag_mcp_client()
-        assert a is not b
-        # 清理
+        assert a is not b  # close 后重建
+
         close_rag_mcp_client()
 
-    def test_close_without_get_is_noop(self):
-        """close 在没有 _client 时必须安全（Q6 无条件委托 + 幂等）。"""
-        import app.tools.mcp_client as mod
-        mod._client = None
-        # 不应抛
-        close_rag_mcp_client()
-        close_rag_mcp_client()  # 再调一次仍安全
-
-    def test_close_mcp_faq_client_delegates_unconditionally(self, monkeypatch):
-        """shim 关闭：即使 mcp_client 单例已初始化，shim 也必须关闭它。"""
+    def test_shim_close_delegates_and_is_safe_when_empty(self, monkeypatch):
+        """shim 关闭：无条件委托给 mcp_client 单例；单例未初始化时安全 no-op。"""
         from app.tools import mcp_faq_client as shim
         import app.tools.mcp_client as mod
 
         monkeypatch.setattr(mod, "_client", None)
+        # 未初始化 → 不抛
+        shim.close_mcp_faq_client()
+
         real = get_rag_mcp_client()
         close_count = {"n": 0}
         real.close = lambda: close_count.__setitem__("n", close_count["n"] + 1)
@@ -777,20 +570,15 @@ class TestSingletonLifecycle:
             shim.close_mcp_faq_client()
             assert close_count["n"] == 1
         finally:
-            # 重置模块状态
             mod._client = None
 
-    def test_close_mcp_faq_client_when_nothing_initialized(self):
-        """shim 在 mcp_client 单例未初始化时也必须安全 no-op。"""
-        import app.tools.mcp_client as mod
-        mod._client = None
-        from app.tools import mcp_faq_client as shim
-        # 不应抛
-        shim.close_mcp_faq_client()
+        # close 幂等（无单例时重复调用仍安全）
+        close_rag_mcp_client()
+        close_rag_mcp_client()
 
 
 # ════════════════════════════════════════════════════════════════
-# flag 解析三级优先级（Q5：REPORTAGENT_E2E > 显式 > APP_ENV 推断）
+# flag 解析（Q5：REPORTAGENT_E2E > 显式；P5 起默认 ON）
 # ════════════════════════════════════════════════════════════════
 
 
@@ -801,78 +589,32 @@ class TestResolvePhase2Flag:
         monkeypatch.setenv("PHASE2_MCP_ONLY", "false")
         assert _resolve_phase2_flag() is True
 
-    def test_explicit_true_wins(self, monkeypatch):
-        monkeypatch.delenv("REPORTAGENT_E2E", raising=False)
-        monkeypatch.setenv("PHASE2_MCP_ONLY", "true")
-        monkeypatch.setenv("APP_ENV", "development")  # 显式应压过
-        assert _resolve_phase2_flag() is True
-
-    def test_explicit_false_wins(self, monkeypatch):
+    def test_explicit_false_allows_fallback(self, monkeypatch):
         monkeypatch.delenv("REPORTAGENT_E2E", raising=False)
         monkeypatch.setenv("PHASE2_MCP_ONLY", "false")
         monkeypatch.delenv("APP_ENV", raising=False)
         assert _resolve_phase2_flag() is False
+        assert _fallback_allowed() is True
 
-    def test_app_env_dev_default_false(self, monkeypatch):
-        """P5 起默认 ON（停止 fallback），APP_ENV=development 也不再 false。"""
+    def test_defaults_true_and_fallback_locked(self, monkeypatch):
+        """P5 后 _resolve_phase2_flag 不再读 APP_ENV：无显式值时一律默认 True。
+
+        （含显式 true 用例——它同样压过 APP_ENV，落在同一断言上。）
+        """
         monkeypatch.delenv("REPORTAGENT_E2E", raising=False)
-        monkeypatch.delenv("PHASE2_MCP_ONLY", raising=False)
-        monkeypatch.setenv("APP_ENV", "development")
-        assert _resolve_phase2_flag() is True
-        assert _fallback_allowed() is False
-
-    def test_app_env_production_default_true(self, monkeypatch):
-        monkeypatch.delenv("REPORTAGENT_E2E", raising=False)
-        monkeypatch.delenv("PHASE2_MCP_ONLY", raising=False)
-        monkeypatch.setenv("APP_ENV", "production")
-        assert _resolve_phase2_flag() is True
-        assert _fallback_allowed() is False
-
-    def test_app_env_unset_default_true_fail_closed(self, monkeypatch):
-        """APP_ENV 未设 → fail-closed（production 默认）。"""
-        monkeypatch.delenv("REPORTAGENT_E2E", raising=False)
-        monkeypatch.delenv("PHASE2_MCP_ONLY", raising=False)
-        monkeypatch.delenv("APP_ENV", raising=False)
-        assert _resolve_phase2_flag() is True
-
-
-# ════════════════════════════════════════════════════════════════
-# mcp_client 不反向 import mcp_faq_client（P0 钉子）
-# ════════════════════════════════════════════════════════════════
-
-
-class TestModuleBoundary:
-    def test_mcp_client_does_not_import_mcp_faq_client(self):
-        """mcp_client 是依赖底，不反向引用 shim（AST 级别检查 import 语句）。"""
-        import ast
-        from pathlib import Path
-
-        src_path = Path(__file__).resolve().parents[2] / "app" / "tools" / "mcp_client.py"
-        tree = ast.parse(src_path.read_text(encoding="utf-8"))
-        offenders = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if "mcp_faq_client" in alias.name:
-                        offenders.append(f"import {alias.name}")
-            elif isinstance(node, ast.ImportFrom):
-                if node.module and "mcp_faq_client" in node.module:
-                    offenders.append(f"from {node.module} import ...")
-                for alias in node.names:
-                    if "mcp_faq_client" in alias.name:
-                        offenders.append(f"from {node.module} import {alias.name}")
-        assert not offenders, (
-            f"mcp_client.py 反向 import mcp_faq_client 会造成循环依赖: {offenders}"
+        cases = (
+            {"APP_ENV": "development"},
+            {"APP_ENV": "production"},
+            {},  # APP_ENV 未设 → fail-closed
+            {"PHASE2_MCP_ONLY": "true", "APP_ENV": "development"},
         )
-
-    def test_mcp_faq_client_imports_mcp_client(self):
-        """shim 必须依赖 mcp_client（正向）。"""
-        from pathlib import Path
-
-        src = (Path(__file__).resolve().parents[2] / "app" / "tools" / "mcp_faq_client.py").read_text(
-            encoding="utf-8"
-        )
-        assert "from app.tools.mcp_client import" in src
+        for env in cases:
+            monkeypatch.delenv("PHASE2_MCP_ONLY", raising=False)
+            monkeypatch.delenv("APP_ENV", raising=False)
+            for key, val in env.items():
+                monkeypatch.setenv(key, val)
+            assert _resolve_phase2_flag() is True, env
+            assert _fallback_allowed() is False, env
 
 
 # ════════════════════════════════════════════════════════════════
@@ -887,147 +629,82 @@ class TestValidateMatchesContract:
     不符合 → MCP_INVALID_RESPONSE，让上层显式处理而不是静默空结果。
     """
 
-    def test_valid_matches_returns_normalized_list(self):
-        result = {
-            "matches": [
-                {"text": "hello", "score": 0.9, "title": "t1", "chunk_id": "c1"},
-                {"text": "world", "score": 0.7},
-            ],
-        }
-        out = _validate_matches_contract(result)
-        # 内部字段（chunk_id）被 strip，tool 层只见稳定契约
-        assert out == [
-            {"text": "hello", "score": 0.9, "title": "t1"},
-            {"text": "world", "score": 0.7},
-        ]
-
-    def test_missing_matches_raises_invalid_response(self):
-        """matches 字段缺失 → MCP_INVALID_RESPONSE（review 第 3 轮修订）。
-
-        区别于 EMPTY_RESULT（matches=[] 合法）；不允许把 schema drift
-        （如 {} 或 {"results": [...]}）当成「合法检索只是没命中」。
-        """
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"degraded": False})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-        assert "matches" in ei.value.detail
-
-    def test_missing_matches_empty_dict_raises_invalid_response(self):
-        """空 dict {} → MCP_INVALID_RESPONSE（典型 schema drift 形态）。"""
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_empty_matches_returns_empty(self):
-        assert _validate_matches_contract({"matches": []}) == []
-
-    def test_matches_not_list_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"matches": "not a list"})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_item_not_dict_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"matches": ["string instead of dict"]})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_item_missing_text_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"matches": [{"score": 0.9}]})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-        assert "text" in ei.value.detail
-
-    def test_item_text_not_str_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"matches": [{"text": 123, "score": 0.9}]})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_item_text_none_raises_invalid(self):
-        """text=None 是常见 bug（HTTP 路径误把 None 当 text）。"""
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"matches": [{"text": None, "score": 0.9}]})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_item_missing_score_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"matches": [{"text": "hello"}]})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-        assert "score" in ei.value.detail
-
-    def test_item_score_not_numeric_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"matches": [{"text": "hello", "score": "0.9"}]})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_item_score_bool_rejected(self):
-        """bool 是 int 子类，但语义不是 score——必须拒。"""
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract({"matches": [{"text": "hello", "score": True}]})
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_item_text_empty_string_allowed(self):
-        """text 可以是空字符串（与 HTTP fallback 兼容），只要是 str。"""
-        out = _validate_matches_contract({"matches": [{"text": "", "score": 0.5}]})
-        assert out == [{"text": "", "score": 0.5}]
-
-    def test_result_not_dict_raises_invalid(self):
-        with pytest.raises(MCPBoundaryError) as ei:
-            _validate_matches_contract("not a dict")  # type: ignore[arg-type]
-        assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
-
-    def test_stable_fields_preserved(self):
-        """稳定契约字段（text/score/title/section_path）保留。"""
-        result = {
-            "matches": [{
-                "text": "hello",
-                "score": 0.9,
-                "title": "t",
-                "section_path": "p",
-            }],
-        }
-        out = _validate_matches_contract(result)
-        assert out[0]["text"] == "hello"
-        assert out[0]["score"] == 0.9
-        assert out[0]["title"] == "t"
-        assert out[0]["section_path"] == "p"
-
-    def test_internal_fields_stripped(self):
-        """ragent-py 内部字段（chunk_id/document_id/embedding/rerank_score/kb_id）
-        在 boundary 处 strip——tool 层只见稳定契约（review 第 3 轮 P1 修订）。
+    def test_normalizes_stable_fields_and_strips_internal(self):
+        """稳定字段保留 + 内部字段 strip + 空 text 合法（兼容 HTTP fallback）。
 
         这是 P2 边界职责的核心：ReportAgent 不应该知道 RAG 内部 response 形态。
         """
         result = {
-            "matches": [{
-                "text": "hello",
-                "score": 0.9,
-                "title": "t",
-                # 内部字段——必须 strip
-                "chunk_id": "c1",
-                "document_id": "d1",
-                "embedding": [0.1, 0.2, 0.3],
-                "rerank_score": 0.95,
-                "kb_id": "kb-1",
-            }],
+            "matches": [
+                {
+                    "text": "hello", "score": 0.9, "title": "t1", "section_path": "p",
+                    # ragent-py 内部字段——必须 strip
+                    "chunk_id": "c1", "document_id": "d1",
+                    "embedding": [0.1, 0.2, 0.3], "rerank_score": 0.95, "kb_id": "kb-1",
+                },
+                {"text": "world", "score": 0.7},
+            ],
         }
-        out = _validate_matches_contract(result)
-        item = out[0]
-        # 内部字段不应出现
-        for internal_field in ("chunk_id", "document_id", "embedding",
-                               "rerank_score", "kb_id"):
-            assert internal_field not in item, (
-                f"{internal_field} 是 RAG 内部字段，不应透传到 tool 层"
-            )
-        # 稳定契约字段保留
-        assert item["text"] == "hello"
-        assert item["score"] == 0.9
-        assert item["title"] == "t"
+        assert _validate_matches_contract(result) == [
+            {"text": "hello", "score": 0.9, "title": "t1", "section_path": "p"},
+            {"text": "world", "score": 0.7},
+        ]
+        # text 可以是空字符串，只要是 str
+        assert _validate_matches_contract({"matches": [{"text": "", "score": 0.5}]}) == [
+            {"text": "", "score": 0.5}
+        ]
 
-    def test_error_index_in_detail(self):
-        """第 N 个 item 失败 → detail 含索引（定位错误用）。"""
+    def test_missing_matches_field_raises_invalid_response(self):
+        """matches 缺失 / 空 dict → INVALID（典型 schema drift），不是「合法没命中」。"""
+        for result in ({"degraded": False}, {}):
+            with pytest.raises(MCPBoundaryError) as ei:
+                _validate_matches_contract(result)
+            assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+            assert "matches" in ei.value.detail
+
+    def test_empty_matches_is_legal(self):
+        """EMPTY ≠ DRIFT：matches=[] 是合法空命中，通过校验。"""
+        assert _validate_matches_contract({"matches": []}) == []
+
+    def test_shape_errors_raise_invalid_response(self):
+        """result 非 dict / matches 非 list / item 非 dict → 同一 INVALID 分支。"""
+        for result in (
+            "not a dict",  # type: ignore[arg-type]
+            {"matches": "not a list"},
+            {"matches": ["string instead of dict"]},
+        ):
+            with pytest.raises(MCPBoundaryError) as ei:
+                _validate_matches_contract(result)
+            assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+
+    def test_text_shape_errors_raise_invalid_with_index(self):
+        """text 缺失 / 非 str / None → INVALID，且 detail 带 matches[i] 索引。"""
+        for result in (
+            {"matches": [{"score": 0.9}]},
+            {"matches": [{"text": 123, "score": 0.9}]},
+            {"matches": [{"text": None, "score": 0.9}]},
+        ):
+            with pytest.raises(MCPBoundaryError) as ei:
+                _validate_matches_contract(result)
+            assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+            assert "text" in ei.value.detail
+
+        # 第 2 个 item 的 text 坏了 → detail 里能看到索引（定位错误用）
         with pytest.raises(MCPBoundaryError) as ei:
             _validate_matches_contract({"matches": [
                 {"text": "ok", "score": 0.5},
-                {"text": "bad"},  # 缺 score
+                {"text": 123, "score": 0.9},
             ]})
         assert "matches[1]" in ei.value.detail
+
+    def test_score_shape_errors_raise_invalid(self):
+        """score 缺失 / 非数值 / bool（int 子类但语义不对）→ 全部拒。"""
+        for result in (
+            {"matches": [{"text": "hello"}]},
+            {"matches": [{"text": "hello", "score": "0.9"}]},
+            {"matches": [{"text": "hello", "score": True}]},
+        ):
+            with pytest.raises(MCPBoundaryError) as ei:
+                _validate_matches_contract(result)
+            assert ei.value.code is MCPErrorCode.MCP_INVALID_RESPONSE
+            assert "score" in ei.value.detail

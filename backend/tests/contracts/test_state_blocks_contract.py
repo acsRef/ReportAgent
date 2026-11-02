@@ -6,10 +6,15 @@ P3 plan §2.3 钉住：
 - unmapped 字段保留（不强行归类）
 - merge_state 重建原 state dict 键集合 + 值
 - TypedDict 是 static ownership contract，不是 runtime enforcement
+
+本文件只钉 4 条有生产含义的契约：字段所有权 / 无损投影 / v1 checkpoint 投影 /
+禁止语义伪映射。恒等映射之类的「抄映射表」用例已被上述四条覆盖。
 """
 from __future__ import annotations
 
 import pytest
+
+pytestmark = pytest.mark.contracts
 
 from app.state.blocks import (
     ExecutionState,
@@ -22,160 +27,114 @@ from app.state.blocks import (
 )
 
 
-class TestStateBlockFields:
-    """五块 TypedDict 字段名与 state-contract.md §一一字一致。"""
-
-    def test_request_state_fields(self):
-        assert set(RequestState.__annotations__) == {
-            "request_id", "session_id", "user_id", "original_query", "current_query"
-        }
-
-    def test_requirement_state_fields(self):
-        assert set(RequirementState.__annotations__) == {
+def test_five_blocks_field_ownership():
+    """五块 TypedDict 字段名与 state-contract.md §一所有权表一字一致。"""
+    ownership = [
+        (RequestState, {
+            "request_id", "session_id", "user_id", "original_query", "current_query",
+        }),
+        (RequirementState, {
             "normalized_query", "schema_candidates", "requirement_card",
             "missing_dimensions", "clarification_history", "confirmation_status",
-        }
-
-    def test_execution_state_fields(self):
-        assert set(ExecutionState.__annotations__) == {
+        }),
+        (ExecutionState, {
             "confirmed_requirement", "schema_context", "query_plan",
             "generated_sql", "validation_result", "query_result",
             "execution_status", "error", "retry_count",
-        }
-
-    def test_report_state_fields(self):
-        assert set(ReportState.__annotations__) == {
+        }),
+        (ReportState, {
             "report_spec", "report_version", "chart_config", "insight",
-        }
-
-    def test_runtime_state_fields(self):
-        assert set(RuntimeState.__annotations__) == {
+        }),
+        (RuntimeState, {
             "trace_id", "active_agent", "memory_context", "tool_calls", "mcp_calls",
-        }
+        }),
+    ]
+    for block_cls, expected in ownership:
+        assert set(block_cls.__annotations__) == expected, (
+            f"{block_cls.__name__} 字段集合与 state-contract.md §一 不一致"
+        )
 
 
-class TestSplitStateDeterministicMapping:
-    """split_state 按 deterministic 映射表投影；unmapped 保留。"""
-
-    def test_split_extracts_request_state_from_named_fields(self):
-        # plan §2.3 表第一行：original_query / current_query / session_id / user_id
-        legacy = {
-            "original_query": "2024 销售",
-            "current_query": "2024 销售趋势",
-            "session_id": "sess-1",
-            "user_id": 42,
-        }
-        blocks, unmapped = split_state(legacy)
-        assert blocks["request"] == legacy
-        assert unmapped == {}
-
-    def test_split_extracts_runtime_state_with_rename(self):
-        # active_sub_agent → active_agent (deterministic rename)
-        # trace_id / memory_context 同名同类型
-        legacy = {
-            "trace_id": "t-1",
-            "active_sub_agent": "execution",
-            "memory_context": "ctx",
-        }
-        blocks, unmapped = split_state(legacy)
-        assert blocks["runtime"] == {
-            "trace_id": "t-1",
-            "active_agent": "execution",
-            "memory_context": "ctx",
-        }
-        assert unmapped == {}
-
-    def test_split_extracts_report_state_with_rename(self):
-        # insight_text → insight (deterministic rename)
-        legacy = {
-            "report_spec": {"title": "x"},
-            "chart_config": {"type": "bar"},
-            "insight_text": "华东领先",
-        }
-        blocks, unmapped = split_state(legacy)
-        assert blocks["report"] == {
-            "report_spec": {"title": "x"},
-            "chart_config": {"type": "bar"},
-            "insight": "华东领先",
-        }
-        assert unmapped == {}
-
-    def test_split_keeps_unmapped_fields(self):
-        # plan §2.3 unmapped 表：intent / user_query / retry_counters 都是 unmapped
-        state = {
-            "user_query": "2024 销售",
-            "intent": "report",
-            "retry_counters": {"repair": 2},
-        }
-        blocks, unmapped = split_state(state)
-        assert unmapped == state
-        for name in blocks:
-            assert blocks[name] == {}
-
-    def test_split_does_not_pseudo_map_intent_to_normalized_query(self):
-        # review P1 #3 关键钉子：intent 不能被映射到 normalized_query
-        state = {"intent": "report"}
-        blocks, unmapped = split_state(state)
-        assert "normalized_query" not in blocks["requirement"]
-        assert unmapped["intent"] == "report"
-
-    def test_split_does_not_auto_convert_clarification_context(self):
-        # review P1 #3：clarification_context: dict → clarification_history: list
-        # 类型不同，无 deterministic conversion → 保留 unmapped
-        state = {"clarification_context": {"foo": "bar"}}
-        blocks, unmapped = split_state(state)
-        assert "clarification_history" not in blocks["requirement"]
-        assert unmapped["clarification_context"] == {"foo": "bar"}
-
-    def test_split_does_not_auto_convert_retry_counters_to_retry_count(self):
-        # review P1 #3：retry_counters: dict → retry_count: int 无 deterministic
-        # conversion（取哪个 counter？总和？）→ 保留 unmapped
-        state = {"retry_counters": {"repair": 2}}
-        blocks, unmapped = split_state(state)
-        assert "retry_count" not in blocks["execution"]
-        assert unmapped["retry_counters"] == {"repair": 2}
-
-
-class TestMergeStateRoundTrip:
-    """merge_state(blocks, unmapped=unmapped) 重建原 state dict（键集合 + 值）。"""
-
-    def test_round_trip_preserves_key_set(self):
-        original = {
+def test_split_merge_is_lossless_view():
+    """split → merge 是无损投影：五块名齐全、键集合/值/unmapped 一个不丢。"""
+    # v2 shape：split 后 merge 回来必须与输入完全相同
+    v2_states = [
+        {
             "session_id": "sess-1",
             "user_id": 42,
             "trace_id": "t-1",
             "memory_context": "ctx",
             "intent": "report",        # unmapped
             "user_query": "销售",       # unmapped
-        }
-        blocks, unmapped = split_state(original)
-        merged = merge_state(blocks, unmapped=unmapped)
-        assert set(merged.keys()) == set(original.keys())
-
-    def test_round_trip_preserves_values(self):
-        # review P1 #3 决议：split_state 是 v2 view 工具；输入用 v2 名
-        # （migrate_checkpoint 已在 graph 入口把 active_sub_agent rename → active_agent）
-        v2_state = {
+        },
+        {
             "session_id": "sess-1",
             "intent": "report",          # unmapped
             "active_agent": "execution",  # v2 名
-        }
-        blocks, unmapped = split_state(v2_state)
-        merged = merge_state(blocks, unmapped=unmapped)
-        assert merged["active_agent"] == "execution"
-        assert merged["intent"] == "report"
-        assert merged["session_id"] == "sess-1"
-
-    def test_split_from_v1_shape_returns_v2_view(self):
-        # 显式钉：v1 输入经 split → blocks 含 v2 名（rename 不丢名是预期）；
-        # v1 源字段是 _MAPPED_SOURCE_FIELDS 成员，不进 unmapped
-        v1_state = {"active_sub_agent": "execution"}
-        blocks, unmapped = split_state(v1_state)
-        assert blocks["runtime"]["active_agent"] == "execution"
-        assert unmapped == {}
-
-    def test_split_returns_blocks_with_five_names(self):
-        blocks, _ = split_state({})
+        },
+        {},
+    ]
+    for state in v2_states:
+        blocks, unmapped = split_state(state)
         assert set(blocks.keys()) == {
             "request", "requirement", "execution", "report", "runtime",
-        }
+        }, "split_state 必须返回五块名"
+        merged = merge_state(blocks, unmapped=unmapped)
+        assert set(merged.keys()) == set(state.keys()), f"往返丢键: {state}"
+        assert merged == state, f"往返丢值: {state}"
+
+    # unmapped 三兄弟（plan §2.3 unmapped 表）不得被强行归类：块全空、原样保留
+    unmapped_only = {
+        "user_query": "2024 销售",
+        "intent": "report",
+        "retry_counters": {"repair": 2},
+    }
+    blocks, unmapped = split_state(unmapped_only)
+    assert unmapped == unmapped_only
+    for name in blocks:
+        assert blocks[name] == {}, f"unmapped 字段被强行归类进 {name}"
+
+
+def test_v1_checkpoint_projects_to_v2_field_names():
+    """v1 checkpoint 输入经 split 得到 v2 字段名的 view（B7 恢复路径的唯一映射钉子）。
+
+    v1 源字段（active_sub_agent / insight_text）是 _MAPPED_SOURCE_FIELDS 成员：
+    rename 后进目标块，不进 unmapped。
+    """
+    v1_cases = [
+        (
+            {"trace_id": "t-1", "active_sub_agent": "execution", "memory_context": "ctx"},
+            "runtime",
+            {"trace_id": "t-1", "active_agent": "execution", "memory_context": "ctx"},
+        ),
+        (
+            {"report_spec": {"title": "x"}, "chart_config": {"type": "bar"},
+             "insight_text": "华东领先"},
+            "report",
+            {"report_spec": {"title": "x"}, "chart_config": {"type": "bar"},
+             "insight": "华东领先"},
+        ),
+        ({"active_sub_agent": "execution"}, "runtime", {"active_agent": "execution"}),
+    ]
+    for v1_state, block_name, expected in v1_cases:
+        blocks, unmapped = split_state(v1_state)
+        assert blocks[block_name] == expected, f"v1 → v2 投影错误: {v1_state}"
+        assert unmapped == {}, f"v1 源字段不应落入 unmapped: {v1_state}"
+
+
+def test_no_semantic_pseudo_mapping():
+    """review P1 #3：只允许同名/同类型 rename，禁止语义猜测式转换。"""
+    pseudo_pairs = [
+        # intent 不能被映射成 normalized_query
+        ({"intent": "report"}, "requirement", "normalized_query"),
+        # clarification_context: dict → clarification_history: list，类型不同
+        ({"clarification_context": {"foo": "bar"}}, "requirement", "clarification_history"),
+        # retry_counters: dict → retry_count: int，取哪个 counter？总和？无 deterministic
+        ({"retry_counters": {"repair": 2}}, "execution", "retry_count"),
+    ]
+    for state, block_name, forbidden_field in pseudo_pairs:
+        blocks, unmapped = split_state(state)
+        assert forbidden_field not in blocks[block_name], (
+            f"{forbidden_field} 被伪映射了：{state}"
+        )
+        assert unmapped == state, f"语义伪映射源字段必须原样留在 unmapped: {state}"

@@ -1,10 +1,11 @@
-from __future__ import annotations
-
-"""P7 D2/D4: 每个 prompt 必须由 6 段组成。
+"""P7 D2/D4: 每个 prompt 必须由 6 段组成（分层）。
 
 6 段: system_contract / role / task_contract / tool_policy / output_schema / safety_policy。
-漏段视为分层缺失,plan D2 验收硬约束。
+2026-11-02 收敛：原 22 条里 `has_all_six_sections[×7]` 与 `each_section_non_empty[×7]`
+是同一断言，`section_order_is_layered[×7]` 无消费者（`build_*` 按 key 取段、
+`prompt_kind` 用子串匹配），现合并为 3 条。
 """
+from __future__ import annotations
 
 import pytest
 
@@ -16,6 +17,7 @@ from app.agent.prompts import (
     SQL_INTENT_ANALYZE_V1,
     SQL_PLAN_V1,
 )
+from app.llm.mock import KIND_MARKERS
 from app.memory.prompts import CONVERSATION_SUMMARIZE_V1
 
 pytestmark = pytest.mark.contracts
@@ -40,47 +42,50 @@ ALL_PROMPTS = {
 }
 
 
-@pytest.mark.parametrize("prompt_name", sorted(ALL_PROMPTS.keys()))
-def test_prompt_has_all_six_sections(prompt_name: str) -> None:
-    """每个 prompt 6 段齐全 (system_contract/role/task_contract/tool_policy/output_schema/safety_policy)。"""
-    prompt = ALL_PROMPTS[prompt_name]
-    missing = [s for s in REQUIRED_SECTIONS if s not in prompt]
-    assert missing == [], f"{prompt_name} 缺段: {missing}"
+def test_prompts_are_six_layered_sections_and_builders_work() -> None:
+    """7 个 prompt 六段齐全且非空；7 个 build 函数产出非空长字符串。"""
+    problems: list[str] = []
+    for name, prompt in ALL_PROMPTS.items():
+        missing = [s for s in REQUIRED_SECTIONS if s not in prompt]
+        if missing:
+            problems.append(f"{name} 缺段: {missing}")
+            continue
+        for section in REQUIRED_SECTIONS:
+            value = prompt[section]
+            if not (isinstance(value, str) and value.strip()):
+                problems.append(f"{name}.{section} 为空或非字符串")
 
-
-@pytest.mark.parametrize("prompt_name", sorted(ALL_PROMPTS.keys()))
-def test_prompt_each_section_non_empty(prompt_name: str) -> None:
-    """6 段每段都必须非空字符串,不允许占位。"""
-    prompt = ALL_PROMPTS[prompt_name]
-    for section in REQUIRED_SECTIONS:
-        value = prompt.get(section, "")
-        assert isinstance(value, str) and value.strip(), (
-            f"{prompt_name}.{section} 为空或非字符串"
-        )
-
-
-@pytest.mark.parametrize("prompt_name", sorted(ALL_PROMPTS.keys()))
-def test_prompt_section_order_is_layered(prompt_name: str) -> None:
-    """6 段按 system→role→task→tool_policy→output_schema→safety_policy 顺序定义。
-
-    测试调用方只依赖 (in) operator,不依赖有序,但 dict 保序 (Python 3.7+)。
-    此测试钉住「顺序 = 分层」,防止有人打乱 6 段顺序。
-    """
-    prompt = ALL_PROMPTS[prompt_name]
-    keys = list(prompt.keys())
-    # 至少前 6 个 key 必须是 6 段; 允许后续追加扩展段 (如 fewshot 段),但前 6 段顺序定死
-    assert keys[: len(REQUIRED_SECTIONS)] == list(REQUIRED_SECTIONS), (
-        f"{prompt_name} 6 段顺序错: {keys[: len(REQUIRED_SECTIONS)]}"
+    from app.agent.prompts import (
+        build_intent_classify_prompt,
+        build_report_plan_prompt,
+        build_requirement_parse_prompt,
+        build_sql_generate_prompt,
+        build_sql_intent_analyze_prompt,
+        build_sql_plan_prompt,
     )
+    from app.memory.prompts import build_conversation_summarize_prompt
+
+    built = [
+        build_intent_classify_prompt("查销售额"),
+        build_requirement_parse_prompt("q", "schema", ""),
+        build_sql_intent_analyze_prompt("q", "tools"),
+        build_sql_plan_prompt("2026-08-29", "q", "schema"),
+        build_sql_generate_prompt(
+            "2026-08-29", "m", ["d"], [{"field": "f"}], "sum", None, "schema",
+        ),
+        build_report_plan_prompt(["col"], 10, "tools"),
+        build_conversation_summarize_prompt(None, [{"role": "user", "content": "hi"}]),
+    ]
+    for i, text in enumerate(built, 1):
+        if not (isinstance(text, str) and len(text) > 100):
+            problems.append(f"build #{i} 产出过短或非字符串")
+
+    assert problems == [], "\n".join(problems)
 
 
-def test_no_legacy_prompt_constants_outside_prompts_package() -> None:
-    """P7 收敛: 7 个 prompt 已迁入 prompts/ 包, 原裸 f-string 不应再有同名模块常量。
-
-    已知保留: requirement_parser._PARSE_PROMPT (T4 才删),本测试仅钉 7 个
-    新 prompt 模块已建立且非空。
-    """
-    expected_names = {
+def test_prompt_package_exports_complete() -> None:
+    """7 个 prompt 常量必须全部从包里导出（漏导出 = 运行时 ImportError）。"""
+    expected = {
         "INTENT_CLASSIFY_V1", "REQUIREMENT_PARSE_V1", "SQL_INTENT_ANALYZE_V1",
         "SQL_PLAN_V1", "SQL_GENERATE_V1", "REPORT_PLAN_V1",
         "CONVERSATION_SUMMARIZE_V1",
@@ -88,6 +93,24 @@ def test_no_legacy_prompt_constants_outside_prompts_package() -> None:
     from app.agent.prompts import __all__ as agent_prompts_all
     from app.memory.prompts import __all__ as memory_prompts_all
 
-    combined = set(agent_prompts_all) | set(memory_prompts_all)
-    missing = expected_names - combined
+    missing = expected - (set(agent_prompts_all) | set(memory_prompts_all))
     assert missing == set(), f"prompts 包漏导: {missing}"
+
+
+def test_kind_markers_match_real_prompts() -> None:
+    """`app.llm.mock.KIND_MARKERS` 的分类首句必须真的出现在对应 prompt 里。
+
+    Playwright Contract E2E 靠这些固定首句给 prompt 归类（`prompt_kind`）。
+    此前 `test_mock_llm_adapter` 只是**复制**了一份字面量，从不校验真实 prompt——
+    改 prompt 首句 → mock 静默 miss、PR 门禁全绿、只有 nightly E2E 炸。
+    """
+    markers = dict(KIND_MARKERS)
+    problems = [
+        f"{kind}: marker {marker!r} 不在 system_contract 里"
+        for kind, marker in markers.items()
+        if kind in ALL_PROMPTS and marker not in ALL_PROMPTS[kind]["system_contract"]
+    ]
+
+    covered = set(markers) & set(ALL_PROMPTS)
+    assert covered == set(markers), f"KIND_MARKERS 有未覆盖的 kind: {set(markers) - covered}"
+    assert problems == [], "\n".join(problems)
