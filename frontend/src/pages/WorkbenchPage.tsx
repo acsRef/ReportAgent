@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { IconLogout } from '../components/ui/Icons'
 import Avatar from '../components/atelier/Avatar'
@@ -29,6 +29,7 @@ import { createSendTimeoutGuard } from '../utils/sendTimeout'
 import {
   handleSSEEvent,
   loadSessionSnapshot,
+  refreshMessages,
   refreshVersionsAndSelectLatest,
 } from '../stores/sessionEvents'
 import { useAnalysisStore } from '../stores/analysisStore'
@@ -38,6 +39,8 @@ import type { TimelineEntry } from '../types/report'
 import type { RequirementCard as RC } from '../types/requirement'
 import RequirementCardView from '../components/workbench/RequirementCardView'
 import ReportPaper from '../components/workbench/ReportPaper'
+import ConversationTimeline from '../components/workbench/ConversationTimeline'
+import type { TimelineTurn } from '../components/workbench/ConversationTimeline'
 import '../styles/global.css'
 import '../styles/workbench.css'
 
@@ -93,6 +96,7 @@ export default function WorkbenchPage() {
   const requirement = useAnalysisStore((s) => s.requirement)
   const reportVersions = useAnalysisStore((s) => s.reportVersions)
   const selectedReportVersion = useAnalysisStore((s) => s.selectedReportVersion)
+  const messages = useAnalysisStore((s) => s.messages)
   const auth = useAuthStore()
   const toast = useToast()
   const [sessionsLoading, setSessionsLoading] = useState(false)
@@ -101,8 +105,26 @@ export default function WorkbenchPage() {
   const [patching, setPatching] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [execPolling, setExecPolling] = useState(false)
+  // 当前轮开始时的版本号：当前轮的报告只显示「这次新产生的版本」，
+  // 否则新提问下面会吊着上一轮的旧报告（2026-11-02 对话时间线）。
+  const [turnBaseVersion, setTurnBaseVersion] = useState<number | null>(null)
+  const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
 
+  // ── 历史轮次时间线（2026-11-02）────────────────────────────────────────────
+  // 一轮结束后刷新 messages，让刚结束的这轮进入历史；用 (session, 版本数, phase)
+  // 做幂等键，避免同一轮重复请求。
+  useEffect(() => {
+    if (!activeSessionId) return
+    if (phase !== 'report_ready' && phase !== 'error') return
+    const key = `${activeSessionId}:${reportVersions.length}:${phase}`
+    if (refreshedTurnRef.current === key) return
+    refreshedTurnRef.current = key
+    void refreshMessages(activeSessionId)
+  }, [activeSessionId, phase, reportVersions.length])
+
+  // 历史 = 除最后一轮以外的所有轮次；问题与版本按下标配对（v1↔第 1 轮）。
+  // 注：依赖 lastQuestion，故必须声明在 lastQuestion 之后（见下方 useMemo）。
   // 停止显示后轮询后台任务完成：phase 回 report_ready/error → 刷新版本 + 通知。
   useExecutionPoll(
     activeSessionId,
@@ -136,6 +158,24 @@ export default function WorkbenchPage() {
   }
   const [focusMode, setFocusMode] = useState(false)
   const [lastQuestion, setLastQuestion] = useState<string | null>(null)
+
+  // 历史 = 除最后一轮以外的所有轮次；问题与版本按下标配对（v1↔第 1 轮）。
+  const historyTurns: TimelineTurn[] = useMemo(() => {
+    const questions = messages.filter(
+      (m) => m.role === 'user' && (m.content ?? '').trim().length > 0,
+    )
+    const liveQuestion = lastQuestion?.trim()
+    const historical =
+      liveQuestion && questions.at(-1)?.content?.trim() === liveQuestion
+        ? questions.slice(0, -1)
+        : questions
+    return historical.map((msg, index) => ({
+      key: `turn-${msg.id}`,
+      question: msg.content ?? '',
+      version: reportVersions.find((v) => v.version === index + 1) ?? null,
+    }))
+  }, [messages, lastQuestion, reportVersions])
+
   const composerRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // P-17：单次发送的「响应过慢」提示闸（只提示，不改 sending / 不断流）。
@@ -235,6 +275,7 @@ export default function WorkbenchPage() {
     setLastQuestion(null)
     setCasualReply(null)
     setLiveDetail(undefined)
+    setTurnBaseVersion(null)
     // P11 Review-1 P2：「新分析」必须显式清 execPolling——同 P1 残留，
     // 否则旧会话残留轮询会与新 session 重叠。
     setExecPolling(false)
@@ -249,6 +290,7 @@ export default function WorkbenchPage() {
     setCasualReply(null)
     setStageIndex(1)
     setLiveDetail(undefined)
+    setTurnBaseVersion(selectedReportVersion)
     const sid = activeSessionId ?? crypto.randomUUID()
     if (!activeSessionId) {
       dispatch({ type: 'session/selected', sessionId: sid })
@@ -287,9 +329,12 @@ export default function WorkbenchPage() {
   function handleSelectSession(sessionId: string) {
     dispatch({ type: 'session/selected', sessionId })
     setCasualReply(null)
+    setTurnBaseVersion(null)
+    // live 气泡应显示「最后一次提问」。此前取 first_message（会话第一条），
+    // 重进会话时会显示错的问题——2026-11-02 修正。
     setLastQuestion(
-      (sessions.find((s) => s.session_id === sessionId) as { first_message?: string } | undefined)
-        ?.first_message ?? null,
+      (sessions.find((s) => s.session_id === sessionId) as { last_message?: string } | undefined)
+        ?.last_message || null,
     )
     // P11 F6：恢复快照（requirement/版本/phase）；busy 会话（generating/adjusting）
     // 恢复后台轮询——停止后重进会话仍能收到「后台跑完」通知。
@@ -298,6 +343,11 @@ export default function WorkbenchPage() {
     // 并在 phase=report_ready/error 时错误地触发「报告已在后台生成」通知。
     void loadSessionSnapshot(sessionId, toast).then((busy) => {
       setExecPolling(busy)
+      // 用真实消息里的最后一条提问覆盖 last_message（列表接口的 last_message
+      // 是助手侧文案，不一定是用户问题）。
+      const loaded = useAnalysisStore.getState().messages
+      const lastUser = [...loaded].reverse().find((m) => m.role === 'user' && (m.content ?? '').trim())
+      if (lastUser) setLastQuestion(lastUser.content ?? null)
     })
   }
 
@@ -470,6 +520,9 @@ export default function WorkbenchPage() {
 
           <div className="wb-scroll" ref={scrollRef}>
             <div className="wb-content-inner">
+          {activeSessionId && historyTurns.length > 0 && (
+            <ConversationTimeline sessionId={activeSessionId} turns={historyTurns} />
+          )}
           {lastQuestion && phase !== 'idle' && <UserBubble text={lastQuestion} />}
           {phase !== 'idle' && agentCopy(phase) && <AgentBubble markdown={agentCopy(phase)} />}
           {casualReply && <AgentBubble markdown={casualReply} />}
@@ -504,7 +557,8 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {activeSessionId && selectedReportVersion != null && (
+          {activeSessionId && selectedReportVersion != null &&
+            (turnBaseVersion === null || selectedReportVersion !== turnBaseVersion) && (
             <ReportPaper
               key={`${activeSessionId}-${selectedReportVersion}`}
               sessionId={activeSessionId}

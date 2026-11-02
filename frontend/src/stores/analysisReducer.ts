@@ -1,6 +1,7 @@
 import type {
   AnalysisError,
   AnalysisPhase,
+  ConversationMessage,
   ReportVersion,
   SessionSummary,
 } from '../types/analysis'
@@ -16,6 +17,8 @@ export interface AnalysisState {
   requirement: RequirementCard | null
   reportVersions: ReportVersion[]
   selectedReportVersion: number | null
+  /** 完整对话消息（快照恢复 + 每轮结束后刷新）——历史轮次时间线的数据源。 */
+  messages: ConversationMessage[]
   timeline: TimelineEntry[]
   error: AnalysisError | null
   // Pagination (Plan B 步骤 2, 2026-08-09) — session 列表分页状态：
@@ -34,6 +37,7 @@ export type AnalysisAction =
   | { type: 'sessions/page-loading'; loading: boolean }
   | { type: 'sessions/received'; sessions: SessionSummary[] }
   | { type: 'requirement/received'; requirement: RequirementCard }
+  | { type: 'messages/received'; messages: ConversationMessage[] }
   | { type: 'report/received'; report: ReportVersion }
   | { type: 'report/selected'; version: number }
   | { type: 'timeline/received'; entry: TimelineEntry }
@@ -47,6 +51,7 @@ export const initialAnalysisState: AnalysisState = {
   requirement: null,
   reportVersions: [],
   selectedReportVersion: null,
+  messages: [],
   timeline: [],
   error: null,
   sessionsOffset: 0,
@@ -141,6 +146,9 @@ export function analysisReducer(
 
     case 'sessions/page-loading':
       return { ...state, sessionsPageLoading: action.loading }
+
+    case 'messages/received':
+      return { ...state, messages: action.messages }
 
     case 'requirement/received':
       if (

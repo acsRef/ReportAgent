@@ -31,6 +31,15 @@ export interface ReportVersionSummary {
   favorite: boolean
 }
 
+/** 会话里的一条消息（后端 /sessions/{sid} 的 messages）。 */
+export interface ConversationMessage {
+  id: number
+  role: 'user' | 'assistant' | 'system'
+  message_type: 'text' | 'requirement_patch' | 'report_version' | string
+  content: string | null
+  created_at: string
+}
+
 export interface SessionSummary {
   session_id: string
   title: string

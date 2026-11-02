@@ -46,6 +46,7 @@ export const useAnalysisStore: AnalysisStoreApi = create<AnalysisStore>()(
         draft.requirement = next.requirement
         draft.reportVersions = next.reportVersions
         draft.selectedReportVersion = next.selectedReportVersion
+        draft.messages = next.messages
         draft.timeline = next.timeline
         draft.error = next.error
         // Plan B 步骤 2：分页状态字段（reducer 算出来，store 必须显式写回）

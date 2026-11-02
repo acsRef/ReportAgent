@@ -104,6 +104,9 @@ export async function loadSessionSnapshot(
     const snap = await fetchSession(sessionId)
     if (!snap) return false
     const dispatch = useAnalysisStore.getState().dispatch
+    if (snap.messages) {
+      dispatch({ type: 'messages/received', messages: snap.messages })
+    }
     if (snap.current_requirement) {
       dispatch({
         type: 'requirement/received',
@@ -123,8 +126,18 @@ export async function loadSessionSnapshot(
   }
 }
 
-/** 拉取最新版本列表并选中最后一个（onReport / 后台完成轮询后调用）。 */
-export async function refreshVersionsAndSelectLatest(sessionId: string): Promise<void> {
+/** 只刷新消息列表（一轮结束后调用，让刚结束的这轮进入历史时间线）。 */
+export async function refreshMessages(sessionId: string): Promise<void> {
+  try {
+    const snap = await fetchSession(sessionId)
+    if (!snap?.messages) return
+    useAnalysisStore.getState().dispatch({ type: 'messages/received', messages: snap.messages })
+  } catch {
+    /* ignore：历史刷新失败不影响当前轮渲染 */
+  }
+}
+
+/** 拉取最新版本列表并选中最后一个（onReport / 后台完成轮询后调用）。 */export async function refreshVersionsAndSelectLatest(sessionId: string): Promise<void> {
   try {
     const snap = await fetchSession(sessionId)
     if (!snap) return

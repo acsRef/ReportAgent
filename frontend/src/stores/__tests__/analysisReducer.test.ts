@@ -155,6 +155,25 @@ it('sessions/page-received replaces sessions and sets offset/hasMore', () => {
     expect(next.sessionsPageLoading).toBe(true)
   })
 
+  it('messages/received 存下完整对话，供历史时间线使用', () => {
+    const messages = [
+      { id: 1, role: 'user' as const, message_type: 'text', content: '2024年各区域销售额', created_at: '2026-11-02T12:00:00Z' },
+      { id: 2, role: 'assistant' as const, message_type: 'report_version', content: null, created_at: '2026-11-02T12:01:00Z' },
+    ]
+    const next = analysisReducer(initialAnalysisState, { type: 'messages/received', messages })
+    expect(next.messages).toHaveLength(2)
+    expect(next.messages[0].content).toBe('2024年各区域销售额')
+  })
+
+  it('session/selected 与 analysis/reset 都清空历史消息', () => {
+    const messages = [
+      { id: 1, role: 'user' as const, message_type: 'text', content: 'q', created_at: 'now' },
+    ]
+    const withMessages: AnalysisState = { ...initialAnalysisState, messages }
+    expect(analysisReducer(withMessages, { type: 'session/selected', sessionId: 's-2' }).messages).toEqual([])
+    expect(analysisReducer(withMessages, { type: 'analysis/reset' }).messages).toEqual([])
+  })
+
 describe('isBusyPhase', () => {
   const busy: AnalysisPhase[] = ['parsing', 'generating', 'adjusting']
   const idle: AnalysisPhase[] = ['idle', 'awaiting_missing', 'awaiting_confirm', 'report_ready', 'error']
