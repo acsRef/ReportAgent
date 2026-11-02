@@ -21,6 +21,7 @@ from langgraph.graph import END, StateGraph
 from langchain_core.runnables import RunnableConfig
 
 from app.infra.checkpoint.factory import get_checkpointer
+from app.knowledge import registry as knowledge
 
 from app.agent.data_graph import build_data_graph
 from app.agent.sql_graph import build_sql_graph
@@ -390,13 +391,41 @@ def _format_confirmed_requirement(card) -> str | None:
         suffix = f"（时间维度必须按 {column} 分组，不要用 year）" if column else ""
         parts.append(f"时间粒度 = {label}{suffix}")
     if card.scope:
-        parts.append(f"数据范围 = [{_join(card.scope, 20)}]")
+        # 2026-11-02 实测：「分析2024年华东销售趋势」的 SQL 出现 WHERE region='华东'
+        # 之外还 GROUP BY region → 每行多一个恒为「华东」的列、图表退化成一根柱子。
+        # 范围是过滤条件，不是分析维度，必须说死。
+        parts.append(
+            f"数据范围 = [{_join(card.scope, 20)}]"
+            "（只作 WHERE 过滤条件，**禁止**把范围里的实体放进 GROUP BY 或 SELECT）"
+        )
     if card.target_metrics:
         parts.append(f"核心指标 = [{_join(card.target_metrics, 10)}]")
+        # 指标口径从注册表解析（数据驱动），命中则把 SQL 表达式写死给模型照抄，
+        # 不命中则显式告知「未注册」——不让模型自由发明列名。
+        resolved, unresolved = knowledge.resolve_metrics(list(card.target_metrics))
+        if resolved:
+            lines = "\n".join(f"  - {m.name} = {m.expr}" for m in resolved)
+            parts.append("指标表达式（必须逐字使用，不要改写口径）:\n" + lines)
+        if unresolved:
+            parts.append(f"未注册指标（禁止臆造列名）: [{_join(unresolved, 10)}]")
     if card.dimensions:
-        parts.append(f"分析维度 = [{_join(card.dimensions, 10)}]")
+        dims = [str(d) for d in card.dimensions[:10]]
+        methods_norm = [str(m).lower() for m in (card.analysis_methods or [])]
+        if any("trend" in m for m in methods_norm):
+            # 确定性收窄：趋势只看时间。实测光在 prompt 里写规则，模型仍会照抄
+            # 「分析维度 = [时间, 区域]」并 GROUP BY region（多出一列常量）。
+            time_terms = set(knowledge.time_dimension_terms())
+            time_dims = [d for d in dims if d in time_terms]
+            dims = time_dims or dims[:1]
+        parts.append(f"分析维度 = [{', '.join(dims)}]")
     if card.analysis_methods:
-        parts.append(f"分析方法 = [{_join(card.analysis_methods, 10)}]")
+        methods = [str(m) for m in card.analysis_methods]
+        parts.append(f"分析方法 = [{_join(methods, 10)}]")
+        if any("trend" in m.lower() or "趋势" in m for m in methods):
+            parts.append(
+                "趋势分析：只按时间维度分组，不要再加入其它维度；"
+                "已被数据范围限定的维度不得进入 GROUP BY。"
+            )
     if card.assumptions:
         accepted = [a for a in card.assumptions if a.accepted is True]
         if accepted:

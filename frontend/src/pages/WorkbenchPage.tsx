@@ -110,6 +110,10 @@ export default function WorkbenchPage() {
   const [turnBaseVersion, setTurnBaseVersion] = useState<number | null>(null)
   const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
+  // 需求已确认并开始执行（或已出报告）→ 卡片只读。改需求走下方输入框（adjust）。
+  const cardLocked =
+    phase === 'generating' || phase === 'adjusting' || phase === 'report_ready' ||
+    requirement?.status === 'locked'
 
   // ── 历史轮次时间线（2026-11-02）────────────────────────────────────────────
   // 一轮结束后刷新 messages，让刚结束的这轮进入历史；用 (session, 版本数, phase)
@@ -524,10 +528,28 @@ export default function WorkbenchPage() {
             <ConversationTimeline sessionId={activeSessionId} turns={historyTurns} />
           )}
           {lastQuestion && phase !== 'idle' && <UserBubble text={lastQuestion} />}
-          {phase !== 'idle' && agentCopy(phase) && <AgentBubble markdown={agentCopy(phase)} />}
-          {casualReply && <AgentBubble markdown={casualReply} />}
-          {phase === 'parsing' && <ParsingCard />}
 
+          {requirement && (
+            <RequirementCardView
+              card={requirement}
+              // 2026-11-02：确认并生成报告后卡片进入只读——需求已锁定，改需求要走
+              // 下方输入框（adjust），不能让用户以为还能就地编辑后重确认。
+              readOnly={cardLocked}
+              onChange={(next) => dispatch({ type: 'requirement/received', requirement: next })}
+              onConfirm={async () => {
+                await handlePatchAndConfirm(requirement)
+              }}
+              onFocusComposer={() => composerRef.current?.focus()}
+            />
+          )}
+
+          {/* 2026-11-02：状态区（LLM 在干什么）放在卡片下方——此前它渲染在需求卡
+              上方，用户看到「进度条 → 卡 → 报告」这种反直觉顺序。 */}
+          {casualReply && <AgentBubble markdown={casualReply} />}
+          {phase !== 'idle' && !casualReply && agentCopy(phase) && (
+            <AgentBubble markdown={agentCopy(phase)} />
+          )}
+          {phase === 'parsing' && <ParsingCard />}
           {phase === 'error' && canRetryFailedAction({ phase, error }) && (
             <ErrorCard
               message={error?.message}
@@ -543,17 +565,6 @@ export default function WorkbenchPage() {
               stageIndex={stageIndex}
               liveDetail={liveDetail}
               onStop={handleStop}
-            />
-          )}
-
-          {requirement && (
-            <RequirementCardView
-              card={requirement}
-              onChange={(next) => dispatch({ type: 'requirement/received', requirement: next })}
-              onConfirm={async () => {
-                await handlePatchAndConfirm(requirement)
-              }}
-              onFocusComposer={() => composerRef.current?.focus()}
             />
           )}
 

@@ -1,0 +1,49 @@
+# Schema 结构提示（数据，不是代码）
+#
+# 与 metrics.yaml 分开：这里描述「表之间怎么连、维度落在哪」，metrics.yaml 描述
+# 「业务指标怎么算」。两者都属于可替换的元数据——换 schema 只改这里。
+
+facts:
+  - fact_orders
+  - fact_payments
+
+dimensions:
+  - dim_date
+  - dim_store
+  - dim_product
+  - dim_customer
+  - dim_promotion
+
+# 事实表 → 维度表外键链路（生成 JOIN 用）
+fk_chains:
+  - "fact_orders: order_date→dim_date, store_id→dim_store, customer_id→dim_customer, product_id→dim_product, promotion_id→dim_promotion"
+  - "fact_payments: payment_date→dim_date, order_id→fact_orders"
+
+# 维度词汇：业务词 → 物理列（供维度/筛选解析，不只给 prompt 看）
+dimension_terms:
+  - term: 区域
+    column: dim_store.region
+  - term: 城市
+    column: dim_store.city
+  - term: 门店类型
+    column: dim_store.store_type
+  - term: 品类
+    column: dim_product.category
+  - term: 品牌
+    column: dim_product.brand
+  - term: 促销
+    column: dim_promotion.promotion_name
+
+# 时间维度
+time_dimension:
+  table: dim_date
+  date_column: full_date
+  default_join:
+    fact_orders: order_date
+    fact_payments: payment_date
+  buckets:
+    day: dim_date.full_date
+    week: dim_date.week_of_year
+    month: dim_date.month
+    quarter: dim_date.quarter
+    year: dim_date.year

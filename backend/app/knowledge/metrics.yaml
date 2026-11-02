@@ -1,0 +1,62 @@
+# 业务口径注册表（数据，不是代码）
+#
+# 为什么是文件而不是 Python 常量：此前 `sql_graph._SCHEMA_TERM_HINTS` 把
+# 「销售额 → fact_orders.order_amount」这类映射写死在代码字符串里，换一套
+# schema 就得改代码、加一个指标也得改代码。口径属于**业务元数据**，应该
+# 换数据文件即可，代码零改动。
+#
+# expr 里的列名是**物理列名**（当前星型模型），换表时只改这里。
+# 指标解析规则：卡片上的指标名（或同义词）→ 命中 name/synonyms → 用 expr。
+
+metrics:
+  - name: 销售额
+    synonyms: [销售, 销售金额, 销售额, GMV, 营收, 销售收入]
+    expr: "SUM(fact_orders.order_amount)"
+    unit: 元
+    note: 订单金额口径，未扣退款
+    default: true
+
+  - name: 净销售额
+    synonyms: [净销售, 净销售额, 扣退款销售额]
+    expr: >-
+      SUM(fact_orders.order_amount) - COALESCE((
+        SELECT SUM(p.payment_amount) FROM fact_payments p
+        WHERE p.status = 'REFUNDED' AND p.order_id = fact_orders.order_id), 0)
+    unit: 元
+    note: 销售额减去退款
+
+  - name: 实收金额
+    synonyms: [实收, 支付金额, 到账, 回款]
+    expr: "SUM(fact_payments.payment_amount) FILTER (WHERE fact_payments.status = 'SUCCESS')"
+    unit: 元
+    note: 仅统计支付成功的流水
+
+  - name: 退款金额
+    synonyms: [退款, 退货金额, 退款额]
+    expr: "SUM(fact_payments.payment_amount) FILTER (WHERE fact_payments.status = 'REFUNDED')"
+    unit: 元
+    note: 退款通道金额
+
+  - name: 订单数
+    synonyms: [单量, 订单量, 订单数量]
+    expr: "COUNT(DISTINCT fact_orders.order_id)"
+    unit: 单
+
+  - name: 销量
+    synonyms: [件数, 销售量, 销售件数]
+    expr: "SUM(fact_orders.quantity)"
+    unit: 件
+
+  - name: 客单价
+    synonyms: [平均订单金额, 客单]
+    expr: "SUM(fact_orders.order_amount) / NULLIF(COUNT(DISTINCT fact_orders.order_id), 0)"
+    unit: 元
+
+  - name: 退款率
+    synonyms: [退货率]
+    expr: >-
+      COUNT(DISTINCT CASE WHEN fact_payments.status = 'REFUNDED'
+      THEN fact_payments.order_id END)::numeric
+      / NULLIF(COUNT(DISTINCT fact_orders.order_id), 0)
+    unit: 比例
+    note: 退款订单数 / 订单数

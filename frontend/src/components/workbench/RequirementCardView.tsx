@@ -13,6 +13,8 @@ interface Props {
   onConfirm: () => void
   /** Focuses the composer (prototype: 继续对话补充). */
   onFocusComposer?: () => void
+  /** 已确认并开始执行后置 true：卡片只读，改需求走输入框（2026-11-02）。 */
+  readOnly?: boolean
 }
 
 const STATUS_PILL: Record<RC['status'], string> = {
@@ -28,7 +30,7 @@ const STATUS_PILL: Record<RC['status'], string> = {
  * actions. No spinner anywhere — busy states live in the composer and
  * the progress card (WorkbenchPage).
  */
-export default function RequirementCardView({ card, onChange, onConfirm, onFocusComposer }: Props) {
+export default function RequirementCardView({ card, onChange, onConfirm, onFocusComposer, readOnly = false }: Props) {
   const ready = isDraftReadyForReview(card)
 
   function setSelectedValue(key: string, value: string | string[] | null) {
@@ -147,7 +149,7 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
           </div>
         </div>
 
-        {card.status === 'missing' && (card.missing_fields.length > 0 || card.assumptions.length > 0) && (
+        {!readOnly && card.status === 'missing' && (card.missing_fields.length > 0 || card.assumptions.length > 0) && (
           <div className="wb-missing-zone">
             <div className="wb-missing-heading">
               <span className="wb-missing-title">需要你确认的信息</span>
@@ -218,7 +220,11 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
         )}
       </div>
 
-      {card.status !== 'locked' && (
+      {readOnly ? (
+        <div className="wb-req-actions">
+          <span className="wb-req-hint">需求已确认并锁定，报表生成中；要改需求请在下方输入框说明</span>
+        </div>
+      ) : card.status !== 'locked' && (
         <div className="wb-req-actions">
           <span className="wb-req-hint">确认后 Agent 才会查询数据并生成报告</span>
           <span className="wb-action-group">

@@ -190,4 +190,17 @@ describe('RequirementCardView — prototype structure', () => {
     fireEvent.click(screen.getByText('接受'))
     expect(screen.getByText('✓ 已接受')).toBeTruthy()
   })
+
+  it('readOnly 后卡片不可编辑：没有确认/修改按钮，并提示已锁定', () => {
+    const card = makeCard({ status: 'complete' })
+    render(
+      <ToastProvider>
+        <RequirementCardView card={card} onChange={() => {}} onConfirm={() => {}} readOnly />
+      </ToastProvider>,
+    )
+    expect(screen.queryByText('确认并生成报告')).toBeNull()
+    expect(screen.queryByText('补充完成，查看确认')).toBeNull()
+    expect(screen.queryByText('修改需求')).toBeNull()
+    expect(screen.getByText(/需求已确认并锁定/)).toBeTruthy()
+  })
 })

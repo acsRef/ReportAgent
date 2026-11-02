@@ -292,26 +292,19 @@ _FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
 - fact_orders: order_date→dim_date, store_id→dim_store, customer_id→dim_customer, product_id→dim_product, promotion_id→dim_promotion
 - fact_payments: payment_date→dim_date, order_id→fact_orders"""
 
-# 业务口径 → 物理字段（2026-10-28 主线修复）。
+# 业务口径与结构提示（2026-11-02 迁到 app/knowledge/*.yaml）
 #
-# 实测缺陷：「2024年各产品类别的销售额和退货金额对比」时模型凭空写了
-# `fact_orders.sales_amount`（该列不存在）→ EXPLAIN 报 object_not_found →
-# 烧掉 MCP schema 重检索预算 → FAILED；换一次采样又蒙对了 `quantity < 0`。
-# 也就是同一句话两种结果，靠 LLM 概率决定成败。
+# 历史：2026-10-28 实测「2024年各产品类别的销售额和退货金额对比」时模型凭空写了
+# `fact_orders.sales_amount`（该列不存在）→ EXPLAIN 报 object_not_found → 烧掉 MCP
+# schema 重检索预算 → FAILED；换一次采样又蒙对了。当时的修法是把固定口径写进
+# Python 字符串——换一套 schema 就得改代码，加一个指标也得改代码。
 #
-# 这份映射是这个星型模型的**固定业务口径**，直接钉进 plan 与 generate 两个 prompt。
-# NOTE: schema 变更（换表/换列）时必须同步这里，否则 prompt 会指向不存在的列。
-_SCHEMA_TERM_HINTS = """业务口径 → 物理字段（优先采用，禁止发明列名）:
-- 销售额/销售金额/GMV/营收 → fact_orders.order_amount
-- 实收/支付金额/到账 → fact_payments.payment_amount
-- 退货金额/退款金额 → fact_payments.payment_amount（WHERE fact_payments.status = 'REFUNDED'）
-- 订单数/单量 → COUNT(DISTINCT fact_orders.order_id)
-- 销量/件数 → SUM(fact_orders.quantity)
-- 客单价 → SUM(fact_orders.order_amount) / COUNT(DISTINCT fact_orders.order_id)
-- 区域/城市 → dim_store.region / dim_store.city
-- 品类/品牌 → dim_product.category / dim_product.brand
-- 时间维度 → dim_date.full_date（JOIN fact_orders.order_date 或 fact_payments.payment_date）
-- 促销折扣 → dim_promotion.discount_rate 是**实付比例**（0.70 = 七折）"""
+# 现在口径/结构都是**数据文件**（`app/knowledge/metrics.yaml` + `schema_hints.yaml`），
+# 这三个常量只是它们在 import 时的渲染结果，保持既有调用点与测试不变。
+from app.knowledge import registry as knowledge  # noqa: E402  (紧邻使用处，便于阅读)
+
+_FK_CHAIN_HINTS = knowledge.render_fk_chain_hints()
+_SCHEMA_TERM_HINTS = knowledge.render_metric_hints()
 
 _GRANULARITY_DIM_LABELS: dict[str, str] = {
     "day": "日期", "week": "周", "month": "月份", "quarter": "季度", "year": "年份",
@@ -335,11 +328,7 @@ def _apply_confirmed_granularity(plan: "QueryPlanWithClarify", granularity: Opti
     return plan
 
 
-_PLAN_TABLE_HINTS = """常用表速查:
-- fact_orders(订单事实), fact_payments(支付事实)
-- 维度表: dim_date, dim_store, dim_product, dim_customer, dim_promotion
-
-""" + _FK_CHAIN_HINTS + "\n\n" + _SCHEMA_TERM_HINTS
+_PLAN_TABLE_HINTS = knowledge.render_table_hints() + "\n\n" + _FK_CHAIN_HINTS + "\n\n" + _SCHEMA_TERM_HINTS
 
 
 _PLAN_FEWSHOT = """[示例1]
