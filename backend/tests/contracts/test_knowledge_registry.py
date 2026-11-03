@@ -59,6 +59,22 @@ def test_metric_hints_rendered_from_data():
     assert "销售额/销售/销售金额/销售额" not in hints
 
 
+def test_metric_hints_respect_whitelist():
+    """卡片解析出指标后只渲染这些（2026-11-03：此前把整张注册表灌进 prompt，
+    模型于是把销售额/净销售额/订单数/销量/客单价/退款率一起 SELECT）。"""
+    only = knowledge.render_metric_hints(["销售额", "订单数"])
+    assert "order_amount" in only
+    assert "COUNT(DISTINCT fact_orders.order_id)" in only
+    assert "净销售额" not in only
+    assert "客单价" not in only
+    assert "退款率" not in only
+
+    # 白名单为空 → 退回全量（无卡片场景）
+    assert "净销售额" in knowledge.render_metric_hints([])
+    # 全部不命中 → 空串（不渲染标题行）
+    assert knowledge.render_metric_hints(["不存在的指标"]) == ""
+
+
 def test_dimension_and_time_bucket_lookup():
     assert knowledge.dimension_column("区域") == "dim_store.region"
     assert knowledge.dimension_column("不存在的维度") is None
@@ -132,3 +148,47 @@ def test_unregistered_metric_is_flagged_not_invented():
     ))
     assert "未注册指标" in text
     assert "火星销售额" in text
+
+
+def test_metric_whitelist_only_lists_resolved_metrics():
+    from app.agent.confirmed_execution_graph import _metric_hints_for
+
+    card = _card(target_metrics=["销售额", "订单数"])
+    hints = _metric_hints_for(card)
+    assert hints and "order_amount" in hints
+    assert "净销售额" not in hints, "未在卡片里的指标不得出现在提示中"
+
+    # 卡片指标全都解析不到 → 退回全量（None）
+    assert _metric_hints_for(_card(target_metrics=["sales_trend"])) is None
+
+
+def test_metric_whitelist_falls_back_to_accepted_assumption_text():
+    """语义名指标（sales_trend）解析不到时，从已接受的口径假设里捞。
+
+    2026-11-03：趋势类卡片的 target_metrics 是语义名，之前直接退回「整张注册表」，
+    模型于是把 6 个指标一起 SELECT。用户确认过的假设里其实写着「已选：支付金额」。
+    """
+    from app.agent.confirmed_execution_graph import _metric_hints_for
+
+    card = _card(
+        target_metrics=["sales_trend"],
+        assumptions=[{
+            "key": "field_meaning:sales_trend",
+            "text": "销售趋势可能指订单金额或支付金额 → 已选：支付金额（按支付金额求和）",
+            "accepted": True,
+        }],
+    )
+    hints = _metric_hints_for(card)
+    assert hints is not None, "已接受假设里提到了指标，不该退回全量"
+    assert "净销售额" not in hints
+
+    # 未接受的假设不参与（用户还没确认口径）
+    pending = _card(
+        target_metrics=["sales_trend"],
+        assumptions=[{
+            "key": "field_meaning:sales_trend",
+            "text": "销售趋势可能指订单金额或支付金额",
+            "accepted": None,
+        }],
+    )
+    assert _metric_hints_for(pending) is None

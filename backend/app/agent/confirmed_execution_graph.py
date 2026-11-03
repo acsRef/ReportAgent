@@ -331,6 +331,8 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
         "assembled_context": assembled_context or None,  # P4c: 含 recall 的全景 context
         "granularity": getattr(card, "granularity", None),  # 粒度确定性透传（_plan 改写 dimensions）
         "detail_level": getattr(card, "detail_level", None),  # 明细模式：_plan 清空维度/聚合
+        # 指标白名单（2026-11-03）：卡片解析出的指标才给模型，避免把整张注册表塞进去
+        "metric_hints": _metric_hints_for(card),
         "fault_override": state.get("fault_override"),  # P15 e2e T4: e2e fault seam 透传
     }, _callbacks_only(config))
     qr = ss.get("query_result")
@@ -404,6 +406,31 @@ def _period_filter_hint(time_range: str | None) -> str | None:
     return f"筛选条件（确定性）：{year_col} = {year}"
 
 
+def _metric_hints_for(card) -> str | None:
+    """按需求卡渲染指标白名单；解析不到则返回 None（退回全量）。
+
+    两级解析（2026-11-03）：
+    1. `target_metrics` 直接命中注册表（销售额 / 订单数 …）；
+    2. 命不中时，从**用户已接受的假设**文本里找（卡片常写成 `sales_trend` 这种
+       语义名，但假设里会写「→ 已选：支付金额」）。
+    """
+    if card is None:
+        return None
+    resolved, _unresolved = knowledge.resolve_metrics(
+        list(getattr(card, "target_metrics", None) or []),
+    )
+    if not resolved:
+        accepted_text = " ".join(
+            str(getattr(a, "text", "") or "")
+            for a in (getattr(card, "assumptions", None) or [])
+            if getattr(a, "accepted", None) is True
+        )
+        resolved = knowledge.metrics_mentioned_in(accepted_text)
+    if not resolved:
+        return None
+    return knowledge.render_metric_hints([m.name for m in resolved]) or None
+
+
 def _format_confirmed_requirement(card) -> str | None:
     """把 PATCH 确认后的 RequirementCard 序列化成 SQL plan prompt
     消费的结构化字符串（中文字段标签）。无卡时返回 None，plan
@@ -444,7 +471,9 @@ def _format_confirmed_requirement(card) -> str | None:
         resolved, unresolved = knowledge.resolve_metrics(list(card.target_metrics))
         if resolved:
             lines = "\n".join(f"  - {m.name} = {m.expr}" for m in resolved)
-            parts.append("指标表达式（必须逐字使用，不要改写口径）:\n" + lines)
+            parts.append(
+                "指标表达式（必须逐字使用；**只输出这些指标列**，不要额外新增指标）:\n" + lines
+            )
             joins = [j for m in resolved for j in m.joins]
             if joins:
                 parts.append("指标依赖的 JOIN（必须一起带上）:\n" + "\n".join(f"  {j}" for j in joins))

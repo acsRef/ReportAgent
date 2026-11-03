@@ -98,6 +98,27 @@ def all_metrics() -> tuple[MetricDef, ...]:
     return _metrics()
 
 
+def metrics_mentioned_in(text: str) -> list[MetricDef]:
+    """从一段自由文本里找出提到的指标（名字或同义词）。
+
+    用途：需求卡的 `target_metrics` 常常是语义名（`sales_trend` / `anomalies`），
+    解析不到注册表；但用户确认过的口径假设里会写清「→ 已选：支付金额」这类话。
+    这里做确定性词面匹配，把能认出来的指标捞出来，避免退回「整张注册表」。
+    """
+    haystack = _normalize(text)
+    if not haystack:
+        return []
+    found: list[MetricDef] = []
+    seen: set[str] = set()
+    for metric in _metrics():
+        names = [metric.name, *metric.synonyms]
+        if any(_normalize(n) and _normalize(n) in haystack for n in names):
+            if metric.name not in seen:
+                seen.add(metric.name)
+                found.append(metric)
+    return found
+
+
 def resolve_metric(term: str) -> MetricDef | None:
     """指标名/同义词 → MetricDef；未命中返回 None（调用方按「未知指标」处理）。"""
     for metric in _metrics():
@@ -121,20 +142,29 @@ def resolve_metrics(terms: list[str]) -> tuple[list[MetricDef], list[str]]:
     return resolved, unresolved
 
 
-def render_metric_hints() -> str:
+def render_metric_hints(only: list[str] | None = None) -> str:
     """渲染成「业务口径 → 表达式」文本，供 plan/generate prompt 使用。
 
-    与旧 `_SCHEMA_TERM_HINTS` 的区别：内容来自 YAML，且带同义词（用户换个说法
-    也能命中同一条口径）。
+    `only` 给出指标名白名单时**只渲染这些**（2026-11-03：需求卡已经解析出用户要的
+    指标，却把整张注册表灌进 prompt，模型于是把销售额/净销售额/订单数/销量/客单价/
+    退款率一起 SELECT——答案不聚焦，还多算了一堆没人要的列）。
+    白名单为空 / 未给 → 渲染全部（没有卡片时的兜底）。
     """
+    allowed = {_normalize(n) for n in (only or []) if str(n).strip()}
     lines = ["业务口径 → SQL 表达式（优先采用，禁止发明列名/指标）:"]
+    rendered = 0
     for metric in _metrics():
+        if allowed and _normalize(metric.name) not in allowed:
+            continue
         aliases: list[str] = []
         for alias in (metric.name, *metric.synonyms[:3]):
             if alias not in aliases:
                 aliases.append(alias)
         suffix = f"  # {metric.note}" if metric.note else ""
         lines.append(f"- {'/'.join(aliases)} → {metric.expr}{suffix}")
+        rendered += 1
+    if rendered == 0:
+        return ""
     return "\n".join(lines)
 
 

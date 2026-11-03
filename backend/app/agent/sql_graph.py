@@ -288,6 +288,9 @@ class SQLAgentState(TypedDict, total=False):
     granularity: Optional[str]
     # 展示粒度：detail = 逐条明细（_plan 清空 dimensions/聚合）。
     detail_level: Optional[str]
+    # 指标白名单渲染结果（2026-11-03）：需求卡解析出的指标表达式，只渲染这些。
+    # 为空时退回全量注册表（无卡片场景）。
+    metric_hints: Optional[str]
 
 
 _FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
@@ -457,7 +460,13 @@ def _plan(state: SQLAgentState) -> dict:
         schema_text=schema_text,
         tool_hint=tool_hint,
         confirmed_block=confirmed_block,
-        plan_table_hints=_PLAN_TABLE_HINTS,
+        # 指标白名单（2026-11-03）：卡片已解析出指标时只给这些，避免模型把整张
+        # 注册表一起 SELECT 出来。
+        plan_table_hints=(
+            knowledge.render_table_hints() + "\n\n" + _FK_CHAIN_HINTS + "\n\n" + state["metric_hints"]
+            if state.get("metric_hints")
+            else _PLAN_TABLE_HINTS
+        ),
         plan_fewshot=_PLAN_FEWSHOT,
         repair_ctx=repair_ctx,
     )
@@ -591,7 +600,7 @@ def _generate_sql(state: SQLAgentState) -> dict:
         aggregation=plan.aggregation if plan and plan.aggregation else "",
         time_range=plan.time_range if plan and plan.time_range else None,
         schema_text=schema_text,
-        fk_chain_hints=_FK_CHAIN_HINTS + "\n\n" + _SCHEMA_TERM_HINTS,
+        fk_chain_hints=_FK_CHAIN_HINTS + "\n\n" + (state.get("metric_hints") or _SCHEMA_TERM_HINTS),
         faq_block=faq_block,
         sql_generation_rules=_SQL_GENERATION_RULES,
         repair_ctx=repair_ctx,
