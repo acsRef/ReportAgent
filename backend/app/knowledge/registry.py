@@ -161,6 +161,26 @@ def render_table_hints() -> str:
     return "常用表速查:\n" + "\n".join(parts)
 
 
+def render_plan_few_shot() -> str:
+    """渲染 plan few-shot（数据驱动；此前写死在 sql_graph._PLAN_FEWSHOT）。"""
+    items = _schema_hints().get("plan_few_shot") or []
+    blocks: list[str] = []
+    for idx, item in enumerate(items, 1):
+        user = str(item.get("user") or "").strip()
+        output = str(item.get("output") or "").strip()
+        if not user or not output:
+            continue
+        blocks.append(f"[示例{idx}]\n用户: \"{user}\"\n输出: {output}")
+    return "\n\n".join(blocks)
+
+
+def render_sql_generation_rules() -> str:
+    """渲染 SQL 生成规则（数据驱动；此前写死在 sql_graph._SQL_GENERATION_RULES）。"""
+    rules = _schema_hints().get("sql_generation_rules") or []
+    blocks = [str(r).strip() for r in rules if str(r).strip()]
+    return "\n\n".join(blocks)
+
+
 def dimension_column(term: str) -> str | None:
     """维度业务词 → 物理列（区域 → dim_store.region）。"""
     needle = _normalize(term)

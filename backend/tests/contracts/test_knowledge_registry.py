@@ -65,6 +65,37 @@ def test_dimension_and_time_bucket_lookup():
     assert knowledge.time_bucket_column("month") == "dim_date.month"
 
 
+# --- few-shot / 生成规则也来自数据（换 schema 不用改代码） --------------------
+
+def test_few_shot_and_rules_rendered_from_yaml():
+    fewshot = knowledge.render_plan_few_shot()
+    assert "[示例1]" in fewshot and "输出:" in fewshot
+    rules = knowledge.render_sql_generation_rules()
+    assert "JOIN" in rules and "LIMIT 200" in rules
+
+
+def test_swapping_knowledge_files_changes_rendered_prompts(monkeypatch, tmp_path):
+    """证明「换一套 schema = 换数据文件」：改 YAML 后渲染结果随之变化，代码不动。"""
+    import shutil
+
+    src = knowledge._KNOWLEDGE_DIR
+    for name in ("metrics.yaml", "schema_hints.yaml"):
+        shutil.copy(src / name, tmp_path / name)
+
+    hints = (tmp_path / "schema_hints.yaml").read_text(encoding="utf-8")
+    hints = hints.replace("fact_orders", "sales_fact").replace("dim_store", "store_dim")
+    (tmp_path / "schema_hints.yaml").write_text(hints, encoding="utf-8")
+
+    monkeypatch.setattr(knowledge, "_KNOWLEDGE_DIR", tmp_path)
+    knowledge.clear_cache()
+    try:
+        assert "sales_fact" in knowledge.render_plan_few_shot()
+        assert "store_dim" in knowledge.render_sql_generation_rules()
+        assert knowledge.render_table_hints().count("sales_fact") >= 1
+    finally:
+        knowledge.clear_cache()
+
+
 # --- 需求驱动的 SQL 约束（同一套规则，换卡片自动生效） ----------------------
 
 def test_requirement_block_carries_metric_expression_and_scope_rule():
