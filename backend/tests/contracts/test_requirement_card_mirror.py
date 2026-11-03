@@ -70,7 +70,20 @@ def test_status_literal_parity() -> None:
 
 
 def test_field_key_literal_parity() -> None:
-    assert tuple(RequirementFieldKey.__args__) == TS_REQUIREMENT_FIELD_KEYS
+    """2026-11-03：key 不再是固定枚举——澄清项由模型按 schema 现场生成
+    （analysis_intent / metric / time_range / 任意新 key）。这里改为钉「前后端都
+    接受任意 key」，而不是逐值比对。
+    """
+    from app.models.requirement import RequirementFieldKey
+
+    assert RequirementFieldKey is str
+    # 前端类型是 string（不是联合），两侧语义一致
+    from tests.contracts.test_requirement_card_mirror import TS_REQUIREMENT_FIELD_KEYS  # noqa: F401
+    card = RequirementCard(
+        id="d", version=1, status="missing", summary="s",
+        missing_fields=[{"key": "analysis_intent", "label": "视角？", "options": []}],
+    )
+    assert card.missing_fields[0].key == "analysis_intent"
 
 
 def test_field_kind_literal_parity() -> None:

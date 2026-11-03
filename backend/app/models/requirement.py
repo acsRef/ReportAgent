@@ -16,13 +16,14 @@ RequirementGranularity = Literal["day", "week", "month", "quarter", "year"]
 # 为什么独立字段：2026-11-03 实测「给我这两个月的明细数据」——需求卡里没有任何
 # 字段承载「不要聚合」，SQL 仍然 GROUP BY month 出 2 行，用户要的明细根本没出现。
 RequirementDetailLevel = Literal["aggregate", "detail"]
-RequirementFieldKey = Literal[
-    "time_range",
-    "scope",
-    "metric",
-    "comparison",
-    "granularity",
-]
+RequirementFieldKey = str
+"""缺失/澄清项的 key。
+
+2026-11-03 起不再是固定枚举：澄清项由**思考模型**根据 MCP 返回的表结构现场生成
+（分析角度、口径、时间范围、维度…），写死 5 个 key 会让「销售情况」这种模糊需求
+无处表达「你到底想看哪种情况」。key 只用于前后端往返标识，语义由选项的 value 前缀
+（`intent:` / `metric:` / `time:` / `scope:`）承载。
+"""
 RequirementFieldKind = Literal["single", "multiple"]
 
 SelectedValue = str | list[str]
@@ -35,6 +36,7 @@ class RequirementOption(BaseModel):
 
 class RequirementMissingField(BaseModel):
     key: RequirementFieldKey
+    # 面向用户的问句（2026-11-03 起由模型现场生成，如「你想看哪种『情况』？」）
     label: str
     kind: RequirementFieldKind = "single"
     options: list[RequirementOption] = Field(default_factory=list)

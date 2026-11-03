@@ -29,7 +29,8 @@ REQUIRED_OUTPUT_KEYS: dict[str, tuple[str, ...]] = {
     "requirement_parse": (
         "summary", "target_metrics", "time_range", "granularity",
         "scope", "dimensions", "analysis_methods", "confidence",
-        "missing_fields", "assumptions",
+        # 2026-11-03：澄清项取代固定 key 列表——由模型按 schema 现场生成
+        "clarifications", "assumptions",
     ),
     "sql_intent_analyze": ("options", "needs_options_group", "confidence", "reasoning"),
     "sql_plan": (

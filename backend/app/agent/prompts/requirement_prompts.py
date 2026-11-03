@@ -63,6 +63,25 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "**用户说「每个月/按月/每周/按季度」时必须输出对应粒度**（这是卡体的显式字段，"
         "不是缺失项）；完全不涉及时间分组时输出 null——不要默认填 month，猜错粒度会让 SQL 分组维度整体错位"
         "\n- comparison: 是否要对比（同比/环比/指定基线）；不需要则 none"
+        "\n\n【分析角度与缺口判定（2026-11-03 重写，务必遵守）】"
+        "\n1. 先读「可用表结构」里**真实存在的字段**（每个表下面的「字段:」行），再判断哪里不清楚。"
+        "\n2. `analysis_methods` **只在用户明确表达分析角度时才允许非空**："
+        "「趋势/走势/变化」→ trend_analysis；「对比/排名/占比」→ group_compare；"
+        "「异常/波动」→ anomaly_detection。用户没表达 → 必须是 []，"
+        "并在 clarifications 里追问「分析角度」。**绝不允许默认填 trend_analysis**。"
+        "\n3. 缺口只能来自「用户没说、且可用字段里存在多种合理选择」："
+        "\n   - analysis_intent：分析角度（总览 / 按月趋势 / 区域对比 / 品类对比 / 明细）。"
+        "只有对应字段真实存在时才给该选项（例如按月趋势要求存在日期或月份字段）。"
+        "\n   - metric：同一业务词有多种口径时（如 order_amount 与 payment_amount 都叫金额）。"
+        "\n   - time_range / granularity / scope：同理，按可用字段与数据范围给候选。"
+        "\n4. 每条 clarification 必须包含："
+        "\n   - question：面向用户的中文问句（≤30 字，不要只写「指标」「范围」这类名词）"
+        "\n   - options：2-4 个候选，label ≤12 字；"
+        "\n   - options[].value 用「前缀:值」编码：intent:overview / intent:trend / "
+        "intent:compare_region / intent:compare_category / intent:detail / "
+        "metric:<字段名> / time:<自然语言范围> / scope:<取值>；"
+        "\n   - options[].column 写依据的**真实字段名**（必须出现在可用表结构中）。"
+        "\n5. 严禁给出表结构里不存在的列；某维度想不出 2 个候选就说明它其实不歧义，不要列。"
     ),
     "tool_policy": (
         "如可用表结构已包含回答所需的全部字段信息，不重复调用 search_schema。"
@@ -75,14 +94,28 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "输出 JSON（禁止解释，禁止 markdown，禁止换行）："
         "\n{"
         '\n  "summary": "一句话业务目标",'
-        '\n  "target_metrics": ["指标1", "指标2"],'
-        '\n  "time_range": "今年" | null,'
+        '\n  "target_metrics": ["order_amount"],'
+        '\n  "time_range": "2024年" | null,'
         '\n  "granularity": "month" | null,'
         '\n  "scope": ["华东"] | [],'
         '\n  "dimensions": ["时间", "区域"],'
-        '\n  "analysis_methods": ["trend_analysis", "group_compare"],'
+        '\n  "analysis_methods": [],'
         '\n  "confidence": 0.85,'
-        '\n  "missing_fields": ["time_range", "metric"],'
+        '\n  "clarifications": ['
+        '\n    {"key": "analysis_intent",'
+        '\n     "question": "你想看2024年销售情况的哪种视角？",'
+        '\n     "options": ['
+        '\n       {"label": "全年总览", "value": "intent:overview", "column": "fact_orders.order_amount"},'
+        '\n       {"label": "按月趋势", "value": "intent:trend", "column": "dim_date.month"},'
+        '\n       {"label": "区域对比", "value": "intent:compare_region", "column": "dim_store.region"}'
+        "\n     ]},"
+        '\n    {"key": "metric",'
+        '\n     "question": "销售额按哪个口径计算？",'
+        '\n     "options": ['
+        '\n       {"label": "订单金额", "value": "metric:fact_orders.order_amount", "column": "fact_orders.order_amount"},'
+        '\n       {"label": "支付金额", "value": "metric:fact_payments.payment_amount", "column": "fact_payments.payment_amount"}'
+        "\n     ]}"
+        "\n  ],"
         '\n  "assumptions": ['
         '\n    {"key": "field_meaning:销量",'
         '\n     "text": "销量可能指订单数量或商品件数，请确认",'

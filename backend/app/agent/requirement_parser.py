@@ -41,13 +41,98 @@ MAX_SCHEMA_CHARS = 8000
 _MAX_TABLE_DESC = 160
 
 
+def _schema_columns(schema: SchemaContext | None) -> set[str]:
+    """本 session 可用字段全集：`table.column` 与裸 `column` 两种写法都收。"""
+    names: set[str] = set()
+    for table in (schema.tables if schema else []) or []:
+        tname = str(getattr(table, "name", "") or "")
+        for col in getattr(table, "columns", None) or []:
+            cname = str(getattr(col, "name", "") or "")
+            if not cname:
+                continue
+            names.add(cname)
+            if tname:
+                names.add(f"{tname}.{cname}")
+    return names
+
+
+def _option_column(opt: dict) -> str:
+    col = opt.get("column")
+    if col:
+        return str(col)
+    # 兼容：value 形如 "metric:fact_orders.order_amount" / "scope:华东"
+    value = str(opt.get("value") or "")
+    if ":" in value:
+        tail = value.split(":", 1)[1]
+        if "." in tail:
+            return tail
+    return ""
+
+
+def _build_clarifications(
+    raw_items: object, schema: SchemaContext | None,
+) -> list[RequirementMissingField]:
+    """把模型输出的 `clarifications` 变成受控的缺失项。
+
+    规则（服务端兜底，不只信模型）：
+    - `column` 必须存在于本 session 的 schema（`table.column` 或裸列名），否则该选项丢弃；
+    - 剩下的有效选项 < 2 → 整条丢弃（说明并不歧义）；
+    - 选项 value 保持模型给的前缀编码（intent:/metric:/time:/scope:），由
+      requirement_service 翻译成卡体字段。
+    """
+    from app.models.requirement import RequirementOption
+
+    available = _schema_columns(schema)
+    out: list[RequirementMissingField] = []
+    for item in raw_items or []:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()[:64]
+        question = str(item.get("question") or item.get("label") or "").strip()[:120]
+        if not key or not question:
+            continue
+        valid: list[RequirementOption] = []
+        for opt in item.get("options") or []:
+            if not isinstance(opt, dict) or not opt.get("label") or not opt.get("value"):
+                continue
+            column = _option_column(opt)
+            if column and available and column not in available:
+                logger.warning(
+                    "clarification option dropped (unknown column): key=%s column=%s",
+                    key, column,
+                )
+                continue
+            valid.append(RequirementOption(
+                label=str(opt["label"])[:60],
+                value=str(opt["value"])[:80],
+            ))
+        if len(valid) < 2:
+            continue
+        out.append(RequirementMissingField(
+            key=key, label=question, kind="single", options=valid,
+        ))
+    return out
+
+
 def _schema_text(ctx: SchemaContext | None) -> str:
+    """把 MCP 检索到的表结构渲染进 prompt。
+
+    2026-11-03 修正：此前只渲染「表名 + 描述」，**把 columns 整个丢了**——
+    MCP 明明返回了字段（data_graph 已经建出 ColumnSchema），模型却看不到
+    `order_amount / region / month` 这些列，于是无法「根据可用字段判断哪里
+    不清楚」，只能靠猜（实测把「2024年的销售情况」猜成了趋势分析）。
+    """
     if not ctx or not ctx.tables:
         return "无可用表结构"
-    lines = [
-        f"- {t.name}: {(t.description or '')[:_MAX_TABLE_DESC]}"
-        for t in ctx.tables
-    ]
+    lines: list[str] = []
+    for t in ctx.tables:
+        desc = (t.description or "")[:_MAX_TABLE_DESC]
+        cols = [
+            f"{c.name}:{c.type}" if getattr(c, "type", "") else str(c.name)
+            for c in (t.columns or [])
+        ][:_MAX_COLUMNS_PER_TABLE]
+        col_text = "、".join(cols) if cols else "（无字段信息）"
+        lines.append(f"- {t.name}（{desc}）\n    字段: {col_text}")
     text = "\n".join(lines)
     if len(text) > MAX_SCHEMA_CHARS:
         text = text[:MAX_SCHEMA_CHARS] + "\n...（schema 已截断）"
@@ -57,6 +142,9 @@ def _schema_text(ctx: SchemaContext | None) -> str:
 # C-7 同款边界：字典片段来自外部 RAG，长度不受信任。
 # 超过此上限的尾部会被截断，避免撑爆 LLM 上下文窗口。
 MAX_DICTIONARY_CHARS = 4000
+
+# 单表最多渲染多少列（零售星型模型最宽的表 ~12 列，留余量但不让宽表撑爆 prompt）。
+_MAX_COLUMNS_PER_TABLE = 40
 
 
 def _format_prior_block(card: RequirementCard) -> str:
@@ -133,8 +221,160 @@ _CN_MONTHS = {
 }
 
 
-_RELATIVE_SPAN = re.compile(r"这两个月|那两个月|最近两个月|这俩月|这两个月份")
+# 用户明确表达「分析角度」的短语。没命中这些时，服务端不信任模型给的
+# analysis_methods（2026-11-03 实测：「2024年的销售情况」被悄悄判成 trend_analysis，
+# 结果按年分组只有 1 行，报告写「数据量不足」）。
+#
+# 注意要覆盖「各区域 / 各品类 / 哪个 / 按月」这类**隐含**的角度表达——
+# 只写「对比/趋势」会把「2024年各区域销售额」误判成没表达角度，反而多问一轮。
+_INTENT_PHRASES = (
+    # 趋势
+    "趋势", "走势", "变化", "增长", "下滑", "上涨", "下降",
+    "按月", "每月", "按周", "每周", "按季度", "每季度", "按天", "每日",
+    # 对比 / 分布 / 排名
+    "对比", "比较", "排名", "排行", "占比", "分布", "哪个", "哪些", "最高", "最低",
+    "最多", "最少", "前几", "top",
+    # 维度化表达（隐含 compare）
+    "各区域", "各品类", "各产品", "各门店", "各省", "各地区", "各月", "各年",
+    "每个区域", "每个品类", "每个门店", "分区域", "分品类", "分门店",
+    # 明细
+    "明细", "逐条", "逐笔", "列出来", "每一笔",
+    # 异常
+    "异常", "波动", "异动",
+    # 总览
+    "汇总", "总览", "概况", "整体情况",
+)
+
+# 从字段名推断「能做什么分析」的通用词根（与具体表名无关，换 schema 仍成立）。
+_TIME_COL_HINTS = ("date", "day", "month", "year", "quarter", "week", "日期", "时间")
+_REGION_COL_HINTS = ("region", "province", "city", "area", "区域", "城市", "省份")
+_CATEGORY_COL_HINTS = ("category", "brand", "type", "品类", "品牌", "类型")
+
+
+def _user_expressed_intent(user_query: str) -> bool:
+    text = (user_query or "").lower()
+    return any(p in text for p in _INTENT_PHRASES)
+
+
+def _deterministic_intent(user_query: str) -> str | None:
+    """从原话直接判定分析角度（确定性内核）。
+
+    2026-11-03 实测：「2024年各区域销售额」这种话，模型仍会追问「你想看哪种视角」——
+    但用户已经说了「各区域」，这就是区域对比。确定性优先：能判就直接判，不让模型再问。
+    判定不出来才交给模型澄清。
+    """
+    text = (user_query or "").lower()
+
+    if any(p in text for p in ("明细", "逐条", "逐笔", "列出来", "每一笔")):
+        return "detail"
+    if any(p in text for p in ("异常", "波动", "异动")):
+        return "anomaly"
+    if any(p in text for p in ("各品类", "各产品", "分品类", "每个品类", "品类对比")):
+        return "compare_category"
+    if any(p in text for p in (
+        "各区域", "各地区", "各省", "分区域", "每个区域", "区域对比", "各门店", "每个门店",
+        "哪个区域", "哪家门店",
+    )):
+        return "compare_region"
+    if any(p in text for p in (
+        "趋势", "走势", "变化", "增长", "下滑", "上涨", "下降",
+        "按月", "每月", "按周", "每周", "按季度", "每季度", "按天", "每日", "各月",
+    )):
+        return "trend"
+    if any(p in text for p in ("对比", "比较", "排名", "排行", "占比", "分布", "最高", "最低", "最多", "最少")):
+        # 只说「对比/排名」但没说是哪个维度 → 无法确定比什么，交给澄清
+        return None
+    if any(p in text for p in ("汇总", "总览", "概况", "整体情况")):
+        return "overview"
+    return None
+
+
+def _apply_deterministic_intent(card: RequirementCard, kind: str) -> None:
+    """把确定性判定的分析角度写进卡片（与 requirement_service._apply_intent 同语义）。"""
+    dims = list(card.dimensions or [])
+    methods = list(card.analysis_methods or [])
+
+    def _add(items: list[str], value: str) -> list[str]:
+        return items if value in items else items + [value]
+
+    if kind == "trend":
+        card.analysis_methods = _add(methods, "trend_analysis")
+        # 粒度不猜：趋势必须有时间粒度，但「按心情」这种认不出的取值不能被默认成月。
+        # 留空并在 parse_requirement 里补一条粒度澄清，让用户选。
+        card.dimensions = _add(dims, "时间")
+        card.detail_level = None
+    elif kind == "compare_region":
+        card.analysis_methods = _add(methods, "group_compare")
+        card.dimensions = _add(dims, "区域")
+    elif kind == "compare_category":
+        card.analysis_methods = _add(methods, "group_compare")
+        card.dimensions = _add(dims, "品类")
+    elif kind == "detail":
+        card.detail_level = "detail"
+        card.analysis_methods = []
+        card.granularity = None
+    elif kind == "anomaly":
+        card.analysis_methods = _add(methods, "anomaly_detection")
+        card.dimensions = _add(dims, "时间")
+    elif kind == "overview":
+        card.analysis_methods = [m for m in methods if m == "group_compare"]
+        card.granularity = None
+
+
+def _guard_analysis_methods(user_query: str, methods: list[str]) -> list[str]:
+    """用户没表达分析角度 → 一律清空（不让模型替他决定看成什么）。"""
+    if not methods:
+        return []
+    if _user_expressed_intent(user_query):
+        return methods
+    logger.warning(
+        "analysis_methods dropped (user never expressed intent): %s | query=%r",
+        methods, user_query,
+    )
+    return []
+
+
+def _first_column_matching(schema: SchemaContext | None, hints: tuple[str, ...]) -> str:
+    for table in (schema.tables if schema else []) or []:
+        tname = str(getattr(table, "name", "") or "")
+        for col in getattr(table, "columns", None) or []:
+            cname = str(getattr(col, "name", "") or "")
+            low = cname.lower()
+            if any(h in low for h in hints):
+                return f"{tname}.{cname}" if tname else cname
+    return ""
+
+
+def _default_intent_clarification(
+    schema: SchemaContext | None,
+) -> RequirementMissingField | None:
+    """分析角度不明时，按**可用字段**生成候选（不是写死选项表）。
+
+    只有字段真实存在才给对应选项：有日期列才能「按月趋势」，有区域/品类列才能「对比」。
+    """
+    from app.models.requirement import RequirementOption
+
+    options = [RequirementOption(label="全年总览", value="intent:overview")]
+    time_col = _first_column_matching(schema, _TIME_COL_HINTS)
+    if time_col:
+        options.append(RequirementOption(label="按月趋势", value="intent:trend"))
+    region_col = _first_column_matching(schema, _REGION_COL_HINTS)
+    if region_col:
+        options.append(RequirementOption(label="区域对比", value="intent:compare_region"))
+    category_col = _first_column_matching(schema, _CATEGORY_COL_HINTS)
+    if category_col:
+        options.append(RequirementOption(label="品类对比", value="intent:compare_category"))
+    options.append(RequirementOption(label="逐条明细", value="intent:detail"))
+    if len(options) < 2:
+        return None
+    return RequirementMissingField(
+        key="analysis_intent",
+        label="你想看哪一种视角？",
+        kind="single",
+        options=options[:4],
+    )
 _YEAR_MONTH = re.compile(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月")
+_RELATIVE_SPAN = re.compile(r"这两个月|那两个月|最近两个月|这俩月|这两个月份")
 
 
 def _resolve_relative_month_span(
@@ -319,6 +559,24 @@ def parse_requirement(
     missing_fields: list[RequirementMissingField] = [
         opts.build_missing_field(key=k) for k in missing_keys
     ]
+    # 2026-11-03：模型现场生成的澄清项（基于 MCP 返回的真实字段）。
+    # 选项里带 column 的，必须在该 session 的 schema 里真实存在，否则丢弃——
+    # 防止模型编造字段；有效候选不足 2 个说明其实不歧义，整条丢弃。
+    clarified = _build_clarifications(parsed.get("clarifications"), schema_context)
+    if clarified:
+        existing_keys = {mf.key for mf in clarified}
+        missing_fields = clarified + [mf for mf in missing_fields if mf.key not in existing_keys]
+    # 分析角度仍然没确定（用户没说、模型也没问，且上一轮也没定过）→ 按可用字段补一条追问。
+    # 这样「2024年的销售情况」不会再被静默跑成「按年趋势 1 行」；而「改看华南」这类
+    # 已确定视角的补充轮不会被反复追问。
+    prior_has_intent = prior_card is not None and (
+        bool(prior_card.analysis_methods) or bool(prior_card.detail_level)
+    )
+    if not prior_has_intent and not any(mf.key == "analysis_intent" for mf in missing_fields):
+        if not _guard_analysis_methods(user_query, ["probe"]):
+            intent_mf = _default_intent_clarification(schema_context)
+            if intent_mf is not None:
+                missing_fields.insert(0, intent_mf)
 
     assumptions: list[RequirementAssumption] = []
     for raw in parsed.get("assumptions") or []:
@@ -353,6 +611,7 @@ def parse_requirement(
     scope = [str(s)[:64] for s in parsed.get("scope") or []]
     dimensions = [str(d)[:64] for d in parsed.get("dimensions") or []]
     analysis_methods = [str(a)[:64] for a in parsed.get("analysis_methods") or []]
+    analysis_methods = _guard_analysis_methods(user_query, analysis_methods)
 
     confidence_raw = parsed.get("confidence", 0.0)
     try:
@@ -401,6 +660,29 @@ def parse_requirement(
     # missing_fields（_merge_prior_card 内按继承结果移除已满足 key）+ status。
     if prior_card is not None:
         _merge_prior_card(card, prior_card, user_query=user_query)
+
+    # 2026-11-03 确定性优先：能从原话直接判定分析角度时，服务端拍板——
+    # 丢掉模型多余的「你想看哪种视角」追问，并把 intent 落到卡体字段。
+    # 「2024年各区域销售额」这类明确问法不该再多问一轮。
+    det_intent = _deterministic_intent(user_query)
+    if det_intent is not None:
+        _apply_deterministic_intent(card, det_intent)
+        card.missing_fields = [
+            mf for mf in card.missing_fields if mf.key != "analysis_intent"
+        ]
+        # 趋势必须有粒度，但认不出/没给的时候不猜——补一条粒度澄清让用户选。
+        # 「已经有粒度」的三种来源都算：卡体字段 / dimensions 的「粒度:X」标签 /
+        # 用户已接受的 granularity 假设（老卡片的承载方式）。
+        gran_known = bool(card.granularity) or any(
+            _dim_kind(d) == "granularity" for d in card.dimensions
+        ) or any(
+            a.accepted is True and a.key == "granularity" for a in card.assumptions
+        )
+        if det_intent == "trend" and not gran_known and not any(
+            mf.key == "granularity" for mf in card.missing_fields
+        ):
+            card.missing_fields.append(opts.build_missing_field(key="granularity"))
+
     # LLM 会自相矛盾：既输出了某个维度的值，又把它列进 missing_fields
     # （2026-10-28 实测：「granularity: 月」且 missing_fields 含 granularity）。
     # 卡体已经有答案的维度一律不再追问，否则用户会被要求回答一个已经答过的字段。

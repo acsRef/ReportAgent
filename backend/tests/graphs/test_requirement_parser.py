@@ -49,7 +49,8 @@ def test_vague_query_yields_missing_with_all_dimensions(monkeypatch) -> None:
     card = parse_requirement(user_query="帮我分析一下销量", schema_context=None)
     assert card.status == "missing"
     keys = {mf.key for mf in card.missing_fields}
-    assert keys == {"time_range", "scope", "metric", "granularity", "comparison"}
+    # 2026-11-03：分析角度也必须是显式追问（用户没说看哪种视角）。
+    assert keys == {"analysis_intent", "time_range", "scope", "metric", "granularity", "comparison"}
     # Options come from the server-side controlled list, not the LLM.
     metric_mf = next(mf for mf in card.missing_fields if mf.key == "metric")
     assert any(opt.value == "销售额" for opt in metric_mf.options)
@@ -153,8 +154,7 @@ def test_uses_options_provider(monkeypatch) -> None:
     from app.agent.requirement_parser import parse_requirement
     from app.agent import requirement_options
     card = parse_requirement(user_query="x", schema_context=None)
-    time_mf = card.missing_fields[0]
-    assert time_mf.key == "time_range"
+    time_mf = next(mf for mf in card.missing_fields if mf.key == "time_range")
     expected_values = {opt.value for opt in requirement_options.time_options(None)}
     actual_values = {opt.value for opt in time_mf.options}
     assert actual_values == expected_values

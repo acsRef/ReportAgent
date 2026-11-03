@@ -7,9 +7,29 @@ from decimal import Decimal
 from app.utils.numbers import is_numeric_value, to_decimal
 
 
+# 时间类列名：即使值是数字（年份=2024、月份=7），也不能当度量来求和。
+# 2026-11-03 实测：「2024年各区域销售额」的结果行含 `年份=2024`，group_compare 自动
+# 选「第一个数值列」→ 把年份当金额求和 → 每个区域都输出「合计=2,024.00」。
+_TIME_LIKE_TOKENS = (
+    "年份", "年", "月份", "月", "日期", "日", "周", "季度", "星期",
+    "date", "month", "year", "quarter", "week", "day",
+)
+
+
+def _is_time_like(name: object) -> bool:
+    low = str(name).lower()
+    return any(tok in low for tok in _TIME_LIKE_TOKENS)
+
+
 def _numeric_keys(row: dict) -> list:
-    """数值列识别：int/float/Decimal/数值字符串都算（numeric 列 JSON 后是 str）。"""
-    return [k for k, v in row.items() if is_numeric_value(v)]
+    """数值列识别：int/float/Decimal/数值字符串都算（numeric 列 JSON 后是 str）。
+
+    时间类列（年份/月份/日期）排除在外——它们是维度，不是度量。
+    若全被排除（例如结果只有一列「月份」），退回未过滤结果，避免无列可用。
+    """
+    keys = [k for k, v in row.items() if is_numeric_value(v)]
+    measures = [k for k in keys if not _is_time_like(k)]
+    return measures or keys
 
 
 def trend_analysis(data_json: str) -> str:

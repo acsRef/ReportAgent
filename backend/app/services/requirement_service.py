@@ -86,6 +86,40 @@ def card_guard_text(card_dict: dict) -> str:
     return "\n".join(parts)
 
 
+def _apply_intent(card_dict: dict, intent: str) -> None:
+    """把「分析角度」确定性翻译成卡体字段（2026-11-03）。
+
+    这是澄清项里最关键的映射：用户选了「按月趋势」，就必须同时落
+    granularity + analysis_methods；选了「明细」就必须落 detail_level——
+    不能让模型在下一轮再猜一次。
+    """
+    dims = list(card_dict.get("dimensions") or [])
+    methods = list(card_dict.get("analysis_methods") or [])
+
+    def _add(items: list[str], value: str) -> list[str]:
+        return items if value in items else items + [value]
+
+    if intent == "trend":
+        card_dict["granularity"] = card_dict.get("granularity") or "month"
+        card_dict["analysis_methods"] = _add(methods, "trend_analysis")
+        card_dict["dimensions"] = _add(dims, "时间")
+        card_dict["detail_level"] = None
+    elif intent == "compare_region":
+        card_dict["analysis_methods"] = _add(methods, "group_compare")
+        card_dict["dimensions"] = _add(dims, "区域")
+    elif intent == "compare_category":
+        card_dict["analysis_methods"] = _add(methods, "group_compare")
+        card_dict["dimensions"] = _add(dims, "品类")
+    elif intent == "detail":
+        card_dict["detail_level"] = "detail"
+        card_dict["analysis_methods"] = []
+        card_dict["granularity"] = None
+    else:  # overview / 未知 → 不做趋势、不聚合到某个粒度
+        card_dict["detail_level"] = None
+        card_dict["analysis_methods"] = []
+        card_dict["granularity"] = None
+
+
 async def patch_requirement(
     *,
     session_id: str,
@@ -116,7 +150,18 @@ async def patch_requirement(
         if sel is None or sel == "" or sel == []:
             remaining_missing.append(mf)
             continue
-        if key == "time_range":
+        value = sel if isinstance(sel, str) else (sel[0] if sel else "")
+        # 2026-11-03：澄清项由模型现场生成，选项 value 用「前缀:值」编码，
+        # 这里按前缀做**确定性**翻译（不再依赖固定的 5 个 key）。
+        if isinstance(value, str) and value.startswith("intent:"):
+            _apply_intent(card_dict, value.split(":", 1)[1])
+        elif isinstance(value, str) and value.startswith("metric:"):
+            card_dict["target_metrics"] = [value.split(":", 1)[1]]
+        elif isinstance(value, str) and value.startswith("time:"):
+            card_dict["time_range"] = value.split(":", 1)[1]
+        elif isinstance(value, str) and value.startswith("scope:"):
+            card_dict["scope"] = [value.split(":", 1)[1]]
+        elif key == "time_range":
             card_dict["time_range"] = sel if isinstance(sel, str) else sel[0]
         elif key == "scope":
             card_dict["scope"] = sel if isinstance(sel, list) else [sel]

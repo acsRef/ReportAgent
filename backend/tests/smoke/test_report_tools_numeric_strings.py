@@ -100,6 +100,28 @@ def test_trend_and_detect_accept_numeric_strings():
 # table，前端 VISUALIZATION 区块变空白表格。时间列即使数值型也必须按维度处理。
 
 
+def test_time_like_numeric_column_is_not_a_measure():
+    """年份/月份即使值是数字，也不能被当成度量求和（2026-11-03 实测）。
+
+    缺陷：结果行含 `年份=2024` 时，group_compare 自动取「第一个数值列」→ 把年份
+    当金额相加 → 每个区域都输出「合计=2,024.00」。
+    """
+    from app.tools.report_tools import group_compare
+
+    rows = [
+        {"区域": "华东", "年份": 2024, "实收金额": "90409347.82"},
+        {"区域": "华中", "年份": 2024, "实收金额": "23182240.66"},
+    ]
+    out = group_compare(_result(rows, columns=[
+        {"name": "区域", "type": "text"},
+        {"name": "年份", "type": "int"},
+        {"name": "实收金额", "type": "numeric"},
+    ]))
+    assert "90,409,347.82" in out
+    assert "2,024" not in out
+
+
+
 def test_int_month_column_is_a_time_dimension_not_a_measure():
     from app.tools.sql_tools import chart_advisor
 
