@@ -12,6 +12,10 @@ RequirementStatus = Literal["missing", "complete", "locked"]
 # 之前粒度只作为 missing_field 存在，用户明说「每个月」时无处存放 →
 # 需求卡丢信息 → SQL 只按年分组（2026-10-28 实测 1 行，应为 12 行）。
 RequirementGranularity = Literal["day", "week", "month", "quarter", "year"]
+# 展示粒度：aggregate = 聚合后的汇总（默认）；detail = 逐条明细。
+# 为什么独立字段：2026-11-03 实测「给我这两个月的明细数据」——需求卡里没有任何
+# 字段承载「不要聚合」，SQL 仍然 GROUP BY month 出 2 行，用户要的明细根本没出现。
+RequirementDetailLevel = Literal["aggregate", "detail"]
 RequirementFieldKey = Literal[
     "time_range",
     "scope",
@@ -58,6 +62,7 @@ class RequirementCard(BaseModel):
     target_metrics: list[str] = Field(default_factory=list)
     time_range: str | None = None
     granularity: RequirementGranularity | None = None
+    detail_level: RequirementDetailLevel | None = None
     scope: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     analysis_methods: list[str] = Field(default_factory=list)

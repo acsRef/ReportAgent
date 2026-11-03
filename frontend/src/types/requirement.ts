@@ -38,6 +38,9 @@ export interface RequirementAssumption {
 /** 时间粒度（镜像 backend app/models/requirement.py::RequirementGranularity）。 */
 export type RequirementGranularity = 'day' | 'week' | 'month' | 'quarter' | 'year'
 
+/** 展示粒度：detail = 逐条明细（不聚合）。镜像后端 RequirementDetailLevel。 */
+export type RequirementDetailLevel = 'aggregate' | 'detail'
+
 export interface RequirementCard {
   id: string
   version: number
@@ -46,6 +49,8 @@ export interface RequirementCard {
   target_metrics: string[]
   time_range: string | null
   granularity: RequirementGranularity | null
+  /** 2026-11-03：明细/汇总。旧会话没有该字段 → 可选。 */
+  detail_level?: RequirementDetailLevel | null
   scope: string[]
   dimensions: string[]
   analysis_methods: string[]

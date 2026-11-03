@@ -42,6 +42,8 @@ TS_REQUIREMENT_CARD_FIELDS = (
     "target_metrics",
     "time_range",
     "granularity",
+    # 2026-11-03：明细/汇总（镜像 TS RequirementCard.detail_level）
+    "detail_level",
     "scope",
     "dimensions",
     "analysis_methods",

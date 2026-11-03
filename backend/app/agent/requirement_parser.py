@@ -112,10 +112,50 @@ def _normalize_granularity(raw: object) -> str | None:
 
 
 _YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+
+# 明细诉求（2026-11-03）：「给我这两个月的明细数据」此前没有任何字段承载，
+# SQL 仍 GROUP BY month 只出 2 行。这里做确定性识别，卡片带 detail_level。
+_DETAIL_PATTERNS = re.compile(r"明细|逐笔|逐条|原始数据|流水|每一笔|每笔")
+_AGGREGATE_PATTERNS = re.compile(r"汇总|合计|总计|趋势|同比|环比|占比|排名")
+
+
+def _normalize_detail_level(user_query: str) -> str | None:
+    """从用户原话识别「要明细还是要汇总」；都没说则返回 None（沿用上一轮）。"""
+    text = str(user_query or "")
+    if _DETAIL_PATTERNS.search(text):
+        return "detail"
+    if _AGGREGATE_PATTERNS.search(text):
+        return "aggregate"
+    return None
 _CN_MONTHS = {
     "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
     "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
 }
+
+
+_RELATIVE_SPAN = re.compile(r"这两个月|那两个月|最近两个月|这俩月|这两个月份")
+_YEAR_MONTH = re.compile(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月")
+
+
+def _resolve_relative_month_span(
+    card: RequirementCard, prior: RequirementCard, user_query: str = "",
+) -> None:
+    """「这两个月」→ 用上一轮讨论的月份往前推一个月（确定性）。
+
+    2026-11-03 实测：先问 7 月、再问 8 月，然后说「给我这两个月的明细数据」——
+    模型有时按「最近两个月」算成 9/10 月，有时干脆不产出时间范围（沿用 8 月）。
+    所以判定必须看**用户原话**，不能看模型输出的 time_range。
+    """
+    text = f"{user_query} {card.time_range or ''}"
+    if not _RELATIVE_SPAN.search(text):
+        return
+    match = _YEAR_MONTH.search(str(prior.time_range or ""))
+    if not match:
+        return
+    year, month = int(match.group(1)), int(match.group(2))
+    if month <= 1:
+        return
+    card.time_range = f"{year}年{month - 1}月-{month}月"
 
 
 def _inherit_year(card: RequirementCard, prior: RequirementCard) -> None:
@@ -143,7 +183,9 @@ def _inherit_year(card: RequirementCard, prior: RequirementCard) -> None:
         card.time_range = f"{year}年{text}"
 
 
-def _merge_prior_card(card: RequirementCard, prior: RequirementCard) -> None:
+def _merge_prior_card(
+    card: RequirementCard, prior: RequirementCard, user_query: str = "",
+) -> None:
     """supplement 继承：presence（新值非空）覆盖 / absence（空）继承 prior。
 
     P15 e2e T2 语义：第 1 轮已确认约束默认沿用，只有本轮明确改写才覆盖。
@@ -154,11 +196,16 @@ def _merge_prior_card(card: RequirementCard, prior: RequirementCard) -> None:
         card.target_metrics = list(prior.target_metrics)
     if card.time_range is None and prior.time_range:
         card.time_range = prior.time_range
-    elif card.time_range:
+    if user_query or card.time_range:
+        # 指代（「这两个月」）必须先于年份继承判断：它可能直接改写时间范围。
+        _resolve_relative_month_span(card, prior, user_query)
+    if card.time_range and not _RELATIVE_SPAN.search(str(card.time_range)):
         # 只说了月份 → 继承上一轮的年份（否则按 today 解析成另一年）
         _inherit_year(card, prior)
     if card.granularity is None and prior.granularity:
         card.granularity = prior.granularity
+    if card.detail_level is None:
+        card.detail_level = prior.detail_level
     if not card.scope and prior.scope:
         card.scope = list(prior.scope)
     if not card.analysis_methods and prior.analysis_methods:
@@ -319,6 +366,7 @@ def parse_requirement(
     if time_range is not None:
         time_range = str(time_range)[:64]
     granularity = _normalize_granularity(parsed.get("granularity"))
+    detail_level = _normalize_detail_level(user_query)
 
     # status: complete requires NO missing fields AND all assumptions
     # explicitly accepted. If the LLM left assumptions unresolved
@@ -339,6 +387,7 @@ def parse_requirement(
         target_metrics=target_metrics,
         time_range=time_range,
         granularity=granularity,
+        detail_level=detail_level,
         scope=scope,
         dimensions=dimensions,
         analysis_methods=analysis_methods,
@@ -351,7 +400,7 @@ def parse_requirement(
     # P15 e2e T2：supplement 继承（presence 覆盖 / absence 继承 prior），随后重算
     # missing_fields（_merge_prior_card 内按继承结果移除已满足 key）+ status。
     if prior_card is not None:
-        _merge_prior_card(card, prior_card)
+        _merge_prior_card(card, prior_card, user_query=user_query)
     # LLM 会自相矛盾：既输出了某个维度的值，又把它列进 missing_fields
     # （2026-10-28 实测：「granularity: 月」且 missing_fields 含 granularity）。
     # 卡体已经有答案的维度一律不再追问，否则用户会被要求回答一个已经答过的字段。

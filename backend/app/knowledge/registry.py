@@ -34,6 +34,10 @@ class MetricDef:
     name: str
     expr: str
     synonyms: tuple[str, ...] = ()
+    # 指标依赖的 JOIN 子句（数据驱动）：生成 SQL 时必须一并带上，
+    # 否则 expr 里引用的别名不存在。实测：净销售额的相关子查询写法在
+    # GROUP BY 下非法，改 JOIN 后由这里声明依赖。
+    joins: tuple[str, ...] = ()
     unit: str = ""
     note: str = ""
     default: bool = False
@@ -75,6 +79,7 @@ def _metrics() -> tuple[MetricDef, ...]:
             name=str(item["name"]),
             expr=str(item["expr"]).strip(),
             synonyms=tuple(str(s) for s in (item.get("synonyms") or [])),
+            joins=tuple(str(s).strip() for s in (item.get("joins") or [])),
             unit=str(item.get("unit") or ""),
             note=str(item.get("note") or ""),
             default=bool(item.get("default") or False),

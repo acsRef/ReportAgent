@@ -18,10 +18,16 @@ metrics:
 
   - name: 净销售额
     synonyms: [净销售, 净销售额, 扣退款销售额]
-    expr: >-
-      SUM(fact_orders.order_amount) - COALESCE((
-        SELECT SUM(p.payment_amount) FROM fact_payments p
-        WHERE p.status = 'REFUNDED' AND p.order_id = fact_orders.order_id), 0)
+    # 2026-11-03 实测：相关子查询（WHERE p.order_id = fact_orders.order_id）在
+    # GROUP BY 查询里非法（subquery uses ungrouped column）。改成显式 JOIN +
+    # 聚合，依赖由 joins 字段声明，生成 SQL 时一并带上。
+    expr: "SUM(fact_orders.order_amount) - COALESCE(SUM(refund.refund_amount), 0)"
+    joins:
+      - >-
+        LEFT JOIN (
+          SELECT order_id, SUM(payment_amount) AS refund_amount
+          FROM fact_payments WHERE status = 'REFUNDED' GROUP BY order_id
+        ) refund ON refund.order_id = fact_orders.order_id
     unit: 元
     note: 销售额减去退款
 

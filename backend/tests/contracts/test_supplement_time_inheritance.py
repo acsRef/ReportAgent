@@ -62,3 +62,36 @@ def test_arabic_month_keeps_prefix():
     card = _card(time_range="7月")
     _merge_prior_card(card, prior)
     assert card.time_range == "2024年7月"
+
+
+def test_relative_span_resolves_to_discussed_months():
+    """「这两个月」指刚聊过的月份，不是「最近两个月」。"""
+    prior = _card(time_range="2024年8月")
+    card = _card(time_range="2024年最近两个月")
+    _merge_prior_card(card, prior)
+    assert card.time_range == "2024年7月-8月"
+
+
+def test_relative_span_keeps_explicit_months():
+    prior = _card(time_range="2024年8月")
+    card = _card(time_range="2024年3月-4月")
+    _merge_prior_card(card, prior)
+    assert card.time_range == "2024年3月-4月"
+
+
+# --- 时间筛选提示（确定性，避免月份被写成日期字符串） ----------------------
+
+def test_period_hint_month_range_and_single_month():
+    from app.agent.confirmed_execution_graph import _period_filter_hint
+
+    ranged = _period_filter_hint("2024年7月-8月")
+    assert ranged is not None and "BETWEEN 7 AND 8" in ranged
+
+    single = _period_filter_hint("2024年7月")
+    assert single is not None and "month = 7" in single
+    assert "整数" in single  # 明确 month 是 int，禁止 '2024-07'
+
+    year_only = _period_filter_hint("2024年")
+    assert year_only is not None and "year = 2024" in year_only
+    assert "month" not in year_only
+    assert _period_filter_hint("去年") is None

@@ -286,6 +286,8 @@ class SQLAgentState(TypedDict, total=False):
     # 已确认的时间粒度（day/week/month/quarter/year）——由父图从需求卡透传，
     # _plan 用它确定性改写 dimensions（见 _apply_confirmed_granularity）。
     granularity: Optional[str]
+    # 展示粒度：detail = 逐条明细（_plan 清空 dimensions/聚合）。
+    detail_level: Optional[str]
 
 
 _FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
@@ -515,6 +517,12 @@ def _plan(state: SQLAgentState) -> dict:
             # generate 又严格照 plan 分组 → 用户要「每个月」时 SQL 仍是 GROUP BY year。
             # 已经确认的粒度不该靠 LLM 二次理解，这里直接把它落到 dimensions 上。
             plan = _apply_confirmed_granularity(plan, state.get("granularity"))
+            # 明细模式（2026-11-03）：用户要逐条数据时，plan 不能带维度/聚合。
+            # 实测 prompt 里写了「禁止聚合」，模型仍按趋势规则 GROUP BY month 出 2 行。
+            # 已确认的展示粒度是确定性事实，这里直接改写 plan。
+            if state.get("detail_level") == "detail":
+                plan.dimensions = []
+                plan.aggregation = "none"
             return {
                 "query_plan": plan,
                 "retry_counters": counters,

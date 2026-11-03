@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -329,6 +330,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
         "conversation_context": conversation_context or None,
         "assembled_context": assembled_context or None,  # P4c: 含 recall 的全景 context
         "granularity": getattr(card, "granularity", None),  # 粒度确定性透传（_plan 改写 dimensions）
+        "detail_level": getattr(card, "detail_level", None),  # 明细模式：_plan 清空维度/聚合
         "fault_override": state.get("fault_override"),  # P15 e2e T4: e2e fault seam 透传
     }, _callbacks_only(config))
     qr = ss.get("query_result")
@@ -368,6 +370,40 @@ _GRANULARITY_COLUMNS: dict[str, str] = {
 }
 
 
+_PERIOD_RE = re.compile(
+    r"((?:19|20)\d{2})\s*年(?:\s*(\d{1,2})\s*月(?:\s*[-~至]\s*(\d{1,2})\s*月)?)?"
+)
+
+
+def _period_filter_hint(time_range: str | None) -> str | None:
+    """把「2024年7月」「2024年7月-8月」翻译成确定性筛选条件。
+
+    2026-11-03 实测两处：①模型把单月写成 `dim_date.month = '2024-07'`（month 是 int）
+    → `invalid input syntax for type integer`；②月份区间被写成 `month = 7` 却又配
+    `order_date < '2024-09-01'`，两个条件互相矛盾（8 月被过滤掉）。时间列类型与
+    区间写法属于元数据事实，不该让模型每次猜。
+    """
+    match = _PERIOD_RE.search(str(time_range or ""))
+    if not match:
+        return None
+    year, month, month_end = match.group(1), match.group(2), match.group(3)
+    year_col = knowledge.time_bucket_column("year") or "dim_date.year"
+    month_col = knowledge.time_bucket_column("month") or "dim_date.month"
+    if month and month_end:
+        start, end = sorted((int(month), int(month_end)))
+        return (
+            f"筛选条件（确定性）：{year_col} = {year} AND "
+            f"{month_col} BETWEEN {start} AND {end}"
+            f"（{month_col} 是整数月份；禁止写成日期字符串）"
+        )
+    if month:
+        return (
+            f"筛选条件（确定性）：{year_col} = {year} AND {month_col} = {int(month)}"
+            f"（{month_col} 是整数月份；禁止写成 '{year}-{month}' 这类日期字符串）"
+        )
+    return f"筛选条件（确定性）：{year_col} = {year}"
+
+
 def _format_confirmed_requirement(card) -> str | None:
     """把 PATCH 确认后的 RequirementCard 序列化成 SQL plan prompt
     消费的结构化字符串（中文字段标签）。无卡时返回 None，plan
@@ -390,6 +426,9 @@ def _format_confirmed_requirement(card) -> str | None:
         column = _GRANULARITY_COLUMNS.get(card.granularity)
         suffix = f"（时间维度必须按 {column} 分组，不要用 year）" if column else ""
         parts.append(f"时间粒度 = {label}{suffix}")
+    hint = _period_filter_hint(card.time_range)
+    if hint:
+        parts.append(hint)
     if card.scope:
         # 2026-11-02 实测：「分析2024年华东销售趋势」的 SQL 出现 WHERE region='华东'
         # 之外还 GROUP BY region → 每行多一个恒为「华东」的列、图表退化成一根柱子。
@@ -406,9 +445,13 @@ def _format_confirmed_requirement(card) -> str | None:
         if resolved:
             lines = "\n".join(f"  - {m.name} = {m.expr}" for m in resolved)
             parts.append("指标表达式（必须逐字使用，不要改写口径）:\n" + lines)
+            joins = [j for m in resolved for j in m.joins]
+            if joins:
+                parts.append("指标依赖的 JOIN（必须一起带上）:\n" + "\n".join(f"  {j}" for j in joins))
         if unresolved:
             parts.append(f"未注册指标（禁止臆造列名）: [{_join(unresolved, 10)}]")
-    if card.dimensions:
+    is_detail = getattr(card, "detail_level", None) == "detail"
+    if card.dimensions and not is_detail:
         dims = [str(d) for d in card.dimensions[:10]]
         methods_norm = [str(m).lower() for m in (card.analysis_methods or [])]
         if any("trend" in m for m in methods_norm):
@@ -418,7 +461,7 @@ def _format_confirmed_requirement(card) -> str | None:
             time_dims = [d for d in dims if d in time_terms]
             dims = time_dims or dims[:1]
         parts.append(f"分析维度 = [{', '.join(dims)}]")
-    if card.analysis_methods:
+    if card.analysis_methods and not is_detail:
         methods = [str(m) for m in card.analysis_methods]
         parts.append(f"分析方法 = [{_join(methods, 10)}]")
         if any("trend" in m.lower() or "趋势" in m for m in methods):
@@ -426,6 +469,16 @@ def _format_confirmed_requirement(card) -> str | None:
                 "趋势分析：只按时间维度分组，不要再加入其它维度；"
                 "已被数据范围限定的维度不得进入 GROUP BY。"
             )
+    if is_detail:
+        # 2026-11-03：「给我这两个月的明细数据」此前没有任何字段承载 → 仍然
+        # GROUP BY month 只出 2 行。明细模式必须显式禁止聚合，且**优先级最高**
+        # （上面若还有趋势/分组要求，会与它打架，所以这里明确覆盖）。
+        parts.append(
+            "明细模式（优先级最高，覆盖上面的聚合/分组要求）：\n"
+            "- 禁止 SUM/COUNT/AVG 与 GROUP BY，直接 SELECT 原始列\n"
+            "- 金额取原值（不要 ROUND 到万级），并带上可读的日期/门店/品类列\n"
+            "- 按时间倒序，LIMIT 200"
+        )
     if card.assumptions:
         accepted = [a for a in card.assumptions if a.accepted is True]
         if accepted:
