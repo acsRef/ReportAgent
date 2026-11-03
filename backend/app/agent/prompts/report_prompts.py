@@ -51,6 +51,93 @@ REPORT_PLAN_META: dict[str, Any] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# REPORT_NARRATE_V1：把「数据 + 工具结论」写成给业务看的分析叙述
+# ---------------------------------------------------------------------------
+
+REPORT_NARRATE_V1: dict[str, str] = {
+    "system_contract": (
+        "你是 ReportAgent 数据分析师。把查询结果写成业务方能直接读的结论。"
+        "**只使用输入里出现过的数字**，一个都不许编。"
+    ),
+    "role": "你的读者是不看 SQL 的业务负责人：先给结论，再给证据，最后给下一步。",
+    "task_contract": (
+        "用户问题: {user_query}"
+        "\n需求摘要: {requirement_summary}"
+        "\n\n查询结果（列: {columns}；共 {row_count} 行，下面是前 {sample_size} 行）:"
+        "\n{sample_rows}"
+        "\n\n工具算出来的结论（可引用其数字，但不要原样粘贴）:"
+        "\n{tool_results}"
+        "\n\n写作要求："
+        "\n1. headline：一句话结论，必须带具体数字（金额/行数/百分比），不要「整体趋势平稳」这种空话。"
+        "\n2. findings：2-3 条证据，每条带数字，说清「谁高谁低 / 涨了多少 / 差多少」。"
+        "\n3. why：可能原因，用「可能/或许」措辞；没有依据就写「数据不足以判断原因」，不许编。"
+        "\n4. next：1-2 条具体下一步（按品类下钻 / 看环比 / 排查某月异常）。"
+        "\n5. 不要罗列原始明细行；不要出现英文列名（用中文指标名）；不要 markdown 标题符号。"
+        "\n6. **指标名必须用结果列里的中文名**：列是「实收金额」就写实收金额，不要写成「销售额」或别的口径。"
+    ),
+    "output_schema": (
+        "只输出 JSON，禁止解释："
+        "\n{"
+        '\n  "headline": "一句话结论（带数字）",'
+        '\n  "findings": ["证据1（带数字）", "证据2（带数字）"],'
+        '\n  "why": "可能原因（不确定就说明数据不足）",'
+        '\n  "next": ["下一步建议1", "下一步建议2"]'
+        "\n}"
+    ),
+    "self_check": (
+        "【输出前自检】"
+        "\n1. headline 里的数字是否出现在输入数据里？"
+        "\n2. 有没有编造原因？（没有依据要写「数据不足以判断」）"
+        "\n3. 有没有把原始明细行直接搬进来？"
+    ),
+    "safety_policy": (
+        "Do NOT fabricate numbers。Do NOT invent business causes。"
+        "Do NOT output English column names。"
+    ),
+}
+
+REPORT_NARRATE_META: dict[str, Any] = {
+    "name": "report_narrate",
+    "version": 1,
+    "purpose": "把 QueryResult + 工具结论写成结论/证据/原因/建议四段叙述",
+    "input": ["user_query", "requirement_summary", "columns", "sample_rows", "tool_results"],
+    "output": "{headline, findings[], why, next[]}",
+}
+
+
+def build_report_narrate_prompt(
+    user_query: str,
+    requirement_summary: str,
+    columns: list[str],
+    row_count: int,
+    sample_rows: list[dict],
+    tool_results: str,
+) -> str:
+    import json as _json
+
+    from app.infra.trace.sdk import record_prompt_version
+
+    record_prompt_version(REPORT_NARRATE_META["name"], REPORT_NARRATE_META["version"])
+    sections = [
+        REPORT_NARRATE_V1["system_contract"],
+        REPORT_NARRATE_V1["role"],
+        REPORT_NARRATE_V1["task_contract"].format(
+            user_query=user_query or "（未提供）",
+            requirement_summary=requirement_summary or "（未提供）",
+            columns=", ".join(columns) if columns else "（无）",
+            row_count=row_count,
+            sample_size=len(sample_rows),
+            sample_rows=_json.dumps(sample_rows, ensure_ascii=False, default=str)[:4000],
+            tool_results=(tool_results or "（无）")[:2000],
+        ),
+        REPORT_NARRATE_V1["output_schema"],
+        REPORT_NARRATE_V1["self_check"],
+        REPORT_NARRATE_V1["safety_policy"],
+    ]
+    return "\n\n".join(s for s in sections if s)
+
+
 def build_report_plan_prompt(
     column_names: list[str],
     row_count: int,

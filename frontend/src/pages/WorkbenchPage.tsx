@@ -108,6 +108,9 @@ export default function WorkbenchPage() {
   // 当前轮开始时的版本号：当前轮的报告只显示「这次新产生的版本」，
   // 否则新提问下面会吊着上一轮的旧报告（2026-11-02 对话时间线）。
   const [turnBaseVersion, setTurnBaseVersion] = useState<number | null>(null)
+  // 补充轮：告诉用户「卡片的哪些字段被改了」，避免看起来像凭空多出一张新卡。
+  const [changeNote, setChangeNote] = useState<string | null>(null)
+  const prevCardRef = useRef<RC | null>(null)
   const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
   // 需求已确认并开始执行（或已出报告）→ 卡片只读。改需求走下方输入框（adjust）。
@@ -115,8 +118,35 @@ export default function WorkbenchPage() {
     phase === 'generating' || phase === 'adjusting' || phase === 'report_ready' ||
     requirement?.status === 'locked'
 
-  // ── 历史轮次时间线（2026-11-02）────────────────────────────────────────────
-  // 一轮结束后刷新 messages，让刚结束的这轮进入历史；用 (session, 版本数, phase)
+  // ── 卡片更新提示（2026-11-03）────────────────────────────────────────────
+  // 用户补充需求时，卡片内容会被重算——不解释的话看起来像「又冒出一张新卡」。
+  // 这里对比上一张卡，把被改动的字段标出来（如「数据范围 → 华东」）。
+  useEffect(() => {
+    const prev = prevCardRef.current
+    prevCardRef.current = requirement
+    if (!requirement) { setChangeNote(null); return }
+    if (!prev) { setChangeNote(null); return }
+    const fmt = (value: unknown) => {
+      if (Array.isArray(value)) return value.length ? value.join('、') : '未限定'
+      return value ? String(value) : '未指定'
+    }
+    const diffs: string[] = []
+    if (JSON.stringify(prev.scope) !== JSON.stringify(requirement.scope)) {
+      diffs.push(`数据范围 → ${fmt(requirement.scope)}`)
+    }
+    if (prev.time_range !== requirement.time_range) {
+      diffs.push(`时间 → ${fmt(requirement.time_range)}`)
+    }
+    if (JSON.stringify(prev.target_metrics) !== JSON.stringify(requirement.target_metrics)) {
+      diffs.push(`指标 → ${fmt(requirement.target_metrics)}`)
+    }
+    if (JSON.stringify(prev.dimensions) !== JSON.stringify(requirement.dimensions)) {
+      diffs.push(`维度 → ${fmt(requirement.dimensions)}`)
+    }
+    setChangeNote(diffs.length ? diffs.join('；') : null)
+  }, [requirement])
+
+  // ── 历史轮次时间线（2026-11-02）────────────────────────────────────────────  // 一轮结束后刷新 messages，让刚结束的这轮进入历史；用 (session, 版本数, phase)
   // 做幂等键，避免同一轮重复请求。
   useEffect(() => {
     if (!activeSessionId) return
@@ -535,6 +565,7 @@ export default function WorkbenchPage() {
               // 2026-11-02：确认并生成报告后卡片进入只读——需求已锁定，改需求要走
               // 下方输入框（adjust），不能让用户以为还能就地编辑后重确认。
               readOnly={cardLocked}
+              changeNote={changeNote}
               onChange={(next) => dispatch({ type: 'requirement/received', requirement: next })}
               onConfirm={async () => {
                 await handlePatchAndConfirm(requirement)

@@ -181,6 +181,64 @@ def _run_step(state: ReportAgentState) -> dict:
     return {"assemble_step_idx": idx + 1, "assemble_results": results}
 
 
+def _compose_narrative(state, qr, results: list[dict], fallback: str) -> str:
+    """把「数据 + 工具结论」写成人话（2026-11-03）。
+
+    此前核心发现是工具输出拼接（`insight_text += r["result"]`），实测出现
+    「整体趋势平稳 发现 16 个异常值: 2024-09-28: 497,034.67; …」这种一坨。
+    现在交给叙述模型产出「结论 / 证据 / 可能原因 / 建议」；失败则退回原拼接。
+    """
+    if not qr or not qr.rows:
+        return ""
+
+    from app.agent.prompts.report_prompts import build_report_narrate_prompt
+
+    card = state.get("requirement_card") or {}
+    summary = ""
+    if card:
+        summary = card.get("summary") if isinstance(card, dict) else getattr(card, "summary", "")
+    columns = [c.get("name", "") if isinstance(c, dict) else str(c) for c in qr.columns]
+    tool_text = "\n".join(
+        f"- {r.get('tool')}: {str(r.get('result'))[:800]}"
+        for r in results if r.get("tool") != "chart_advisor"
+    )
+    prompt = build_report_narrate_prompt(
+        user_query=str(state.get("user_query") or ""),
+        requirement_summary=str(summary or ""),
+        columns=columns,
+        row_count=qr.row_count,
+        sample_rows=list(qr.rows)[:20],
+        tool_results=tool_text,
+    )
+    try:
+        raw = call_llm(prompt, max_tokens=900)
+        data = safe_json_parse(raw) if isinstance(raw, str) else raw
+    except Exception as exc:  # noqa: BLE001 - 叙述失败不能拖垮报告
+        logger.warning("report narration failed: %s", exc)
+        return ""
+    if not isinstance(data, dict):
+        return ""
+
+    headline = str(data.get("headline") or "").strip()
+    findings = [str(x).strip() for x in (data.get("findings") or []) if str(x).strip()]
+    why = str(data.get("why") or "").strip()
+    nxt = [str(x).strip() for x in (data.get("next") or []) if str(x).strip()]
+    if not headline and not findings:
+        return ""
+
+    lines: list[str] = []
+    if headline:
+        lines.append(f"**结论**：{headline}")
+    for item in findings[:3]:
+        lines.append(f"- {item}")
+    if why:
+        lines.append(f"**可能原因**：{why}")
+    if nxt:
+        lines.append("**建议下一步**：" + "；".join(nxt[:2]))
+    text = "\n".join(lines)
+    return text or fallback
+
+
 @traced_node("report_build_output")
 def _build_output(state: ReportAgentState) -> dict:
     results = state.get("assemble_results", [])
@@ -204,6 +262,13 @@ def _build_output(state: ReportAgentState) -> dict:
             "rows": qr.rows if qr else [],
         }, ensure_ascii=False, default=str)
         chart_config = safe_json_parse(chart_advisor(data_json)) or {}
+
+    # 2026-11-03：核心发现不能是工具输出拼接（实测出现「整体趋势平稳 发现 16 个异常值:
+    # 2024-09-28: 497,034.67; …」这种一坨）。改为**叙述层**：把结果数据 + 工具结论交给
+    # 叙述模型，产出「结论 / 证据 / 可能原因 / 建议」四段人话。
+    narrative = _compose_narrative(state, qr, results, insight_text)
+    if narrative:
+        insight_text = narrative
 
     # P16 D3：视觉化偏好确定性应用（memory-architecture §二触发 2）——ContextRuntime
     # 召回的 preference 文本 → chart type override；词表外偏好/数据不支持时让位。

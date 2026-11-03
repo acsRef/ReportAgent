@@ -15,6 +15,8 @@ interface Props {
   onFocusComposer?: () => void
   /** 已确认并开始执行后置 true：卡片只读，改需求走输入框（2026-11-02）。 */
   readOnly?: boolean
+  /** 补充轮带来的变化说明（2026-11-03）：让用户看到「同一张卡被更新」，而不是又冒出一张新卡。 */
+  changeNote?: string | null
 }
 
 const STATUS_PILL: Record<RC['status'], string> = {
@@ -30,7 +32,7 @@ const STATUS_PILL: Record<RC['status'], string> = {
  * actions. No spinner anywhere — busy states live in the composer and
  * the progress card (WorkbenchPage).
  */
-export default function RequirementCardView({ card, onChange, onConfirm, onFocusComposer, readOnly = false }: Props) {
+export default function RequirementCardView({ card, onChange, onConfirm, onFocusComposer, readOnly = false, changeNote = null }: Props) {
   const ready = isDraftReadyForReview(card)
 
   function setSelectedValue(key: string, value: string | string[] | null) {
@@ -95,6 +97,10 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
       </div>
 
       <div className="wb-req-summary">{card.summary}</div>
+
+      {changeNote && (
+        <div className="wb-req-changenote">↻ 已按你的补充更新：{changeNote}</div>
+      )}
 
       <div className="wb-req-body">
         <div className="wb-req-grid">

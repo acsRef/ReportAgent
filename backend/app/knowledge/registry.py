@@ -220,6 +220,36 @@ def dimension_column(term: str) -> str | None:
     return None
 
 
+# --- 物理列名 → 中文标签（2026-11-03：卡片不允许出现 order_amount / region 这种列名） ---
+
+def label_for_metric_column(column: str) -> str | None:
+    """物理列 → 业务指标名（fact_orders.order_amount → 销售额）。"""
+    needle = _normalize(column).split(".")[-1]
+    if not needle:
+        return None
+    for metric in _metrics():
+        if needle in _normalize(metric.expr):
+            return metric.name
+    return None
+
+
+def label_for_dimension(column: str) -> str | None:
+    """物理维度列 → 中文标签（dim_store.region → 区域；dim_date.month → 月份）。"""
+    needle = _normalize(column).split(".")[-1]
+    if not needle:
+        return None
+    for item in _schema_hints().get("dimension_terms") or []:
+        col = _normalize(item.get("column", "")).split(".")[-1]
+        if col and col == needle:
+            return str(item.get("term") or "") or None
+    buckets = (_schema_hints().get("time_dimension") or {}).get("buckets") or {}
+    for granularity, col in buckets.items():
+        if _normalize(col).split(".")[-1] == needle:
+            return {"day": "日期", "week": "周", "month": "月份",
+                    "quarter": "季度", "year": "年份"}.get(granularity, needle)
+    return None
+
+
 def time_bucket_column(granularity: str) -> str | None:
     """粒度 → dim_date 分组列（month → dim_date.month）。"""
     buckets = (_schema_hints().get("time_dimension") or {}).get("buckets") or {}

@@ -28,6 +28,7 @@ from app.models.requirement import (
 )
 from app.agent import requirement_options as opts
 from app.agent.prompts import build_requirement_parse_prompt
+from app.knowledge import registry as knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,47 @@ def _deterministic_intent(user_query: str) -> str | None:
     if any(p in text for p in ("汇总", "总览", "概况", "整体情况")):
         return "overview"
     return None
+
+
+def _display_metric(term: str) -> str:
+    """指标名规范化：物理列 → 业务中文名（order_amount → 销售额）。
+
+    2026-11-03 用户实测：卡片上直接显示 `payment_amount`、`region`，没人看得懂。
+    展示层必须是中文；物理列绑定留给 SQL 阶段（注册表负责翻译回去）。
+    """
+    text = str(term or "").strip()
+    if not text:
+        return text
+    label = knowledge.label_for_metric_column(text)
+    if label:
+        return label
+    if "." in text:  # 兜底：至少去掉表名前缀
+        return text.split(".", 1)[1]
+    return text
+
+
+def _display_dimensions(dims: list[str]) -> list[str]:
+    """维度标签规范化为中文并去重（region → 区域；region+区域 → 区域）。"""
+    out: list[str] = []
+    for dim in dims:
+        raw = str(dim or "").strip()
+        if not raw:
+            continue
+        label = knowledge.label_for_dimension(raw) or raw
+        if label not in out:
+            out.append(label)
+    return out
+
+
+def _extract_scope_from_query(user_query: str) -> list[str]:
+    """从「只看华东」「仅限华南」这类说法里确定性抽范围（2026-11-03 实测补充轮丢约束）。"""
+    text = user_query or ""
+    if not any(k in text for k in ("只看", "仅看", "仅限", "限定", "只要", "只关注", "缩小到")):
+        return []
+    from app.agent.requirement_options import scope_options
+
+    hits = [opt.value for opt in scope_options() if opt.value != "ALL" and opt.value in text]
+    return hits[:1]
 
 
 def _apply_deterministic_intent(card: RequirementCard, kind: str) -> None:
@@ -746,6 +788,14 @@ def parse_requirement(
             mf.key == "granularity" for mf in card.missing_fields
         ):
             card.missing_fields.append(opts.build_missing_field(key="granularity"))
+
+    # 卡片展示层规范化：物理列名 → 中文，维度去重（2026-11-03）
+    card.target_metrics = [_display_metric(m) for m in card.target_metrics]
+    card.dimensions = _display_dimensions(card.dimensions)
+    # 补充轮常见说法「只看华东」：模型经常漏抽，这里确定性补上
+    explicit_scope = _extract_scope_from_query(user_query)
+    if explicit_scope:
+        card.scope = explicit_scope
 
     # LLM 会自相矛盾：既输出了某个维度的值，又把它列进 missing_fields
     # （2026-10-28 实测：「granularity: 月」且 missing_fields 含 granularity）。

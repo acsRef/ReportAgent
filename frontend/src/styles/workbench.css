@@ -417,6 +417,17 @@
 .wb-bubble-meta { margin-top: 5px; color: var(--faint); font-size: 8px; }
 .wb-message.user .wb-bubble-meta { color: var(--on-ink-3); }
 
+/* 补充轮的「已更新」提示（2026-11-03）：让用户看出是同一张卡被更新 */
+.wb-req-changenote {
+  margin: 6px 0 2px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--teal, #0d7a6b);
+  background: var(--teal-wash, #eef7f5);
+  color: var(--teal-deep, #0a5c50);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 /* 历史轮次时间线（2026-11-02）：轮次纵向排列，报告默认收起、点开才挂载 */
 .wb-history { display: flex; flex-direction: column; gap: var(--sp-4); margin-bottom: var(--sp-5); }
 .wb-history-turn { display: flex; flex-direction: column; gap: var(--sp-2); }
