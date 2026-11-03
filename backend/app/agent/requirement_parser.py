@@ -232,7 +232,8 @@ _INTENT_PHRASES = (
     "趋势", "走势", "变化", "增长", "下滑", "上涨", "下降",
     "按月", "每月", "按周", "每周", "按季度", "每季度", "按天", "每日",
     # 对比 / 分布 / 排名
-    "对比", "比较", "排名", "排行", "占比", "分布", "哪个", "哪些", "最高", "最低",
+    "对比", "比较", "比一下", "比比", "相比", "排名", "排行", "占比", "分布",
+    "哪个", "哪些", "最高", "最低",
     "最多", "最少", "前几", "top",
     # 维度化表达（隐含 compare）
     "各区域", "各品类", "各产品", "各门店", "各省", "各地区", "各月", "各年",
@@ -265,6 +266,16 @@ def _deterministic_intent(user_query: str) -> str | None:
     """
     text = (user_query or "").lower()
 
+    # 先看「点了名的维度 + 比较语义」：口语常说「华东和华南比一下」，既没有
+    # 「各区域」也没有「对比」两个字，但语义就是区域对比（2026-11-03 实测被漏判）。
+    _region_words = ("华东", "华南", "华北", "华中", "西南", "西北", "区域", "门店")
+    _compare_words = ("比", "对比", "比较", "vs", "哪个", "最好", "最高", "最多", "排名")
+    if any(w in text for w in _region_words) and any(w in text for w in _compare_words):
+        return "compare_region"
+    _category_words = ("品类", "产品", "品牌", "类别")
+    if any(w in text for w in _category_words) and any(w in text for w in _compare_words):
+        return "compare_category"
+
     if any(p in text for p in ("明细", "逐条", "逐笔", "列出来", "每一笔")):
         return "detail"
     if any(p in text for p in ("异常", "波动", "异动")):
@@ -281,7 +292,7 @@ def _deterministic_intent(user_query: str) -> str | None:
         "按月", "每月", "按周", "每周", "按季度", "每季度", "按天", "每日", "各月",
     )):
         return "trend"
-    if any(p in text for p in ("对比", "比较", "排名", "排行", "占比", "分布", "最高", "最低", "最多", "最少")):
+    if any(p in text for p in ("对比", "比较", "比一下", "比比", "相比", "排名", "排行", "占比", "分布", "最高", "最低", "最多", "最少")):
         # 只说「对比/排名」但没说是哪个维度 → 无法确定比什么，交给澄清
         return None
     if any(p in text for p in ("汇总", "总览", "概况", "整体情况")):
@@ -290,12 +301,23 @@ def _deterministic_intent(user_query: str) -> str | None:
 
 
 def _apply_deterministic_intent(card: RequirementCard, kind: str) -> None:
-    """把确定性判定的分析角度写进卡片（与 requirement_service._apply_intent 同语义）。"""
+    """把确定性判定的分析角度写进卡片（与 requirement_service._apply_intent 同语义）。
+
+    对比/排名类问法（「华东和华南比一下」「哪个品类卖得最好」）常常不说时间范围和
+    指标——这是口语常态。默认「今年 + 销售额」直接作答，比拦下来问两个问题更好；
+    卡片上会显示这个默认值，用户想改再改。
+    """
     dims = list(card.dimensions or [])
     methods = list(card.analysis_methods or [])
 
     def _add(items: list[str], value: str) -> list[str]:
         return items if value in items else items + [value]
+
+    if kind in ("compare_region", "compare_category", "trend", "anomaly"):
+        if not card.time_range:
+            card.time_range = "今年"
+        if not card.target_metrics:
+            card.target_metrics = ["销售额"]
 
     if kind == "trend":
         card.analysis_methods = _add(methods, "trend_analysis")
@@ -497,6 +519,9 @@ def _call_llm_for_parse(
         schema_text=_schema_text(schema),
         dictionary_block=dictionary_block,
         prior_block=prior_block,
+        # 缺了今天几号，「今年/上月」这类相对时间会被模型按示例里的 2024 猜
+        # （2026-11-03 实测：问「今年」返回 2024 年）。
+        today=datetime.now().strftime("%Y-%m-%d"),
     )
     # 分层对话上下文前置：让需求解析感知先前轮次（如「再按产品细分」隐含的范围）。
     # P4c 优先用 assembled_context（含 recall + conversation 全景），否则 fallback 到 conversation_context。
@@ -670,6 +695,11 @@ def parse_requirement(
         card.missing_fields = [
             mf for mf in card.missing_fields if mf.key != "analysis_intent"
         ]
+        # 明细模式不需要「指标」和「粒度」：逐条返回原始列，不聚合。
+        if det_intent == "detail":
+            card.missing_fields = [
+                mf for mf in card.missing_fields if mf.key not in ("metric", "granularity")
+            ]
         # 趋势必须有粒度，但认不出/没给的时候不猜——补一条粒度澄清让用户选。
         # 「已经有粒度」的三种来源都算：卡体字段 / dimensions 的「粒度:X」标签 /
         # 用户已接受的 granularity 假设（老卡片的承载方式）。

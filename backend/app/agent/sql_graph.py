@@ -608,6 +608,16 @@ def _generate_sql(state: SQLAgentState) -> dict:
     _ctx_injected = state.get("assembled_context") or state.get("conversation_context")
     if _ctx_injected:
         prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
+    # 2026-11-03：明细模式必须在**生成阶段**再说一遍。plan 阶段清空 dimensions/聚合
+    # 之后，generate 只看得到 target_metric，模型会把它重新 SUM 起来（实测「给我今年
+    # 华东的明细」返回 1 行 销售金额）。
+    if state.get("detail_level") == "detail":
+        prompt += (
+            "\n\n【明细模式（优先级最高）】用户要逐条数据："
+            "禁止 SUM/COUNT/AVG 等聚合与 GROUP BY；"
+            "直接 SELECT 原始列（日期、门店、品类、金额等）；"
+            "按时间倒序；末尾加 LIMIT 200。"
+        )
     sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
     sql = extract_sql(sql)
     retry = state.get("retry_counters", {}) or {}

@@ -1,0 +1,103 @@
+# 真实问法矩阵（14 条）
+#
+# 原则（2026-11-03 用户要求）：
+# 1. 用例是**用户会怎么问**——口语、省略主语、相对时间、混用；不是 prompt 里的示例句；
+# 2. 断言只问「能不能查出来」：执行成功、结构对（列/粒度/过滤）、必要时先澄清；
+# 3. 数量克制：7 类 × 2 条，不追求多。
+#
+# 字段说明：
+#   must_clarify: true  → 必须回到澄清（卡片 status=missing 且含 analysis_intent）
+#   allow_clarify: true → 澄清或直接作答都算通过（口语/相对时间常需要确认）
+#   min_rows / max_rows → 结果行数区间
+#   require_columns      → 结果列名必须包含（子串匹配）
+#   sql_must_not         → SQL 里不得出现的片段（如明细模式不得 GROUP BY）
+
+version: 1
+cases:
+  - id: oral-region-last-month
+    category: 口语省略
+    query: "华东上月卖得咋样"
+    allow_clarify: true
+    min_rows: 1
+
+  - id: oral-metric-only
+    category: 口语省略
+    query: "销量"
+    allow_clarify: true
+    min_rows: 1
+
+  - id: relative-last-three-months
+    category: 相对时间
+    query: "最近三个月趋势"
+    allow_clarify: true
+    min_rows: 2
+    max_rows: 6
+    require_columns: ["月"]
+
+  - id: relative-week-over-week
+    category: 相对时间
+    query: "这周比上周咋样"
+    allow_clarify: true
+    min_rows: 1
+
+  - id: compare-two-regions
+    category: 对比
+    query: "华东和华南比一下"
+    min_rows: 2
+    max_rows: 2
+    require_columns: ["区域"]
+
+  - id: compare-top-category
+    category: 对比
+    query: "哪个品类卖得最好"
+    min_rows: 1
+    require_columns: ["品类"]
+
+  - id: detail-east-china
+    category: 明细
+    query: "给我今年华东的明细"
+    min_rows: 10
+    sql_must_not: ["GROUP BY"]
+
+  - id: detail-list-orders
+    category: 明细
+    query: "把订单列出来看看"
+    min_rows: 10
+    sql_must_not: ["GROUP BY"]
+
+  - id: anomaly-recent
+    category: 异常
+    query: "最近有异常吗"
+    allow_clarify: true
+    min_rows: 1
+
+  - id: anomaly-worst-month
+    category: 异常
+    query: "哪个月掉得最厉害"
+    # 没给时间范围时，先问「哪个时间段」是合理行为，不算答不出
+    allow_clarify: true
+    min_rows: 1
+
+  - id: vague-sales-situation
+    category: 模糊
+    query: "2024年的销售情况"
+    must_clarify: true
+
+  - id: vague-business-situation
+    category: 模糊
+    query: "帮我看下经营情况"
+    must_clarify: true
+
+  - id: explicit-region-ranking
+    category: 完整明确
+    query: "2024年各区域销售额排名"
+    min_rows: 6
+    max_rows: 6
+    require_columns: ["区域"]
+
+  - id: explicit-monthly-east
+    category: 完整明确
+    query: "2024年华东每月销售额"
+    min_rows: 1
+    max_rows: 12
+    require_columns: ["月"]
