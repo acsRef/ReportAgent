@@ -399,6 +399,38 @@ _YEAR_MONTH = re.compile(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月")
 _RELATIVE_SPAN = re.compile(r"这两个月|那两个月|最近两个月|这俩月|这两个月份")
 
 
+_BARE_MONTH_ARABIC = re.compile(r"(?<!\d)(\d{1,2})\s*月")
+_BARE_MONTH_CN = re.compile(r"([一二三四五六七八九十]{1,2})\s*月")
+
+
+def _resolve_bare_month(
+    card: RequirementCard, prior: RequirementCard, user_query: str,
+) -> None:
+    """用户原话只给了月份（「七月份」「7月」）→ 必须用上一轮的年份，覆盖模型输出。
+
+    2026-11-03 实测：需求 prompt 注入 today（2026-11-03）之后，模型把「详细讲一下七月份」
+    直接写成 `2026-07`——它自己补了一个年份，而 `_inherit_year` 只在「没有年份」时才补，
+    于是年份错了。用户说的是「那七月份」，指的是上一轮讨论的年份。
+    """
+    text = user_query or ""
+    if _YEAR_RE.search(text):
+        return  # 用户明确说了年份，尊重
+    month: int | None = None
+    m = _BARE_MONTH_ARABIC.search(text)
+    if m and 1 <= int(m.group(1)) <= 12:
+        month = int(m.group(1))
+    else:
+        m_cn = _BARE_MONTH_CN.search(text)
+        if m_cn and m_cn.group(1) in _CN_MONTHS:
+            month = _CN_MONTHS[m_cn.group(1)]
+    if month is None:
+        return
+    prior_year = _YEAR_RE.search(str(prior.time_range or ""))
+    if not prior_year:
+        return
+    card.time_range = f"{prior_year.group(0)}年{month}月"
+
+
 def _resolve_relative_month_span(
     card: RequirementCard, prior: RequirementCard, user_query: str = "",
 ) -> None:
@@ -459,6 +491,8 @@ def _merge_prior_card(
     if card.time_range is None and prior.time_range:
         card.time_range = prior.time_range
     if user_query or card.time_range:
+        # 只给了月份 → 用上一轮年份（优先于模型自己补的年份）
+        _resolve_bare_month(card, prior, user_query)
         # 指代（「这两个月」）必须先于年份继承判断：它可能直接改写时间范围。
         _resolve_relative_month_span(card, prior, user_query)
     if card.time_range and not _RELATIVE_SPAN.search(str(card.time_range)):

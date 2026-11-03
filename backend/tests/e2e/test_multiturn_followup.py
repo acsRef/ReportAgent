@@ -80,13 +80,25 @@ def _data_of(events: list[dict], name: str) -> Any:
 
 
 def _fill(card: dict) -> dict:
-    """fill-all：把缺失项选上、假设全部接受（与 runner 同策略）。"""
+    """按「温和用户」策略填表：口径类选第一个，视角类优先选非明细。
+
+    2026-11-03 实测坑：原先盲选第一个选项，恰好命中「逐条明细」，把本该 1 行的
+    单月查询变成 200 行明细——真实用户不会这么点。视角类按 overview → trend 优先。
+    """
     filled = json.loads(json.dumps(card))
     for field in filled.get("missing_fields") or []:
         options = [o["value"] for o in (field.get("options") or [])]
-        if field.get("key") == "time_range" and "2024年" in options:
+        if not options:
+            continue
+        if field.get("key") == "analysis_intent":
+            preferred = next(
+                (v for v in ("intent:overview", "intent:trend") if v in options),
+                None,
+            )
+            field["selected_value"] = preferred or options[0]
+        elif field.get("key") == "time_range" and "2024年" in options:
             field["selected_value"] = "2024年"
-        elif options:
+        else:
             field["selected_value"] = options[0] if field.get("kind") == "single" else options[:1]
     for assumption in filled.get("assumptions") or []:
         assumption["accepted"] = True
