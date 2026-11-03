@@ -18,12 +18,25 @@
 | 段 | 落点（现有 6 段容器） | 要求 |
 |---|---|---|
 | `BOUNDARY` | `system_contract` | ≤3 句：我是谁 / 只做什么 / 绝不做什么 |
+| `STANCE` | `role` | 判断姿态（**不重复身份**，如「结论必须能指到真实字段，指不到就澄清」） |
 | `INPUTS` | `inputs_priority` | 输入清单 + **可信度排序**（见 §三） |
 | `DECISION RULES` | `task_contract` | 可枚举的 if/then 决策表，不写散文 |
 | `OUTPUT CONTRACT` | `output_schema` | 精确 JSON，字段级规则，与解析器逐字段对齐 |
 | `SELF-CHECK` | `self_check` | 5–7 条 yes/no，回答前逐条过 |
 | `FORBIDDEN` | `safety_policy` | 每条都是「不得…」 |
 | `EXAMPLES` | `knowledge/*.yaml` | few-shot 放数据文件，**与测试集互斥** |
+
+### 按需注入（appendix）
+
+边缘规则不常驻 prompt，命中线索才拼进去（2026-11-03 瘦身）：
+
+| 附录段 | 注入条件 | 原因 |
+|---|---|---|
+| `rules_dictionary` | 字典块非空 | 没字典时「采用字典释义」是空指令 |
+| `rules_stream` | 问题/schema 含 接口/实时/流/stream | 星型模型里根本没有流字段，常规问法用不到 |
+| `rules_missing_object` | 问题含「表」或 供应商/仓库/员工/渠道/合同/成本中心 | 「点名对象不存在」只在点名时才有意义 |
+
+效果：requirement prompt **5592 → 3045 字符**，plan prompt **2452 → 1529 字符**，常见问法省掉约 45% 的 token。
 
 ## 三、输入优先级（冲突仲裁）
 

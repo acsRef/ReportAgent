@@ -106,4 +106,17 @@ pytest backend/tests/graphs/test_requirement_parser.py -q                   # �
 
 另修：`group_compare` 把「年份」当度量求和（每行「合计=2,024.00」）。
 
-回归：主干 14 条 **14 passed / 314s**；多轮 e2e 待复跑；涉及模块单测 42 passed。
+### 提示词瘦身（同日追加）
+
+用户看过渲染后的 prompt 后指出三处问题，逐一处理：
+
+| 问题 | 处理 |
+|---|---|
+| 开头重复（`system_contract` 与 `role` 都写「你是…解析器」） | `role` 改成**判断姿态**，不再重复身份 |
+| requirement 5592 字符，边缘规则稀释注意力 | 抽出 `rules_dictionary` / `rules_stream` / `rules_missing_object` 三段附录，**按线索注入** |
+| plan 里还留着旧的「三维度明确度 → run_direct/clarify」 | 删掉双轨：plan 只消费已确认需求，只有 schema 完全不可用才 clarify |
+
+瘦身后：requirement **3045 字符**（-45%）、plan **1529 字符**（-38%）。
+
+回归：prompt 契约 24 passed（`KIND_MARKERS` guard 当场拦住了改动首句导致的 mock 分类失配）；
+14 条真实问法 **14 passed / 315s**；主干 smoke（明确问法 6 行 / 模糊问法出澄清）通过。
