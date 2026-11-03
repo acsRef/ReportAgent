@@ -31,6 +31,25 @@ export interface ChatRequest {
   base_report_version?: number | null
 }
 
+/** 流结束时的收尾信息（2026-11-03）。 */
+export interface ChatStreamClose {
+  /**
+   * 是否收到过一个终态事件（requirement / report / error / done）。
+   * false = 流「静默结束」：既没有新卡也没有错误——调用方必须自己解锁并发
+   * 出诚实的错误，否则发送框会永久禁用（hand-off P0 的放大器）。
+   */
+  sawTerminal: boolean
+  /** 被 abort（用户点停止 / 页面卸载 / 新流抢占）——调用方不应再报「连接中断」。 */
+  aborted: boolean
+}
+
+const TERMINAL_EVENTS: ReadonlySet<string> = new Set([
+  'requirement',
+  'report',
+  'error',
+  'done',
+])
+
 function getAuthToken(): string | null {
   try {
     const raw = localStorage.getItem('ragent_auth')
@@ -50,6 +69,7 @@ export function openChat(
   request: ChatRequest,
   onEvent: (event: AnalysisStreamEvent) => void,
   externalSignal?: AbortSignal,
+  onClose?: (info: ChatStreamClose) => void,
 ): AbortController {
   const controller = new AbortController()
   if (externalSignal) {
@@ -69,8 +89,15 @@ export function openChat(
     Accept: 'text/event-stream',
   }
   if (token) headers.Authorization = `Bearer ${token}`
+  const failedAction =
+    request.mode && request.mode !== 'legacy' ? request.mode : 'new'
 
   void (async () => {
+    let sawTerminal = false
+    const emit = (event: AnalysisStreamEvent) => {
+      if (TERMINAL_EVENTS.has(event.type)) sawTerminal = true
+      onEvent(event)
+    }
     try {
       const res = await fetch('/api/v1/chat', {
         method: 'POST',
@@ -82,14 +109,27 @@ export function openChat(
         handleUnauthorized()
         return
       }
+      if (res.status === 409) {
+        // 同 session 已有未完成的后台任务（解析中 / 报告生成中）——与 confirm 同码。
+        emit({
+          type: 'error',
+          error: {
+            code: 'SESSION_BUSY',
+            message: '该会话有任务正在后台执行，请稍候',
+            recoverable: true,
+            failed_action: failedAction,
+          },
+        })
+        return
+      }
       if (!res.ok || !res.body) {
-        onEvent({
+        emit({
           type: 'error',
           error: {
             code: 'HTTP_ERROR',
             message: `chat request failed: ${res.status}`,
             recoverable: false,
-            failed_action: request.mode && request.mode !== 'legacy' ? request.mode : 'new',
+            failed_action: failedAction,
           },
         })
         return
@@ -113,20 +153,23 @@ export function openChat(
           const raw = parseSSEFrameRaw(frame)
           if (!raw) continue
           const evt = parseAnalysisSSEEvent({ event: raw.eventName as any, data: raw.data })
-          if (evt) onEvent(evt)
+          if (evt) emit(evt)
         }
       }
     } catch (err) {
       if ((err as any)?.name === 'AbortError') return
-      onEvent({
+      emit({
         type: 'error',
         error: {
           code: 'NETWORK_ERROR',
           message: String(err).slice(0, 300),
           recoverable: false,
-          failed_action: request.mode && request.mode !== 'legacy' ? request.mode : 'new',
+          failed_action: failedAction,
         },
       })
+    } finally {
+      // 每次出口都回调：调用方据此判断「流结束了但没有终态」→ 解锁 + 诚实报错。
+      onClose?.({ sawTerminal, aborted: controller.signal.aborted })
     }
   })()
 

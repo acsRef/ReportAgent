@@ -4,6 +4,10 @@
 - 偏好句：不进 requirement 图（_Boom graph 不炸即证明短路）、复用 chitchat 终态
   （phase idle + report.answer.text）、写入失败仍轻响应（best-effort 不阻塞）；
 - 非偏好句：图正常 invoke（既有行为不破）。
+
+2026-11-03（plan 2026-11-03-supplement-turn-durability）：解析轮后台化后，短路路径
+不再先发 `phase(parsing)`——它本来就没有在解析，收窄为 `phase(idle) → report → done`
+三帧（主链的 parsing 帧由后台任务订阅器在推进时发出）。
 """
 import json
 
@@ -44,12 +48,11 @@ async def test_preference_statement_short_circuits_before_graph(monkeypatch):
     evt_map = [(e["event"], json.loads(e["data"] or "{}")) for e in events]
 
     assert called == [], "偏好句不应 invoke requirement 图"
-    assert [e for e, _ in evt_map] == ["phase", "phase", "report", "done"]
-    assert evt_map[0] == ("phase", {"phase": "parsing"})
-    assert evt_map[1] == ("phase", {"phase": "idle"})
-    assert evt_map[2][0] == "report"
-    assert "已记住" in evt_map[2][1]["answer"]["text"]
-    assert evt_map[3] == ("done", {"final_phase": "idle"})
+    assert [e for e, _ in evt_map] == ["phase", "report", "done"]
+    assert evt_map[0] == ("phase", {"phase": "idle"})
+    assert evt_map[1][0] == "report"
+    assert "已记住" in evt_map[1][1]["answer"]["text"]
+    assert evt_map[2] == ("done", {"final_phase": "idle"})
 
 
 async def test_non_preference_query_still_invokes_graph(monkeypatch):
@@ -79,6 +82,6 @@ async def test_remember_failure_falls_back_to_light_reply(monkeypatch):
     events = [e async for e in resp.body_iterator]
 
     evt_map = [(e["event"], json.loads(e["data"] or "{}")) for e in events]
-    assert evt_map[2][0] == "report"
-    assert "已记住" in evt_map[2][1]["answer"]["text"], "写入失败不得阻塞响应"
-    assert evt_map[3] == ("done", {"final_phase": "idle"})
+    assert evt_map[1][0] == "report"
+    assert "已记住" in evt_map[1][1]["answer"]["text"], "写入失败不得阻塞响应"
+    assert evt_map[2] == ("done", {"final_phase": "idle"})

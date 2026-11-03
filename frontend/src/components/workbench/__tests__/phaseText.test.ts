@@ -6,6 +6,7 @@ import {
   canvasKicker,
   chatModeForPhase,
   composerPlaceholder,
+  settlePhaseFor,
 } from '../phaseText'
 
 describe('composerPlaceholder — exact prototype strings', () => {
@@ -64,6 +65,16 @@ describe('agentCopy', () => {
     expect(agentCopy('adjusting', '增加华南区域对比')).toContain('增加华南区域对比')
   })
   it('idle has no bubble', () => expect(agentCopy('idle')).toBe(''))
+})
+
+describe('settlePhaseFor — 停止等待 / 断连后回到哪个稳定相位', () => {
+  it('没有卡 → idle（不能停在 parsing）', () => expect(settlePhaseFor(null)).toBe('idle'))
+  it('卡还有缺失项 → awaiting_missing', () =>
+    expect(settlePhaseFor({ missing_fields: [{ key: 'metric' }] })).toBe('awaiting_missing'))
+  it('卡已完整 → awaiting_confirm', () =>
+    expect(settlePhaseFor({ missing_fields: [] })).toBe('awaiting_confirm'))
+  it('undefined missing_fields 视为完整', () =>
+    expect(settlePhaseFor({})).toBe('awaiting_confirm'))
 })
 
 describe('EXAMPLES', () => {

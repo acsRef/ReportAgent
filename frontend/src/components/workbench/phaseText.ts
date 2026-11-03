@@ -70,3 +70,15 @@ export function chatModeForPhase(phase: AnalysisPhase): NonNullable<ChatRequest[
   if (phase === 'report_ready') return 'supplement'
   return 'supplement'
 }
+
+/**
+ * 停止等待 / 断连后应回到的稳定相位（2026-11-03）。
+ *
+ * 解析轮（parsing）后台化后，「停止」只断前端渲染、后端继续跑并落库；前端不能
+ * 停在 parsing（busy 会把发送框永久禁掉），也不能凭空宣布成功——按最后一张卡
+ * 的缺失项回到它本来的相位；一张卡都没有就回 idle。
+ */
+export function settlePhaseFor(card: { missing_fields?: unknown[] } | null): AnalysisPhase {
+  if (!card) return 'idle'
+  return (card.missing_fields?.length ?? 0) > 0 ? 'awaiting_missing' : 'awaiting_confirm'
+}

@@ -635,6 +635,200 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
     )
 
 
+async def _maybe_explicit_preference_reply(
+    user_query: str, user_id: int,
+) -> str | None:
+    """P16.5：显式偏好语句（§五）的图前短路回复。
+
+    用户明说「以后都用柱状图」→ 写 active stable_preference（记得住、进报告链），
+    不复用 requirement 图（省一次 LLM + 不产 noise draft）；渲染复用 chitchat 轻响应
+    形态（phase idle + answer.text，前端零改动）。返回 None = 不是偏好语句 / 检测失败
+    → 走主链（记忆不是核心 correctness 依赖，best-effort）。
+    """
+    try:
+        from app.memory.manager import (
+            extract_explicit_preference,
+            remember_explicit_preference,
+        )
+
+        if extract_explicit_preference(user_query) is None:
+            return None
+        try:
+            await remember_explicit_preference(user_id, user_query)
+            return f"好的，已记住偏好：{user_query}"
+        except Exception as exc:  # noqa: BLE001 - 记忆写入失败不拦主链
+            logger.warning("remember_explicit_preference failed: %s", exc)
+            return "好的，已记住。"
+    except Exception as exc:  # noqa: BLE001 - 检测器异常不拦主链
+        logger.warning("explicit preference detection failed: %s", exc)
+        return None
+
+
+def _light_reply_events(reply: str) -> list[dict]:
+    """轻响应三帧（闲聊 / 偏好确认）：phase(idle) + report(answer.text) + done。"""
+    return [
+        {"event": "phase", "data": json.dumps({"phase": "idle"}, ensure_ascii=False)},
+        {
+            "event": "report",
+            "data": json.dumps({"answer": {"text": reply}}, ensure_ascii=False),
+        },
+        {"event": "done", "data": json.dumps({"final_phase": "idle"}, ensure_ascii=False)},
+    ]
+
+
+async def _run_requirement_graph(
+    task: registry.ConfirmedTask,
+    graph,
+    initial: dict,
+    session_id: str,
+    mode: str,
+    mcp_down_flag: bool | None = None,
+) -> None:
+    """后台跑需求解析图：事件序列写入 task → 唤醒订阅者。
+
+    2026-11-03（plan 2026-11-03-supplement-turn-durability）：解析轮从 SSE 响应任务
+    解耦。此前 `graph.ainvoke` 直接在 event_generator 里跑——客户端刷新页面/断网/HMR
+    重载一断连，响应任务被取消 → 图被取消 → `persist_draft` 事务回滚，**新卡既不落库
+    也不送达**，重进会话只能看到旧卡（hand-off P0 现象的真因）。
+
+    相位落库：起手写 `parsing`（刷新后快照能看到「解析中」，前端据此接后台轮询），
+    终态由 `persist_draft` 写 awaiting_*，失败路径在此写 error + failed_action。
+    """
+    final_phase = "error"
+    completed = False
+    events: list[dict] = []
+    try:
+        await _safe_update_phase(session_id, "parsing", None)
+        with mcp_down.scoped(bool(mcp_down_flag)):
+            result = await run_with_timeout(
+                graph.ainvoke(initial, {"configurable": {"thread_id": session_id}}),
+                MAX_TASK_DURATION,
+            )
+        completed = True
+
+        # 安全闸：HIGH → 拒绝（不建卡、不落库；与改造前逐字段一致）。
+        if result.get("security_level") == "HIGH":
+            await _safe_update_phase(session_id, "error", mode)
+            events.append({
+                "event": "error",
+                "data": json.dumps({
+                    "code": "SECURITY_REJECTED",
+                    "message": "请求被安全规则拦截",
+                    "recoverable": False,
+                    "failed_action": mode,
+                }, ensure_ascii=False),
+            })
+            return
+
+        # 闲聊意图：文本回复，不建卡、不进确认流程。
+        if result.get("intent") == "chitchat":
+            casual = result.get("casual_reply") or "你好！有什么可以帮你的？"
+            await _safe_update_phase(session_id, "idle", None)
+            final_phase = "idle"
+            events.extend(_light_reply_events(casual)[:2])  # phase + report
+            return
+
+        card = result.get("requirement_card")
+        error = result.get("error")
+        if card is None:
+            # 图没产出卡（NO_CARD）：明确失败，不退化成「空卡」让用户对着一张假卡确认。
+            await _safe_update_phase(session_id, "error", mode)
+            events.append(_requirement_failure_event(
+                "NO_CARD", "需求解析未生成需求卡，请重试", mode, recoverable=True,
+            ))
+            return
+        if result.get("execution_status") == "FAILED":
+            # 落库失败（PERSIST_FAILED）：卡只在内存里，重进会话就没了——
+            # 不假装成功（宪法 §10/§11 同一条精神），明确报错让用户重试。
+            code = "PERSIST_FAILED"
+            if isinstance(error, dict):
+                code = str(error.get("code") or code)
+            elif error is not None:
+                code = str(getattr(error, "code", None) or code)
+            await _safe_update_phase(session_id, "error", mode)
+            events.append(_requirement_failure_event(
+                code,
+                "需求卡保存失败，请重试",
+                mode,
+                recoverable=True,
+            ))
+            return
+
+        final_phase = (
+            "awaiting_missing" if card.missing_fields else "awaiting_confirm"
+        )
+        events.append({
+            "event": "phase",
+            "data": json.dumps({"phase": final_phase}, ensure_ascii=False),
+        })
+        events.append({
+            "event": "requirement",
+            "data": json.dumps(card.model_dump(mode="json"), ensure_ascii=False),
+        })
+    except asyncio.TimeoutError:
+        # 与执行轮同一总预算：绝不允许「永远停在 parsing」。
+        final_phase = "error"
+        await _safe_update_phase(session_id, "error", mode)
+        events.append(_requirement_failure_event(
+            "TASK_TIMEOUT",
+            f"需求解析超过 {int(MAX_TASK_DURATION)}s 未完成，请稍后重试",
+            mode,
+            recoverable=True,
+        ))
+    except Exception as exc:  # noqa: BLE001 - 兜底必须产生终态事件
+        final_phase = "error"
+        logger.exception("requirement task failed: session=%s", session_id)
+        await _safe_update_phase(session_id, "error", mode)
+        envelope = classify_exception(exc, failed_action=mode)
+        events.append({
+            "event": "error",
+            "data": json.dumps({
+                "code": envelope.code,
+                # P9-5：原始异常不进用户可见文案，只落 trace。
+                "message": user_message(envelope.kind),
+                "recoverable": envelope.recoverable,
+                "failed_action": mode,
+            }, ensure_ascii=False),
+        })
+    finally:
+        events.append({
+            "event": "done",
+            "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
+        })
+        registry.complete(task, events)
+        tracer = get_tracer(initial.get("trace_id", ""))
+        # 图未跑完（超时/异常提前退出）→ trace 终态必须 FAILED，否则 flush 落库的
+        # trace 永远停在 RUNNING（end 才写 status/end_time）；正常由 persist_draft end。
+        if not completed:
+            tracer.end("FAILED")
+        await tracer.flush()
+
+
+def _requirement_failure_event(
+    code: str, message: str, mode: str, *, recoverable: bool,
+) -> dict:
+    """需求解析失败的统一 SSE error 帧（payload 与七事件契约同形）。"""
+    return {
+        "event": "error",
+        "data": json.dumps({
+            "code": code,
+            "message": message,
+            "recoverable": recoverable,
+            "failed_action": mode,
+        }, ensure_ascii=False),
+    }
+
+
+async def _safe_update_phase(
+    session_id: str, phase: str, failed_action: str | None,
+) -> None:
+    """相位落库的兜底包装：DB 抖动不能把「已产生的 error 事件」吞掉。"""
+    try:
+        await session_manager.update_phase(session_id, phase, failed_action=failed_action)
+    except Exception as exc:  # noqa: BLE001 - 落库失败不影响 SSE 终态
+        logger.warning("update_phase(%s) failed: session=%s: %s", phase, session_id, exc)
+
+
 async def _chat_requirement_analysis(
     request: ChatRequest,
     req: Request,
@@ -642,13 +836,23 @@ async def _chat_requirement_analysis(
     *,
     session_id: str,
 ):
-    """SSE stream for requirement-analysis mode."""
+    """SSE stream for requirement-analysis mode (mode=new|supplement).
+
+    2026-11-03：解析轮后台化（复用 ExecutionRegistry 第三种 kind="requirement"）。
+    客户端断连只取消订阅，任务继续跑完并落库；迟到订阅者在 TTL 内可重放结果。
+    事件序列与改造前逐事件同形：phase(parsing) → phase(awaiting_*|idle) →
+    requirement|report → done；失败 → error → done。
+    """
+    # P16.5 图前短路：纯正则 + 一次写入，不后台化（不需要图、不产 draft）。
+    reply = await _maybe_explicit_preference_reply(request.user_query, user["id"])
+    if reply is not None:
+        return EventSourceResponse(_iter_events(_light_reply_events(reply)))
+
     trace_id = str(uuid.uuid4())
     # A-3：trace 起点抢占创建带身份的 tracer，避免 traced_node 先建出无主 tracer。
     get_tracer(trace_id, session_id=session_id, user_id=user["id"],
                user_query=request.user_query)
     graph = build_requirement_analysis_graph()
-    config = {"configurable": {"thread_id": session_id}}
     # P15 e2e MCP-down seam：requirement 的 schema discovery（data_graph）也 honor。
     # req 在真实 HTTP 路径由 FastAPI 注入恒非 None；直调单测（api 契约）传 None，
     # seam 必须静默失活（补于 Final Hardening ⑮ 全量回归抓到的 P15 遗留回归）。
@@ -656,134 +860,38 @@ async def _chat_requirement_analysis(
         mcp_down.parse_header(req.headers.get("X-E2E-McpDown"))
         if req is not None else None
     )
+    initial: dict = {
+        "user_query": request.user_query,
+        "user_id": user["id"],
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "mode": request.mode,  # P15 e2e T2: supplement 轮需求继承上一轮确认卡
+        "schema_context": None,
+        "requirement_card": None,
+        "draft_id": None,
+        "security_score": 0,
+        "security_level": "LOW",
+        "security_warning": "",
+        "error": None,
+        "execution_status": "RUNNING",
+    }
+    try:
+        task = registry.start_confirmed_task(
+            session_id, user["id"], "requirement",
+            lambda t: _run_requirement_graph(
+                t, graph, initial, session_id, request.mode, _mcp_down,
+            ),
+        )
+    except registry.BusyError as exc:
+        # 同 session 已有未完成的后台任务（解析中 / 报告生成中）：与 confirm 一致 409。
+        raise HTTPException(status_code=409, detail=f"SESSION_BUSY: {exc}") from exc
+    return EventSourceResponse(_subscribe_events(task, "parsing"))
 
-    async def event_generator() -> AsyncGenerator[dict, None]:
-        try:
-            initial: dict = {
-                "user_query": request.user_query,
-                "user_id": user["id"],
-                "session_id": session_id,
-                "trace_id": trace_id,
-                "mode": request.mode,  # P15 e2e T2: supplement 轮需求继承上一轮确认卡
-                "schema_context": None,
-                "requirement_card": None,
-                "draft_id": None,
-                "security_score": 0,
-                "security_level": "LOW",
-                "security_warning": "",
-                "error": None,
-                "execution_status": "RUNNING",
-            }
-            yield {
-                "event": "phase",
-                "data": json.dumps({"phase": "parsing"}, ensure_ascii=False),
-            }
-            # P16.5：Explicit preference statement（§五）——图前短路。用户明说
-            # 「以后都用柱状图」→ 写 active stable_preference（记得住、进报告链），
-            # 不复用 requirement 图（省一次 LLM + 不产 noise draft）；渲染复用
-            # chitchat 轻响应形态（phase idle + answer.text，前端零改动）。
-            # best-effort：检测/写入失败一律走主链（记忆不是核心 correctness 依赖）。
-            try:
-                from app.memory.manager import (
-                    extract_explicit_preference,
-                    remember_explicit_preference,
-                )
 
-                if extract_explicit_preference(request.user_query) is not None:
-                    try:
-                        await remember_explicit_preference(user["id"], request.user_query)
-                        reply = f"好的，已记住偏好：{request.user_query}"
-                    except Exception as exc:
-                        logger.warning("remember_explicit_preference failed: %s", exc)
-                        reply = "好的，已记住。"
-                    phase = "idle"  # P16.5：先复位变量再发——done.final_phase 读它（P11 F4 同坑）
-                    yield {
-                        "event": "phase",
-                        "data": json.dumps({"phase": "idle"}, ensure_ascii=False),
-                    }
-                    yield {
-                        "event": "report",
-                        "data": json.dumps(
-                            {"answer": {"text": reply}}, ensure_ascii=False,
-                        ),
-                    }
-                    return
-            except Exception as exc:
-                logger.warning("explicit preference detection failed: %s", exc)
-            with mcp_down.scoped(_mcp_down):
-                result = await graph.ainvoke(initial, config)
-
-            if result.get("security_level") == "HIGH":
-                yield {
-                    "event": "error",
-                    "data": json.dumps({
-                        "code": "SECURITY_REJECTED",
-                        "message": "请求被安全规则拦截",
-                        "recoverable": False,
-                        "failed_action": request.mode,
-                    }, ensure_ascii=False),
-                }
-                return
-
-            # 闲聊意图：直接返回文本回复，不建需求卡、不进确认流程。
-            if result.get("intent") == "chitchat":
-                casual = result.get("casual_reply") or "你好！有什么可以帮你的？"
-                # P11 F4：先复位 phase 再发闲聊回复——此前 final_phase 落
-                # 'error'（phase 变量未赋值），且 casual 文本无从渲染。
-                phase = "idle"
-                yield {
-                    "event": "phase",
-                    "data": json.dumps({"phase": "idle"}, ensure_ascii=False),
-                }
-                yield {
-                    "event": "report",
-                    "data": json.dumps({"answer": {"text": casual}}, ensure_ascii=False),
-                }
-                return
-
-            card = result.get("requirement_card")
-            phase = (
-                "awaiting_missing"
-                if (card and card.missing_fields)
-                else "awaiting_confirm"
-            )
-            yield {
-                "event": "phase",
-                "data": json.dumps({"phase": phase}, ensure_ascii=False),
-            }
-            if card is not None:
-                yield {
-                    "event": "requirement",
-                    "data": json.dumps(
-                        card.model_dump(mode="json"),
-                        ensure_ascii=False,
-                    ),
-                }
-        except asyncio.CancelledError:
-            # 断连：ClientDisconnected 取消响应任务。需求分析不产生落库副作用，
-            # 无需清理，直接透传完成取消（不产生半截 done 事件）。
-            raise
-        except Exception as exc:
-            # P9：泛化异常走 classify_exception（与 confirmed 路径同源）。
-            envelope = classify_exception(exc, failed_action=request.mode)
-            yield {
-                "event": "error",
-                "data": json.dumps({
-                    "code": envelope.code,
-                    "message": user_message(envelope.kind),
-                    "recoverable": envelope.recoverable,
-                    "failed_action": request.mode,
-                }, ensure_ascii=False),
-            }
-        finally:
-            tracer = get_tracer(trace_id)
-            await tracer.flush()
-            yield {
-                "event": "done",
-                "data": json.dumps({"final_phase": phase if "phase" in dir() else "error"}, ensure_ascii=False),
-            }
-
-    return EventSourceResponse(event_generator())
+async def _iter_events(events: list[dict]) -> AsyncGenerator[dict, None]:
+    """把已算好的事件列表转成 SSE 生成器（轻响应 / 重放用）。"""
+    for evt in events:
+        yield evt
 
 
 async def _chat_confirmed_execution(

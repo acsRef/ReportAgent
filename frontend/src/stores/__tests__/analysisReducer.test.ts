@@ -4,6 +4,7 @@ import {
   canRetryFailedAction,
   initialAnalysisState,
   isBusyPhase,
+  isSettledPhase,
   type AnalysisState,
 } from '../analysisReducer'
 import type {
@@ -116,6 +117,17 @@ describe('analysisReducer', () => {
     expect(state.requirement?.summary).toBe('updated')
   })
 
+  // 2026-11-03 钉子：版本号只在「同一张卡」内比较——补充轮/新建轮的新卡
+  // id 不同，即使版本号回落到 1 也必须替换（否则界面会永远停在旧卡上）。
+  it('requirement/received replaces a different card even with a lower version', () => {
+    let state: AnalysisState = { ...initialAnalysisState }
+    state = analysisReducer(state, { type: 'requirement/received', requirement: makeRequirement(5) })
+    const fresh = { ...makeRequirement(1), id: 'draft-2', summary: '华东区域销售分析' }
+    state = analysisReducer(state, { type: 'requirement/received', requirement: fresh })
+    expect(state.requirement?.id).toBe('draft-2')
+    expect(state.requirement?.summary).toBe('华东区域销售分析')
+  })
+
   it('report/selected ignores unknown version', () => {
     let state: AnalysisState = { ...initialAnalysisState }
     state = analysisReducer(state, { type: 'report/received', report: makeReport(1) })
@@ -179,6 +191,22 @@ describe('isBusyPhase', () => {
   const idle: AnalysisPhase[] = ['idle', 'awaiting_missing', 'awaiting_confirm', 'report_ready', 'error']
   for (const p of busy) it(`returns true for ${p}`, () => expect(isBusyPhase(p)).toBe(true))
   for (const p of idle) it(`returns false for ${p}`, () => expect(isBusyPhase(p)).toBe(false))
+})
+
+// 2026-11-03：后台轮询的完成判定（此前只认 report_ready/error，解析轮后台化后
+// 「停止等待 → 自动刷回新卡」失效）。isSettledPhase 是这条判定的单一来源。
+describe('isSettledPhase', () => {
+  it('parsing 是忙（解析轮后台跑着，不能当作完成）', () =>
+    expect(isSettledPhase('parsing')).toBe(false))
+  it('generating / adjusting 是忙', () => {
+    expect(isSettledPhase('generating')).toBe(false)
+    expect(isSettledPhase('adjusting')).toBe(false)
+  })
+  it('awaiting_* / report_ready / error / idle 都是稳定态', () => {
+    for (const p of ['idle', 'awaiting_missing', 'awaiting_confirm', 'report_ready', 'error']) {
+      expect(isSettledPhase(p)).toBe(true)
+    }
+  })
 })
 
 describe('canRetryFailedAction', () => {

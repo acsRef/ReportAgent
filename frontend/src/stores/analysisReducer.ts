@@ -70,6 +70,18 @@ export function isBusyPhase(phase: AnalysisPhase): boolean {
 }
 
 /**
+ * 稳定相位（后台任务已无在跑的可能性）。
+ *
+ * 2026-11-03：后台轮询的完成判定从「phase ∈ {report_ready,error}」改成
+ * 「!isBusyPhase(phase)」——解析轮（parsing）同样会后台跑完，只认报告相位会让
+ * 「停止 / 断连后跟随解析结果」失效（hand-off P0）。单一来源放在这里，
+ * 页面与测试都引用它。
+ */
+export function isSettledPhase(phase: AnalysisPhase | string): boolean {
+  return !BUSY_PHASES.has(phase as AnalysisPhase)
+}
+
+/**
  * True when the current error is recoverable AND lives in a phase the
  * retry endpoint knows how to replay.
  *

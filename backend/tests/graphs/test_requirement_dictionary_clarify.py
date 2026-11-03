@@ -125,11 +125,19 @@ def test_no_dictionary_context_is_noop(monkeypatch) -> None:
 
 def test_prompt_forbids_fabricating_missing_business_entity_tables() -> None:
     """B3：业务实体（供应商/仓库…）在 schema 里没有时，必须转成 requested_object，
-    严禁臆造 dim_supplier 这类表（否则下游必然写出失败 SQL）。"""
+    严禁臆造 dim_supplier 这类表（否则下游必然写出失败 SQL）。
+
+    2026-11-03：prompt 瘦身后该规则改为「点名对象缺失」附录**按需注入**（提交 f20bd8b），
+    段标题与占位符随之改名。本用例改钉现行文案，并补一条「未命中线索不注入」的反向断言
+    ——否则附录退回无条件注入、瘦身会静默失效。
+    """
     from app.agent.prompts import build_requirement_parse_prompt
 
     prompt = build_requirement_parse_prompt("2024年各供应商的采购金额", "tbl", "")
 
-    assert "业务实体缺失" in prompt
+    assert "点名对象缺失" in prompt
     assert "严禁" in prompt and "自造表" in prompt
-    assert "requested_object:<实体名>" in prompt
+    assert "requested_object:" in prompt
+
+    plain = build_requirement_parse_prompt("2024年各区域销售额", "tbl", "")
+    assert "点名对象缺失" not in plain

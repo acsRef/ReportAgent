@@ -18,6 +18,7 @@ import {
   canvasKicker,
   chatModeForPhase,
   composerPlaceholder,
+  settlePhaseFor,
 } from '../components/workbench/phaseText'
 import { fetchSessions, fetchSession, patchRequirement, SESSIONS_PAGE_SIZE } from '../api/sessionsClient'
 import type { SessionSummary as ApiSessionSummary } from '../api/sessionsClient'
@@ -33,7 +34,7 @@ import {
   refreshVersionsAndSelectLatest,
 } from '../stores/sessionEvents'
 import { useAnalysisStore } from '../stores/analysisStore'
-import { canRetryFailedAction, isBusyPhase } from '../stores/analysisReducer'
+import { canRetryFailedAction, isBusyPhase, isSettledPhase } from '../stores/analysisReducer'
 import { useAuthStore } from '../stores/authStore'
 import type { TimelineEntry } from '../types/report'
 import type { RequirementCard as RC } from '../types/requirement'
@@ -48,9 +49,12 @@ const DONE_TIMEOUT_MS = 60_000
 const EXEC_POLL_INTERVAL_MS = 5000
 
 /**
- * 后台任务轮询：停止显示后每 5s 查一次 session snapshot，phase 离开
- * generating/adjusting（report_ready 或 error）时回调 onDone。
+ * 后台任务轮询：停止显示 / 流中断后每 5s 查一次 session snapshot，phase 离开
+ * 「忙」（parsing / generating / adjusting）时回调 onDone。
  * 「后台跑完」语义：停止只断前端渲染，任务继续跑完落库，轮询负责通知。
+ *
+ * 2026-11-03：完成判定从「report_ready|error」改成 `isSettledPhase`——解析轮
+ * （parsing）现在也后台化，只认报告相位会让「停止等待后把新卡刷回来」失效。
  */
 export function useExecutionPoll(
   sessionId: string | null,
@@ -66,7 +70,7 @@ export function useExecutionPoll(
       try {
         const snap = await fetchSession(sessionId)
         if (cancelled || !snap) return
-        if (snap.session.phase === 'report_ready' || snap.session.phase === 'error') {
+        if (isSettledPhase(snap.session.phase)) {
           onDone()
           return
         }
@@ -159,16 +163,19 @@ export default function WorkbenchPage() {
 
   // 历史 = 除最后一轮以外的所有轮次；问题与版本按下标配对（v1↔第 1 轮）。
   // 注：依赖 lastQuestion，故必须声明在 lastQuestion 之后（见下方 useMemo）。
-  // 停止显示后轮询后台任务完成：phase 回 report_ready/error → 刷新版本 + 通知。
+  // 停止显示后轮询后台任务完成：phase 不再 busy → 拉快照（新需求卡 / 新版本 / 真实
+  // phase 一并回填）+ 通知。2026-11-03：解析轮也走这里——「停止等待」或流中断之后，
+  // 后台解析跑完落库，轮询把新卡刷回来（此前只刷版本，卡片永远停在旧内容）。
   useExecutionPoll(
     activeSessionId,
     execPolling,
     useCallback(() => {
       if (!activeSessionId) return
-      void refreshVersionsAndSelectLatest(activeSessionId)
-      toast.success('报告已在后台生成，可查看')
+      void loadSessionSnapshot(activeSessionId, toast).then(() => {
+        toast.success('后台任务已完成，内容已更新')
+      })
       setExecPolling(false)
-    }, [activeSessionId, dispatch, toast]),
+    }, [activeSessionId, toast]),
   )
 
   // SessionSummary ← API 响应的字段映射；两处共用（useEffect + loadMore）。
@@ -257,6 +264,26 @@ export default function WorkbenchPage() {
     dispatch({ type: 'phase/received', phase: 'awaiting_confirm' })
     setExecPolling(true)
     toast.info('已停止显示，报告仍在后台生成，完成后将通知你')
+  }
+
+  /**
+   * 解析中停止等待（2026-11-03）。
+   *
+   * parsing 此前没有任何出口：发送框被 busy 锁死、没有停止按钮，用户只能刷新页面——
+   * 而刷新会把当时还在 SSE 响应任务里的解析一起取消，结果既没落库也没渲染
+   * （hand-off P0）。现在解析轮后台化，停止只断渲染：相位回到最后一张卡的稳定态，
+   * 轮询在后台跑完后把新卡刷回来。
+   */
+  function handleStopParsing() {
+    abortStream()
+    sendTimeoutRef.current.clear()
+    setSending(false)
+    dispatch({
+      type: 'phase/received',
+      phase: settlePhaseFor(useAnalysisStore.getState().requirement),
+    })
+    setExecPolling(true)
+    toast.info('已停止等待，需求解析在后台继续，出结果后会自动更新')
   }
 
   useEffect(() => {
@@ -349,6 +376,27 @@ export default function WorkbenchPage() {
           setCasualReply,
           onTrace: handleProgress,
         })
+      },
+      undefined,
+      // 2026-11-03：流「静默结束」（无 requirement/report/error/done）时前端自己
+      // 兜底——解锁发送框 + 诚实报错 + 转后台跟随。此前这种结束没有任何回调，
+      // 发送框永久禁用、phase 停在 parsing，用户只能刷新（那会把解析一起取消）。
+      ({ sawTerminal, aborted }) => {
+        if (sawTerminal || aborted) return
+        sendTimeoutRef.current.clear()
+        setSending(false)
+        dispatch({
+          type: 'analysis/failed',
+          error: {
+            code: 'STREAM_INTERRUPTED',
+            message: '连接中断，未收到本轮解析结果；解析可能在后台继续，稍后会自动更新',
+            recoverable: true,
+            failed_action: mode === 'legacy' ? 'new' : mode,
+            kind: null,
+            sql: null,
+          },
+        })
+        setExecPolling(true)
       },
     )
     armStream(controller)
@@ -580,7 +628,7 @@ export default function WorkbenchPage() {
           {phase !== 'idle' && !casualReply && agentCopy(phase) && (
             <AgentBubble markdown={agentCopy(phase)} />
           )}
-          {phase === 'parsing' && <ParsingCard />}
+          {phase === 'parsing' && <ParsingCard onStop={handleStopParsing} />}
           {phase === 'error' && canRetryFailedAction({ phase, error }) && (
             <ErrorCard
               message={error?.message}
