@@ -85,6 +85,27 @@ async def list_sessions(user_id: int, limit: int = 30, offset: int = 0) -> list[
                LIMIT $2 OFFSET $3""",
             user_id, limit, offset,
         )
+        # 2026-11-03：report_versions 此前恒为 []（注释写着「lazily populated」，
+        # 但从来没有代码去填），前端拿到的会话摘要里版本列表永远是空的。
+        # 这里用**一次**批量查询补齐，避免 N+1。
+        versions_by_session: dict[str, list[dict]] = {}
+        session_ids = [r["session_id"] for r in rows]
+        if session_ids:
+            version_rows = await conn.fetch(
+                """SELECT session_id, version, title, status, favorite, created_at
+                     FROM agent.report_version
+                    WHERE user_id = $1 AND session_id = ANY($2::text[])
+                    ORDER BY version ASC""",
+                user_id, session_ids,
+            )
+            for v in version_rows:
+                versions_by_session.setdefault(v["session_id"], []).append({
+                    "version": v["version"],
+                    "title": v["title"] or "",
+                    "status": v["status"],
+                    "favorite": bool(v["favorite"]),
+                    "created_at": v["created_at"].isoformat() if v["created_at"] else "",
+                })
         return [
             {
                 "session_id": r["session_id"],
@@ -94,7 +115,7 @@ async def list_sessions(user_id: int, limit: int = 30, offset: int = 0) -> list[
                 "updated_at": r["updated_at"].isoformat() if r["updated_at"] else "",
                 "first_message": r["first_message"] or "",
                 "last_message": r["last_message"] or "",
-                "report_versions": [],  # populated lazily by /sessions/{sid} snapshot
+                "report_versions": versions_by_session.get(r["session_id"], []),
             }
             for r in rows
         ]

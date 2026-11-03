@@ -578,6 +578,9 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
         for c in columns:
             name = c.get("name") if isinstance(c, dict) else str(c)
             cols.append({"key": name, "title": name})
+        # 2026-11-03：去掉「全表恒定」的列（scope 过滤后的 地区=华东 这类）。
+        # 这类列不携带信息，却占掉表格一列、还会把图表维度带偏。
+        cols = _drop_constant_columns(cols, rows)
         table = {"columns": cols, "rows": rows}
         insight_text = rs.get("insight") or None
         chart_cfg = rs.get("chart_config") or None
@@ -635,6 +638,43 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
     }
 
 
+_MAX_TITLE_CHARS = 24
+
+
+def _drop_constant_columns(columns: list[dict], rows: list[dict]) -> list[dict]:
+    """隐藏「所有行都相同」的列（2026-11-03）。
+
+    实测：「分析2024年华东销售趋势」的表格里带着一列 `地区=华东`——因为 scope
+    已经把它过滤成常量。它不提供信息，却占掉一列宽度，也会让图表误以为有分类维度。
+    仅在还有其它列可显示时才隐藏（单列结果不能删空）。
+    """
+    if len(rows) <= 1 or len(columns) <= 1:
+        return columns
+    kept = [
+        col for col in columns
+        if len({str(row.get(col["key"])) for row in rows}) > 1
+    ]
+    return kept or columns
+
+
+def _report_title(state: ConfirmedExecutionState) -> str:
+    """报告标题取自需求卡摘要（2026-11-03）。
+
+    此前所有版本都叫「报告」/「报告（调整）」，左栏十条会话十个「报告」，
+    用户翻历史完全分不清是哪次分析。标题是给**人看的索引**，应该来自需求本身。
+    """
+    card = state.get("requirement_card")
+    summary = ""
+    if card is not None:
+        summary = getattr(card, "summary", None) or (
+            card.get("summary") if isinstance(card, dict) else None
+        ) or ""
+    summary = " ".join(str(summary).split())
+    if not summary:
+        return "报告"
+    return summary[:_MAX_TITLE_CHARS] + ("…" if len(summary) > _MAX_TITLE_CHARS else "")
+
+
 @traced_node("persist_report")
 async def _persist_report(state: ConfirmedExecutionState) -> dict:
     """Append a row to `agent.report_version`.
@@ -674,7 +714,7 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
             session_id=state["session_id"],
             user_id=state["user_id"],
             requirement_draft_id=draft_id,
-            title="报告",
+            title=_report_title(state),
             error_detail=error_detail,
             query_snapshot=query_snapshot,
             trace_id=state.get("trace_id"),
@@ -684,7 +724,7 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
             session_id=state["session_id"],
             user_id=state["user_id"],
             requirement_draft_id=draft_id,
-            title="报告",
+            title=_report_title(state),
             query_snapshot=query_snapshot,
             trace_id=state.get("trace_id"),
         )
@@ -693,7 +733,7 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
             session_id=state["session_id"],
             user_id=state["user_id"],
             requirement_draft_id=draft_id,
-            title="报告",
+            title=_report_title(state),
             report_payload=state["report_payload"],
             query_snapshot=query_snapshot,
             trace_id=state.get("trace_id"),
@@ -705,7 +745,7 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
             base_report_version=base_version,
             requirement_draft_id=draft_id,
             adjustment_text=state.get("adjustment_text") or "",
-            title="报告（调整）",
+            title=_report_title(state),
             report_payload=state["report_payload"],
             query_snapshot=query_snapshot,
             trace_id=state.get("trace_id"),
