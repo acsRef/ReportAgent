@@ -26,6 +26,20 @@ const STATUS_PILL: Record<RC['status'], string> = {
 }
 
 /**
+ * 粒度中文标签（2026-11-03，plan 2026-11-03-anomaly-granularity）。
+ *
+ * 之前粒度只活在卡体字段里、界面上完全没有——用户看不到「异常类默认按周」，
+ * 也不知道结果为什么是 53 行而不是 12 行。按周/按日是这个产品最常被追问的口径。
+ */
+const GRANULARITY_LABELS: Record<NonNullable<RC['granularity']>, string> = {
+  day: '按日',
+  week: '按周',
+  month: '按月',
+  quarter: '按季度',
+  year: '按年',
+}
+
+/**
  * Requirement card per docs/intelligent-analysis-workbench.html:
  * left accent bar by status, kicker + status pill head, serif summary,
  * chips grid, missing-zone with option pills + assumption bar, footer
@@ -116,6 +130,11 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
             <div className="wb-req-label">时间与范围</div>
             <div className="wb-chips">
               <span className="wb-chip">{card.time_range ?? '时间待补充'}</span>
+              {card.granularity && (
+                <span className="wb-chip granularity" title="时间聚合粒度">
+                  {GRANULARITY_LABELS[card.granularity] ?? card.granularity}
+                </span>
+              )}
               {card.scope.length > 0
                 ? card.scope.map((item) => <span key={item} className="wb-chip">{item}</span>)
                 // 后端契约：scope 为空 = 未限定（默认 ALL），不是缺失。只有真的出现在

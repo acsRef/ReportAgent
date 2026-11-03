@@ -75,11 +75,33 @@ pytest backend/tests/api -q
 `.e2elogs/probe_supplement_hang.py`（连续 4 轮补充+确认，逐轮落库）。
 
 ### P1 分析质量继续提升
-- **异常类必须日/周粒度**（月粒度 12 个点检不出异常；现在会返回 1 行年级数据）。
-  注意这条已把 `backend/tests/e2e/test_multiturn_followup.py` 钉红：`_deterministic_intent` 命中「异常」
-  后只补 `analysis_methods/dimensions`，**不补粒度澄清**，卡片以 `granularity=None / status=complete`
-  返回（「2024年华东销售趋势和异常」API 直调同样复现）。修这条时一并修那个 e2e 的首轮断言。
-- 明细类列太薄（`把订单列出来看看` 只返回「订单金额」一列）；
+
+#### P1-① ✅ 已关闭：异常类必须日/周粒度
+**改前实测**（`.e2elogs/probe_anomaly.py`，7 种问法）：纯异常类问法普遍落在 `GROUP BY year/month`；
+「2024年哪几天销售额异常」用户点名的「哪几天」被模型丢掉 → `granularity=None` → `GROUP BY year` → **1 行**；
+「2024年各品类销售额有没有异常」把品类和时间一起分组 → 2σ 检测拿品类总量跟周销量比大小，叙述答非所问。
+
+**已修**（plan `2026-11-03-anomaly-granularity.md`）：
+- 粒度确定性判定：用户原话（哪几天/按周/各月/按季度…）优先，其次异常类默认（≤45 天→日，否则→周），
+  模型自己的猜测不再压过默认值；
+- 异常类形态分流：点名「各/每个/哪个+维度」→ 横截面（只按该维度分组），否则 → 时间序列
+  （丢掉 scope 造成的常量维度，方法收窄成 `anomaly_detection`）；
+- 报告层两处：确定性结论不再把「周」当度量求和（「周合计 1,484.00」），数字锚定补上度量列的
+  合计/均值且年份不参与（此前派生真值被误判成编造，长序列 findings 几乎全灭）；
+- 前端：需求卡补粒度 chip（按日/按周/按月…）、明细表展开上限 50 条 + 页脚说明。
+
+**再验证用**：`python .e2elogs/probe_anomaly.py`（判据是 SQL 的 GROUP BY 与行数，不是卡片字段）、
+`node .e2elogs/probe_anomaly_ui.mjs`（卡片 chip + 表格上限）。
+
+**残留**（转 P2）：按日报告的 findings 偏少（叙述引用的「第 N 周合计」在日帧里不是单元格 →
+被锚定丢掉，规则本身正确；要补得先定义「合法的区间聚合」来源）；`_default_intent_clarification`
+不提供「异常波动」选项（只在原话命中「异常/波动/异动」时走确定性闸）。
+
+#### 其余 P1
+- **明细类列太薄 + 聚合没被拦住**：明细模式现在有确定性契约（`sql_graph._validate` 之后，
+  出现 SUM/COUNT/GROUP BY 即判 validation 失败 → repair 重生成），「明细返回 1 行汇总」不再静默成功；
+  但「`把订单列出来看看` 只返回 订单金额 一列」仍在——明细该回日期/门店/品类/数量等原始列。
+  验证：`REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_multiturn_followup.py -q` 第 4 轮。
 - 对比类自动带出「和谁比」（环比/同比）。
 
 ### P2 遗留

@@ -72,4 +72,19 @@ describe('TableBlock — flat evidence table', () => {
     expect(month.className).not.toContain('num')
     expect(growth.className).not.toContain('num') // "0%" is not numeric
   })
+
+  // 2026-11-03：异常类按日聚合会返回 366 行，一次全铺开既卡又没法读。
+  it('长结果展开只铺前 50 条，并在页脚说明总数', () => {
+    const { container } = render(<TableBlock block={makeBlock(366)} />)
+    fireEvent.click(screen.getByText('展开更多明细 ↓'))
+    expect(visibleRows(container)).toHaveLength(50)
+    expect(screen.getByText(/显示 50 \/ 366 条（长结果仅展开前 50 条/)).toBeTruthy()
+  })
+
+  it('短结果（≤50 行）仍然一次展开全部', () => {
+    const { container } = render(<TableBlock block={makeBlock(12)} />)
+    fireEvent.click(screen.getByText('展开更多明细 ↓'))
+    expect(visibleRows(container)).toHaveLength(12)
+    expect(screen.getByText('显示 12 / 12 条')).toBeTruthy()
+  })
 })

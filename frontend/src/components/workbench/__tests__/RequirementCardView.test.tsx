@@ -204,3 +204,54 @@ describe('RequirementCardView — prototype structure', () => {
     expect(screen.getByText(/需求已确认并锁定/)).toBeTruthy()
   })
 })
+
+// 2026-11-03（plan 2026-11-03-anomaly-granularity）：粒度此前只活在卡体字段里，
+// 界面上看不到——用户不知道「异常类默认按周」，也不知道为什么结果是 53 行。
+describe('RequirementCardView — 时间粒度 chip', () => {
+  it('按周：出现「按周」chip，且紧跟时间范围', () => {
+    const { container } = renderCard({
+      card: makeCard({ status: 'complete', time_range: '2024年', granularity: 'week' }),
+    })
+    expect(screen.getByText('按周')).toBeTruthy()
+    const chips = Array.from(container.querySelectorAll('.wb-chips .wb-chip')).map(
+      (el) => el.textContent,
+    )
+    expect(chips.indexOf('按周')).toBe(chips.indexOf('2024年') + 1)
+  })
+
+  it('按日 / 按月 / 按季度 / 按年 都有对应中文标签', () => {
+    for (const [value, label] of [
+      ['day', '按日'],
+      ['month', '按月'],
+      ['quarter', '按季度'],
+      ['year', '按年'],
+    ] as const) {
+      const { unmount } = renderCard({
+        card: makeCard({ status: 'complete', granularity: value }),
+      })
+      expect(screen.getByText(label)).toBeTruthy()
+      unmount()
+    }
+  })
+
+  it('无粒度时不多显示 chip（旧会话卡片兼容）', () => {
+    renderCard({ card: makeCard({ status: 'complete', granularity: null }) })
+    for (const label of ['按日', '按周', '按月', '按季度', '按年']) {
+      expect(screen.queryByText(label)).toBeNull()
+    }
+  })
+
+  it('只读卡片（已确认/执行中）同样显示粒度', () => {
+    render(
+      <ToastProvider>
+        <RequirementCardView
+          card={makeCard({ status: 'complete', granularity: 'week' })}
+          onChange={() => {}}
+          onConfirm={() => {}}
+          readOnly
+        />
+      </ToastProvider>,
+    )
+    expect(screen.getByText('按周')).toBeTruthy()
+  })
+})

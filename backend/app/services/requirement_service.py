@@ -104,6 +104,19 @@ def _apply_intent(card_dict: dict, intent: str) -> None:
         card_dict["analysis_methods"] = _add(methods, "trend_analysis")
         card_dict["dimensions"] = _add(dims, "时间")
         card_dict["detail_level"] = None
+    elif intent == "anomaly":
+        # 2026-11-03（plan 2026-11-03-anomaly-granularity）：异常检测是 2σ 单列检测，
+        # 必须落到日/周粒度才有足够点位；与 parse_requirement 的确定性默认同源
+        # （懒 import 避免 services ↔ agent 的模块级环）。
+        from app.agent.requirement_parser import _default_anomaly_granularity
+
+        card_dict["granularity"] = (
+            card_dict.get("granularity")
+            or _default_anomaly_granularity(card_dict.get("time_range"))
+        )
+        card_dict["analysis_methods"] = _add(methods, "anomaly_detection")
+        card_dict["dimensions"] = _add(dims, "时间")
+        card_dict["detail_level"] = None
     elif intent == "compare_region":
         card_dict["analysis_methods"] = _add(methods, "group_compare")
         card_dict["dimensions"] = _add(dims, "区域")

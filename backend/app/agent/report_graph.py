@@ -202,16 +202,44 @@ def _narrative_intent(card) -> str:
     return "overview"
 
 
-def _collect_data_numbers(rows: list[dict]) -> list[float]:
+def _collect_data_numbers(rows: list[dict], *, sample: int = 200) -> list[float]:
+    """收集「结果数据里真实存在的数」，供叙述层做数字锚定。
+
+    两类来源：
+    1. **单元格值**（只取前 sample 行，界住内存）；
+    2. **度量列的合计 / 均值**（按全量行算）——2026-11-03：此前只收单元格值，
+       于是「全年合计 2.63 亿」这种**派生但真实**的结论一律被判成编造、headline
+       被打回确定性兜底，长序列（日/周）报告的叙述几乎全被丢掉。
+    """
+    from decimal import Decimal
+
     from app.utils.numbers import is_numeric_value, to_decimal
+    from app.tools.report_tools import measure_keys
 
     values: list[float] = []
-    for row in rows:
+    if not rows:
+        return values
+
+    for row in rows[:sample]:
         for value in row.values():
             if is_numeric_value(value):
                 dec = to_decimal(value)
                 if dec is not None:
                     values.append(float(dec))
+
+    for key in measure_keys(rows[0]):
+        total = Decimal(0)
+        count = 0
+        for row in rows:
+            dec = to_decimal(row.get(key))
+            if dec is None:
+                continue
+            total += dec
+            count += 1
+        if not count:
+            continue
+        values.append(float(total))
+        values.append(float(total) / count)
     return values
 
 
@@ -220,17 +248,26 @@ def _numbers_valid(text: str, data_values: list[float]) -> bool:
 
     2026-11-03：模型会顺手写「销售额 9040 万」这种看似合理的数字。宁可少说，
     也不能让它编——找不到来源的那条证据直接丢掉。
+
+    同年修订：**年份不算数据**。此前「2024 年销售额合计 …」里的 2024 也要在结果里
+    找到，而按月/按周聚合的帧里根本没这一格 → 整条 headline 被误杀、退回确定性兜底
+    （长序列报告的 findings 几乎全灭）。日历标签不该进锚定。
     """
     if not text:
         return True
     for match in _NUM_RE.finditer(text):
-        raw, unit = match.group(1).replace(",", ""), match.group(2)
+        # group(2) 是可选单位组——没命中时是 None（不是空串），必须归一化，
+        # 否则年份豁免（unit in ("", "年")）永远不生效。
+        raw = match.group(1).replace(",", "")
+        unit = match.group(2) or ""
         try:
             value = float(raw)
         except ValueError:
             continue
         if unit == "%":
             continue
+        if unit in ("", "年") and len(raw) == 4 and 1900 <= value <= 2100:
+            continue  # 年份（2024 年 / 2024）：日历标签，不是数据断言
         if unit == "万":
             value *= 1e4
         elif unit == "亿":
@@ -243,18 +280,31 @@ def _numbers_valid(text: str, data_values: list[float]) -> bool:
 
 
 def _fallback_headline(qr) -> str:
-    """叙述不可用时的确定性结论：最高/最低 + 合计。"""
+    """叙述不可用时的确定性结论：最高/最低 + 合计。
+
+    2026-11-03：度量列必须排除时间类维度。此前取「第一个数值列」，按周聚合时
+    那一列是 `周`（int 1..53），结论写成「周合计 1,484.00」——把周序号求了和。
+    """
     from app.utils.numbers import is_numeric_value, to_decimal
+    from app.tools.report_tools import is_time_like, measure_keys
 
     rows = list(qr.rows or [])
     if not rows:
         return ""
     first = rows[0]
-    label_key = next((k for k, v in first.items() if not is_numeric_value(v)), None)
-    value_key = next((k for k, v in first.items() if is_numeric_value(v)), None)
-    if not value_key:
+    # 度量列：排除时间类（周/月份/年份…）。
+    measure = measure_keys(first)
+    if not measure:
         return f"共 {len(rows)} 行记录"
-    pairs = [(str(r.get(label_key, "")), to_decimal(r.get(value_key))) for r in rows]
+    value_key = measure[0]
+    # 标签列：优先真文本列；全是数值时退回时间维度（「第 7 周最高」比没有标签好）。
+    label_key = next((k for k, v in first.items() if not is_numeric_value(v)), None)
+    if label_key is None:
+        label_key = next(
+            (k for k in first if k != value_key and is_time_like(k)), None,
+        )
+    pairs = [(str(r.get(label_key, "")), to_decimal(r.get(value_key))) for r in rows] \
+        if label_key else [("", to_decimal(r.get(value_key))) for r in rows]
     pairs = [(k, v) for k, v in pairs if v is not None]
     if not pairs:
         return f"共 {len(rows)} 行记录"
@@ -262,8 +312,32 @@ def _fallback_headline(qr) -> str:
     top_label, top_value = pairs[0]
     total = sum(v for _, v in pairs)
     if label_key:
-        return f"{value_key}合计 {total:,.2f}，其中 {top_label} 最高（{top_value:,.2f}），共 {len(rows)} 组"
+        shown = _format_period_label(label_key, top_label) if is_time_like(label_key) else top_label
+        return (
+            f"{value_key}合计 {total:,.2f}，其中 {shown} 最高"
+            f"（{top_value:,.2f}），共 {len(rows)} 组"
+        )
     return f"{value_key}合计 {total:,.2f}，共 {len(rows)} 行"
+
+
+def _format_period_label(column: str, value: str) -> str:
+    """时间维度标签的人话写法：周=41 → 第41周；月份=6 → 6月；年份=2024 → 2024年。
+
+    确定性结论是用户最先读到的一句话，「周=41 最高」读着像变量名。
+    """
+    name = str(column or "").strip()
+    low = name.lower()
+    if not value:
+        return name
+    if "周" in name or "week" in low:
+        return f"第{value}周"
+    if "月份" in name or name == "月" or "month" in low:
+        return f"{value}月"
+    if "年份" in name or name == "年" or "year" in low:
+        return f"{value}年"
+    if "季度" in name or "quarter" in low:
+        return f"Q{value}"
+    return f"{name}={value}"
 
 
 def _compose_narrative(state, qr, results: list[dict], fallback: str) -> str:

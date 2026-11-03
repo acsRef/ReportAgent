@@ -32,6 +32,21 @@ def _numeric_keys(row: dict) -> list:
     return measures or keys
 
 
+def measure_keys(row: dict) -> list:
+    """公开别名：结果行里的**度量**列（已排除时间类维度）。
+
+    报告层的确定性结论（`report_graph._fallback_headline`）也要这份语义——
+    2026-11-03 实测：按周聚合的结果列是 [周(int), 销售额]，报告取「第一个数值列」
+    得到 `周`，于是结论写成「周合计 1,484.00」（把周序号求和），完全无意义。
+    """
+    return _numeric_keys(row)
+
+
+def is_time_like(name: object) -> bool:
+    """公开别名：列名是否像时间维度（周/月份/年份…）。"""
+    return _is_time_like(name)
+
+
 def trend_analysis(data_json: str) -> str:
     """判断时间序列数据的整体趋势方向（上升/下降/平稳）及变化幅度。
     用途：数据包含按时间排序的数值列时，自动判断是涨了还是跌了。

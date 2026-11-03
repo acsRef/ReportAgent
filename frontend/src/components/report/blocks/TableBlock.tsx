@@ -7,6 +7,12 @@ interface Props {
 }
 
 const VISIBLE_ROWS = 3
+/**
+ * 展开后的上限（2026-11-03）：异常类问法按日聚合会返回 366 行（按周 53 行），
+ * 「展开更多明细」一次铺开几百行 DOM 既卡又没法读。超过上限只展示前 N 条并在页脚
+ * 说明——完整数据走导出（工具栏已有 Excel/HTML 导出）。
+ */
+const EXPAND_LIMIT = 50
 
 /**
  * Flat evidence table per docs/intelligent-analysis-workbench.html:
@@ -39,7 +45,11 @@ export default function TableBlock({ block }: Props) {
       )
       .map(({ key }) => key),
   )
-  const shown = expanded ? rows.length : Math.min(VISIBLE_ROWS, rows.length)
+  const expandedAll = expanded && rows.length <= EXPAND_LIMIT
+  const shown = expanded
+    ? Math.min(EXPAND_LIMIT, rows.length)
+    : Math.min(VISIBLE_ROWS, rows.length)
+  const capped = expanded && rows.length > EXPAND_LIMIT
 
   return (
     <div
@@ -139,7 +149,11 @@ export default function TableBlock({ block }: Props) {
         }}
       >
         <Text style={{ fontSize: 12, color: 'var(--muted)' }}>
-          {rows.length === 0 ? '0 条记录' : `显示 ${shown} / ${rows.length} 条`}
+          {rows.length === 0
+            ? '0 条记录'
+            : capped
+              ? `显示 ${shown} / ${rows.length} 条（长结果仅展开前 ${EXPAND_LIMIT} 条，完整数据请用导出）`
+              : `显示 ${shown} / ${rows.length} 条`}
         </Text>
         {rows.length > VISIBLE_ROWS && (
           <button
@@ -153,7 +167,7 @@ export default function TableBlock({ block }: Props) {
               padding: 0,
             }}
           >
-            {expanded ? '收起明细 ↑' : '展开更多明细 ↓'}
+            {expandedAll ? '收起明细 ↑' : '展开更多明细 ↓'}
           </button>
         )}
       </div>

@@ -200,6 +200,219 @@ def _normalize_granularity(raw: object) -> str | None:
     return _GRANULARITY_ALIASES.get(text)
 
 
+# --- 粒度确定性判定（2026-11-03，plan 2026-11-03-anomaly-granularity）--------
+#
+# 实测：「2024年哪几天销售额异常」模型返回 granularity=None → dimensions 里的宽时间词
+# 「时间」被自由发挥成 GROUP BY year → 1 行，用户点名的「哪几天」彻底丢失。粒度是
+# 确定性事实（用户原话就写着），不该赌采样——与 sql_graph._apply_confirmed_granularity
+# 同一条理由。线索词都取多字词，避免单字「月/周」误伤。
+# 判定顺序 day → week → month → quarter → year：越细的粒度越先命中。
+_GRANULARITY_QUERY_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("day", ("每天", "每日", "按日", "逐日", "日粒度", "单日", "按天", "哪天", "哪几天", "哪一日")),
+    ("week", ("每周", "按周", "逐周", "周粒度", "哪一周", "哪周", "周同比", "周环比")),
+    ("month", ("每月", "按月", "各月", "月度", "哪个月", "月粒度")),
+    ("quarter", ("每季度", "按季度", "季度粒度", "哪个季度")),
+    ("year", ("每年", "按年", "年度", "哪一年")),
+)
+
+
+def _granularity_from_query(user_query: str) -> str | None:
+    """从**用户原话**判时间粒度；认不出返回 None（不猜）。"""
+    text = (user_query or "").lower()
+    for granularity, hints in _GRANULARITY_QUERY_HINTS:
+        if any(h in text for h in hints):
+            return granularity
+    return None
+
+
+_CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+              "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _cn_int(text: str) -> int | None:
+    """「7」「十二」「二十」「三十」→ int；认不出返回 None。"""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    if raw == "十一":
+        return 11
+    if raw == "十二":
+        return 12
+    if "十" in raw:
+        head, _, tail = raw.partition("十")
+        tens = _CN_DIGITS.get(head, 1) if head else 1
+        ones = _CN_DIGITS.get(tail, 0) if tail else 0
+        return tens * 10 + ones
+    return _CN_DIGITS.get(raw)
+
+
+_RECENT_SPAN = re.compile(
+    r"(?:最近|近|过去)\s*(\d{1,3}|[一二三四五六七八九十]{1,3})\s*(天|日|周|个?月|年)"
+)
+_YEAR_MONTH_SPAN = re.compile(
+    r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月(?:\s*[-~至到]\s*(\d{1,2})\s*月)?"
+)
+_YEAR_SPAN = re.compile(r"((?:19|20)\d{2})\s*年")
+_HALF_YEAR_HINTS = ("上半年", "下半年")
+
+
+def _range_days(time_range: str | None) -> int | None:
+    """把卡上的时间范围估成天数（只用于选粒度，不做业务判断）。
+
+    认不出返回 None——调用方按「长跨度」处理（偏向周而不是日）。
+    """
+    text = str(time_range or "").strip()
+    if not text:
+        return None
+    if any(k in text for k in _HALF_YEAR_HINTS):
+        return 183
+    m = _RECENT_SPAN.search(text)
+    if m:
+        amount = _cn_int(m.group(1))
+        if amount is None:
+            return None
+        unit = m.group(2)
+        if unit in ("天", "日"):
+            return amount
+        if unit == "周":
+            return amount * 7
+        if unit.endswith("月"):
+            return amount * 31
+        return amount * 366
+    m = _YEAR_MONTH_SPAN.search(text)
+    if m:
+        if m.group(3):
+            span = abs(int(m.group(3)) - int(m.group(2))) + 1
+            return max(1, span) * 31
+        return 31
+    if _YEAR_SPAN.search(text):
+        return 366
+    if "今年" in text or "去年" in text or "全年" in text:
+        return 366
+    return None
+
+
+# 异常检测要「够密」才检得出来（2σ 需要足够多点）；≤ 45 天按日、其余按周：
+# 整年 = 52 个周点，既有足够密度又不至于把 366 个日点糊成一条噪声线。
+_ANOMALY_DAY_MAX_DAYS = 45
+
+
+def _default_anomaly_granularity(time_range: str | None) -> str:
+    """异常类的默认粒度（确定性）：短跨度按日，其余按周。"""
+    days = _range_days(time_range)
+    if days is not None and days <= _ANOMALY_DAY_MAX_DAYS:
+        return "day"
+    return "week"
+
+
+# 横截面异常的维度词 + 「各/每个/哪个/分/按」这类**复数/逐个**信号。
+# 「2024年哪几天销售额异常」不含这些信号 → 走时间序列；
+# 「2024年各品类销售额有没有异常」命中 → 横截面（用户要的是"哪个品类不正常"）。
+_ANOMALY_CROSS_DIM_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("品类", ("品类", "类目")),
+    ("区域", ("区域", "地区")),
+    ("门店", ("门店", "店铺")),
+    ("品牌", ("品牌",)),
+    ("客户", ("客户", "客群")),
+)
+_ANOMALY_CROSS_SIGNALS = ("各", "每个", "哪个", "哪些", "分", "按")
+
+
+def _anomaly_cross_dimension(user_query: str) -> str | None:
+    """异常类问法里**本轮点名**的横截面维度（各品类/哪个区域…）；没有则 None。"""
+    text = user_query or ""
+    for label, words in _ANOMALY_CROSS_DIM_WORDS:
+        for word in words:
+            if any(f"{sig}{word}" in text for sig in _ANOMALY_CROSS_SIGNALS):
+                return label
+    return None
+
+
+def _apply_deterministic_intent(
+    card: RequirementCard, kind: str, user_query: str = "",
+) -> None:
+    """把确定性判定的分析角度写进卡片（与 requirement_service._apply_intent 同语义）。
+
+    对比/排名类问法（「华东和华南比一下」「哪个品类卖得最好」）常常不说时间范围和
+    指标——这是口语常态。默认「今年 + 销售额」直接作答，比拦下来问两个问题更好；
+    卡片上会显示这个默认值，用户想改再改。
+
+    异常类另外做**形态分流**（2026-11-03）：`detect_anomaly` 是对单列做 2σ 检测，
+    只有单条时间序列才有意义。所以
+    - 本轮点名了横截面维度（各品类/哪个区域…）→ 横截面：只按该维度分组，时间做过滤；
+    - 否则 → 时间序列：只保留时间维度（丢掉 scope 造成的常量维度），粒度按跨度确定性给
+      日/周（见 `_default_anomaly_granularity`）。
+    """
+    dims = list(card.dimensions or [])
+    methods = list(card.analysis_methods or [])
+    query = user_query or ""
+
+    def _add(items: list[str], value: str) -> list[str]:
+        return items if value in items else items + [value]
+
+    if kind in ("compare_region", "compare_category", "trend", "anomaly"):
+        if not card.time_range:
+            card.time_range = "今年"
+        if not card.target_metrics:
+            card.target_metrics = ["销售额"]
+
+    if kind == "trend":
+        card.analysis_methods = _add(methods, "trend_analysis")
+        # 粒度不猜：趋势必须有时间粒度，但「按心情」这种认不出的取值不能被默认成月。
+        # 留空并在 parse_requirement 里补一条粒度澄清，让用户选。
+        card.dimensions = _add(dims, "时间")
+        card.detail_level = None
+    elif kind == "compare_region":
+        card.analysis_methods = _add(methods, "group_compare")
+        card.dimensions = _add(dims, "区域")
+    elif kind == "compare_category":
+        card.analysis_methods = _add(methods, "group_compare")
+        card.dimensions = _add(dims, "品类")
+    elif kind == "detail":
+        card.detail_level = "detail"
+        card.analysis_methods = []
+        card.granularity = None
+    elif kind == "anomaly":
+        cross_dim = _anomaly_cross_dimension(query)
+        # 用户原话里的粒度永远是第一位（「哪几天」= day、「各月」= month）。
+        explicit_granularity = _granularity_from_query(query)
+        card.analysis_methods = _add(methods, "anomaly_detection")
+        if cross_dim:
+            # 横截面：用户问的是「哪个品类/区域不正常」，时间只做过滤。
+            card.dimensions = [cross_dim]
+            card.granularity = explicit_granularity or None
+        else:
+            # 时间序列：只要时间维度；scope 造成的常量维度在这里丢掉（否则
+            # 每周多一列恒为「华东」的值，图表与 2σ 检测都会失真）。
+            time_terms = set(knowledge.time_dimension_terms())
+            time_dims = [d for d in dims if _is_time_dim(d, time_terms)]
+            card.dimensions = _add(time_dims, "时间")
+            # 方法集合同步收窄：group_compare 在单条时间序列上只会产出跨组摘要噪声。
+            card.analysis_methods = ["anomaly_detection"]
+            # 粒度优先级：用户原话 > 异常类确定性默认 > 模型自己的猜测。
+            # 模型的猜测**不许**压过默认值——实测「2024年销售额有没有异常波动」模型
+            # 给了 month（12 个点，2σ 检不出东西），默认值（整年→week）才是能用的。
+            card.granularity = explicit_granularity or _default_anomaly_granularity(
+                card.time_range
+            )
+    elif kind == "overview":
+        card.analysis_methods = [m for m in methods if m == "group_compare"]
+        card.granularity = None
+
+
+def _is_time_dim(dim: str, time_terms: set[str]) -> bool:
+    """维度是否是时间维度（中文标签或物理列名都认）。"""
+    raw = str(dim or "").strip()
+    if not raw:
+        return False
+    if raw in time_terms:
+        return True
+    label = knowledge.label_for_dimension(raw)
+    return bool(label and label in time_terms)
+
+
 _YEAR_RE = re.compile(r"(?:19|20)\d{2}")
 
 # 明细诉求（2026-11-03）：「给我这两个月的明细数据」此前没有任何字段承载，
@@ -340,49 +553,6 @@ def _extract_scope_from_query(user_query: str) -> list[str]:
 
     hits = [opt.value for opt in scope_options() if opt.value != "ALL" and opt.value in text]
     return hits[:1]
-
-
-def _apply_deterministic_intent(card: RequirementCard, kind: str) -> None:
-    """把确定性判定的分析角度写进卡片（与 requirement_service._apply_intent 同语义）。
-
-    对比/排名类问法（「华东和华南比一下」「哪个品类卖得最好」）常常不说时间范围和
-    指标——这是口语常态。默认「今年 + 销售额」直接作答，比拦下来问两个问题更好；
-    卡片上会显示这个默认值，用户想改再改。
-    """
-    dims = list(card.dimensions or [])
-    methods = list(card.analysis_methods or [])
-
-    def _add(items: list[str], value: str) -> list[str]:
-        return items if value in items else items + [value]
-
-    if kind in ("compare_region", "compare_category", "trend", "anomaly"):
-        if not card.time_range:
-            card.time_range = "今年"
-        if not card.target_metrics:
-            card.target_metrics = ["销售额"]
-
-    if kind == "trend":
-        card.analysis_methods = _add(methods, "trend_analysis")
-        # 粒度不猜：趋势必须有时间粒度，但「按心情」这种认不出的取值不能被默认成月。
-        # 留空并在 parse_requirement 里补一条粒度澄清，让用户选。
-        card.dimensions = _add(dims, "时间")
-        card.detail_level = None
-    elif kind == "compare_region":
-        card.analysis_methods = _add(methods, "group_compare")
-        card.dimensions = _add(dims, "区域")
-    elif kind == "compare_category":
-        card.analysis_methods = _add(methods, "group_compare")
-        card.dimensions = _add(dims, "品类")
-    elif kind == "detail":
-        card.detail_level = "detail"
-        card.analysis_methods = []
-        card.granularity = None
-    elif kind == "anomaly":
-        card.analysis_methods = _add(methods, "anomaly_detection")
-        card.dimensions = _add(dims, "时间")
-    elif kind == "overview":
-        card.analysis_methods = [m for m in methods if m == "group_compare"]
-        card.granularity = None
 
 
 def _guard_analysis_methods(user_query: str, methods: list[str]) -> list[str]:
@@ -726,6 +896,11 @@ def parse_requirement(
     if time_range is not None:
         time_range = str(time_range)[:64]
     granularity = _normalize_granularity(parsed.get("granularity"))
+    # 2026-11-03：用户原话里明说的粒度优先于模型输出——实测「哪几天」模型返回 None，
+    # 于是按 year 分组只出 1 行（见 plan 2026-11-03-anomaly-granularity）。
+    explicit_granularity = _granularity_from_query(user_query)
+    if explicit_granularity:
+        granularity = explicit_granularity
     detail_level = _normalize_detail_level(user_query)
 
     # status: complete requires NO missing fields AND all assumptions
@@ -767,7 +942,7 @@ def parse_requirement(
     # 「2024年各区域销售额」这类明确问法不该再多问一轮。
     det_intent = _deterministic_intent(user_query)
     if det_intent is not None:
-        _apply_deterministic_intent(card, det_intent)
+        _apply_deterministic_intent(card, det_intent, user_query=user_query)
         card.missing_fields = [
             mf for mf in card.missing_fields if mf.key != "analysis_intent"
         ]

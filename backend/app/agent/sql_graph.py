@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal, Optional, TypedDict
@@ -635,6 +636,32 @@ def _generate_sql(state: SQLAgentState) -> dict:
     }
 
 
+_DETAIL_AGGREGATE_RE = re.compile(r"\b(SUM|AVG|COUNT|MIN|MAX)\s*\(", re.IGNORECASE)
+_DETAIL_GROUP_RE = re.compile(r"\bGROUP\s+BY\b", re.IGNORECASE)
+
+
+def _detail_contract_violation(sql: str) -> str | None:
+    """明细模式的确定性契约：不许聚合、不许 GROUP BY。
+
+    2026-11-03 实测（多轮 e2e）：「给我这两个月的明细数据」卡上 `detail_level=detail`、
+    plan 阶段维度已清空、生成 prompt 也明写「禁止聚合」，模型仍然写出
+    `SUM(order_amount)` 且没有 GROUP BY → 结果是 1 行汇总，用户要的是逐条。
+    光写 prompt 治不住采样，所以这里在 validate 之后加一道确定性拦截——
+    违规就交给既有 repair 环（带 repair_ctx 重生成），而不是把 1 行当成功返回。
+    """
+    text = sql or ""
+    if _DETAIL_AGGREGATE_RE.search(text):
+        return (
+            "明细模式禁止聚合函数（SUM/AVG/COUNT/MIN/MAX）："
+            "请直接 SELECT 原始列（日期、门店、品类、金额等），按时间倒序，末尾加 LIMIT 200"
+        )
+    if _DETAIL_GROUP_RE.search(text):
+        return (
+            "明细模式禁止 GROUP BY：请直接 SELECT 原始列，按时间倒序，末尾加 LIMIT 200"
+        )
+    return None
+
+
 @traced_node("sql_validate")
 def _validate(state: SQLAgentState) -> dict:
     sql = state.get("generated_sql", "")
@@ -643,6 +670,13 @@ def _validate(state: SQLAgentState) -> dict:
                 "execution_status": "SQL_SYNTAX_ERROR"}
     validation = json.loads(validate_sql(sql))
     logger.info("validate_sql result for sql[:60]=%s -> %s", (sql or "")[:60], validation)
+    # 明细契约（2026-11-03）：SQL 本身合法但形状违反需求 → 同样按 validation 失败处理，
+    # 由 DiagnosePolicy → repair 重生成。放在 safety/EXPLAIN 之后，不绕过任何安全闸。
+    if validation.get("valid") and state.get("detail_level") == "detail":
+        violation = _detail_contract_violation(sql)
+        if violation:
+            logger.warning("detail contract violated, routing to repair: %s", violation)
+            validation = {"valid": False, "error": violation, "error_kind": "syntax"}
     return {"validation_result": validation}
 
 

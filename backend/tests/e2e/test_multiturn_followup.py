@@ -143,11 +143,14 @@ def test_multiturn_followups_keep_narrowing_and_switching_to_detail() -> None:
     with httpx.Client(base_url=BASE, timeout=30.0) as client:
         token = _login(client)
 
-        # 1) 全年趋势
+        # 1) 全年异常：粒度必须是周（2026-11-03 起异常类默认按周——月粒度 12 个点
+        #    2σ 检不出异常；旧期望是 month/12 行，见 plan 2026-11-03-anomaly-granularity）
         card, report = _run_turn(client, token, sid, "2024年华东销售趋势和异常", "new")
-        assert card.get("granularity") == "month"
-        assert len(report["query_snapshot"]["rows"]) == 12, "应按月 12 行"
+        assert card.get("granularity") == "week", card.get("granularity")
+        rows = report["query_snapshot"]["rows"]
+        assert len(rows) >= 50, f"应按周出水（≥50 行），实际 {len(rows)} 行"
         assert "GROUP BY" in report["query_snapshot"]["sql"].upper()
+        assert "WEEK_OF_YEAR" in report["query_snapshot"]["sql"].upper()
 
         # 2) 追问单月：年份必须继承 2024（不是按 today 解析成 2026）
         card, report = _run_turn(client, token, sid, "详细讲一下七月份", "supplement")
