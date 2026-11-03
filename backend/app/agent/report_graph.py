@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Optional, TypedDict
 
@@ -181,6 +182,90 @@ def _run_step(state: ReportAgentState) -> dict:
     return {"assemble_step_idx": idx + 1, "assemble_results": results}
 
 
+_NUM_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(万|亿|%)?")
+
+
+def _narrative_intent(card) -> str:
+    """从需求卡推出叙述角度（detail > anomaly > trend > compare > overview）。"""
+    if not card:
+        return "overview"
+    get = (lambda k, d=None: card.get(k, d)) if isinstance(card, dict) else (lambda k, d=None: getattr(card, k, d))
+    if get("detail_level") == "detail":
+        return "detail"
+    methods = " ".join(str(m).lower() for m in (get("analysis_methods") or []))
+    if "anomaly" in methods:
+        return "anomaly"
+    if "trend" in methods:
+        return "trend"
+    if "compare" in methods:
+        return "compare"
+    return "overview"
+
+
+def _collect_data_numbers(rows: list[dict]) -> list[float]:
+    from app.utils.numbers import is_numeric_value, to_decimal
+
+    values: list[float] = []
+    for row in rows:
+        for value in row.values():
+            if is_numeric_value(value):
+                dec = to_decimal(value)
+                if dec is not None:
+                    values.append(float(dec))
+    return values
+
+
+def _numbers_valid(text: str, data_values: list[float]) -> bool:
+    """叙述里的绝对数字必须能在结果数据里找到（百分比视为派生值，放行）。
+
+    2026-11-03：模型会顺手写「销售额 9040 万」这种看似合理的数字。宁可少说，
+    也不能让它编——找不到来源的那条证据直接丢掉。
+    """
+    if not text:
+        return True
+    for match in _NUM_RE.finditer(text):
+        raw, unit = match.group(1).replace(",", ""), match.group(2)
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if unit == "%":
+            continue
+        if unit == "万":
+            value *= 1e4
+        elif unit == "亿":
+            value *= 1e8
+        if value < 10:  # 「2 名」「3 个点」这类小数字不校验
+            continue
+        if not any(abs(d - value) <= max(abs(d) * 0.02, 1.0) for d in data_values):
+            return False
+    return True
+
+
+def _fallback_headline(qr) -> str:
+    """叙述不可用时的确定性结论：最高/最低 + 合计。"""
+    from app.utils.numbers import is_numeric_value, to_decimal
+
+    rows = list(qr.rows or [])
+    if not rows:
+        return ""
+    first = rows[0]
+    label_key = next((k for k, v in first.items() if not is_numeric_value(v)), None)
+    value_key = next((k for k, v in first.items() if is_numeric_value(v)), None)
+    if not value_key:
+        return f"共 {len(rows)} 行记录"
+    pairs = [(str(r.get(label_key, "")), to_decimal(r.get(value_key))) for r in rows]
+    pairs = [(k, v) for k, v in pairs if v is not None]
+    if not pairs:
+        return f"共 {len(rows)} 行记录"
+    pairs.sort(key=lambda kv: kv[1], reverse=True)
+    top_label, top_value = pairs[0]
+    total = sum(v for _, v in pairs)
+    if label_key:
+        return f"{value_key}合计 {total:,.2f}，其中 {top_label} 最高（{top_value:,.2f}），共 {len(rows)} 组"
+    return f"{value_key}合计 {total:,.2f}，共 {len(rows)} 行"
+
+
 def _compose_narrative(state, qr, results: list[dict], fallback: str) -> str:
     """把「数据 + 工具结论」写成人话（2026-11-03）。
 
@@ -209,6 +294,7 @@ def _compose_narrative(state, qr, results: list[dict], fallback: str) -> str:
         row_count=qr.row_count,
         sample_rows=list(qr.rows)[:20],
         tool_results=tool_text,
+        intent=_narrative_intent(card),
     )
     try:
         raw = call_llm(prompt, max_tokens=900)
@@ -223,8 +309,18 @@ def _compose_narrative(state, qr, results: list[dict], fallback: str) -> str:
     findings = [str(x).strip() for x in (data.get("findings") or []) if str(x).strip()]
     why = str(data.get("why") or "").strip()
     nxt = [str(x).strip() for x in (data.get("next") or []) if str(x).strip()]
+
+    # 数字校验（2026-11-03）：叙述里的绝对数字必须来自结果数据；找不到就丢掉该条，
+    # headline 不通过则用确定性结论兜底——宁可少说，也不许编数字。
+    data_values = _collect_data_numbers(list(qr.rows)[:200])
+    findings = [item for item in findings if _numbers_valid(item, data_values)]
+    if headline and not _numbers_valid(headline, data_values):
+        logger.warning("narration headline rejected (number not in data): %s", headline[:80])
+        headline = ""
+    if not headline:
+        headline = _fallback_headline(qr)
     if not headline and not findings:
-        return ""
+        return fallback
 
     lines: list[str] = []
     if headline:

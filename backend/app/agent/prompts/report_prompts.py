@@ -113,6 +113,7 @@ def build_report_narrate_prompt(
     row_count: int,
     sample_rows: list[dict],
     tool_results: str,
+    intent: str = "overview",
 ) -> str:
     import json as _json
 
@@ -131,11 +132,47 @@ def build_report_narrate_prompt(
             sample_rows=_json.dumps(sample_rows, ensure_ascii=False, default=str)[:4000],
             tool_results=(tool_results or "（无）")[:2000],
         ),
+        _INTENT_GUIDE.get(intent, _INTENT_GUIDE["overview"]),
         REPORT_NARRATE_V1["output_schema"],
         REPORT_NARRATE_V1["self_check"],
         REPORT_NARRATE_V1["safety_policy"],
     ]
     return "\n\n".join(s for s in sections if s)
+
+
+# 分析角度 → 叙述重点（2026-11-03：同一套摘要套所有问题的写法没有价值）
+_INTENT_GUIDE: dict[str, str] = {
+    "trend": (
+        "【本次是趋势分析，叙述要回答】"
+        "\n- 方向：整体上升/下降/平稳，幅度多少（用起止值或首尾对比）"
+        "\n- 拐点：哪个月/哪一周出现转折，前后差多少"
+        "\n- 不要只说「整体趋势平稳」，要说清「从 X 到 Y 变化了 Z%」"
+    ),
+    "compare": (
+        "【本次是对比/排名分析，叙述要回答】"
+        "\n- 排序：最高的 2 名与最低的 1 名，各是多少"
+        "\n- 差距：第一名是最后一名的几倍/高多少"
+        "\n- 集中度：前几名合计占总量多少（能算就算，算不了就别编）"
+    ),
+    "anomaly": (
+        "【本次是异常分析，叙述要回答】"
+        "\n- 异常点：哪几个时间点异常，偏离多少（不要罗列全部）"
+        "\n- 是否连续：单点抖动还是连续几天"
+        "\n- 若数据点太少（如按月只有 12 个点），要明确说「粒度太粗，建议按日看」"
+    ),
+    "detail": (
+        "【本次是明细数据，叙述要回答「这批数据长什么样」】"
+        "\n- 分布：金额/数量主要集中在什么区间，大致占比"
+        "\n- 极端值：最大一笔多少、最小一笔多少"
+        "\n- **绝对不要**逐行罗列订单"
+    ),
+    "overview": (
+        "【本次是总览，叙述要回答】"
+        "\n- 规模：总量/合计是多少"
+        "\n- 结构：主要由谁贡献（前 1-2 名占比）"
+        "\n- 一个值得注意的点（异常、缺口、集中度过高）"
+    ),
+}
 
 
 def build_report_plan_prompt(
