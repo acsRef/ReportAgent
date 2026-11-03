@@ -168,6 +168,14 @@ SQL_PLAN_V1: dict[str, str] = {
         "Do NOT call search_schema（schema 已注入）。"
         "Do NOT generate SQL 字符串（本阶段是 plan，SQL 在 generate 阶段）。"
     ),
+    "self_check": (
+        "【输出前自检（逐条确认）】"
+        "\n1. 我是否**只**根据「已确认需求」决定指标/维度/过滤，而没有重新推断用户意图？"
+        "\n2. predicted_table 是否真实存在于可用表结构？"
+        "\n3. dimensions 里是否混进了「已经被范围过滤成常量」的维度？"
+        "\n4. 用户要明细时，我是否把 dimensions 清空了（不聚合）？"
+        "\n5. 时间范围是否已经换算成具体年份/区间（不许把「今年」原样丢给下游）？"
+    ),
 }
 
 SQL_PLAN_META: dict[str, Any] = {
@@ -206,6 +214,7 @@ def build_sql_plan_prompt(
         ),
         SQL_PLAN_V1["tool_policy"],
         SQL_PLAN_V1["output_schema"].format(plan_fewshot=plan_fewshot),
+        SQL_PLAN_V1["self_check"],
         SQL_PLAN_V1["safety_policy"],
     ]
     base = "\n\n".join(s for s in sections if s)
@@ -269,6 +278,14 @@ SQL_GENERATE_V1: dict[str, str] = {
         "Do NOT assume unavailable schema。"
         "Do NOT call search_schema（schema 已注入 prompt）。"
         "Do NOT generate DROP/UPDATE/DELETE——本 Agent 只读 SELECT。"
+    ),
+    "self_check": (
+        "【输出前自检（逐条确认）】"
+        "\n1. 每个表名/列名是否都出现在「可用表结构」里？"
+        "\n2. 月份/年份是整数列，我是否写成了 '2024-07' 这种日期字符串？"
+        "\n3. 有聚合函数时，GROUP BY 是否包含了所有未聚合的查询列？"
+        "\n4. 明细模式（若提示里要求）是否真的没有聚合与 GROUP BY，并且带 LIMIT？"
+        "\n5. 输出是否只有纯 SQL（无 markdown、无解释、无反斜杠转义）？"
     ),
 }
 
@@ -363,6 +380,7 @@ def build_sql_generate_prompt(
         ),
         SQL_GENERATE_V1["tool_policy"],
         SQL_GENERATE_V1["output_schema"].format(sql_generation_rules=sql_generation_rules),
+        SQL_GENERATE_V1["self_check"],
         SQL_GENERATE_V1["safety_policy"],
     ]
     base = "\n\n".join(s for s in sections if s)

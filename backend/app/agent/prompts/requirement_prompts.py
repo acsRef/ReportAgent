@@ -14,6 +14,13 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "产出 RequirementCard。**禁止生成 SQL**——SQL 生成在后续 Execution 阶段。"
     ),
     "role": "你是 ReportAgent 需求解析器。",
+    "inputs_priority": (
+        "【输入可信度（冲突时按此顺序裁决）】"
+        "\n1. 用户本轮原话 —— 最高，任何冲突以它为准"
+        "\n2. 上一轮已确认的需求卡 —— 本轮未改写则继承"
+        "\n3. 记忆里的偏好 —— 只影响展示（图表类型），不影响查询语义"
+        "\n4. 你自己的推断 —— 最低，且必须写成 assumption 让用户确认，不得伪装成用户说的"
+    ),
     "task_contract": (
         "给定用户的中文业务问题与可用表结构，判断每个维度（time / scope / metric / "
         "granularity / comparison）是否明确，并输出结构化 JSON。"
@@ -136,6 +143,16 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "Do NOT call search_schema when schema is already known（本步骤 schema 已注入）。"
         "Do NOT generate SQL（SQL 在 Execution 阶段）。"
     ),
+    "self_check": (
+        "【输出前自检（逐条确认，任一条不成立就改）】"
+        "\n1. 用户没表达分析角度时，我是否把 intent 留空并给了 analysis_intent 追问？"
+        "\n2. trend / compare 类判断，是否有**真实存在**的时间列 / 维度列支撑？"
+        "\n3. 每条 clarification 的选项，是否都引用了可用表结构里存在的字段？"
+        "\n4. target_metrics 是否都能对上注册表口径？对不上的，是否走了澄清而不是臆造？"
+        "\n5. time_range 是否含年份（「今年」必须按当前日期换算，不能照抄示例里的 2024）？"
+        "\n6. 明细（detail）是否与聚合/分组互相矛盾？"
+        "\n7. 我有没有把「模型推断」写成了用户明确说的内容？"
+    ),
 }
 
 REQUIREMENT_PARSE_META: dict[str, Any] = {
@@ -160,6 +177,7 @@ def build_requirement_parse_prompt(
     sections = [
         REQUIREMENT_PARSE_V1["system_contract"],
         REQUIREMENT_PARSE_V1["role"],
+        REQUIREMENT_PARSE_V1["inputs_priority"],
         REQUIREMENT_PARSE_V1["task_contract"].format(
             user_query=user_query,
             schema_text=schema_text,
@@ -185,6 +203,7 @@ def build_requirement_parse_prompt(
     sections.extend([
         REQUIREMENT_PARSE_V1["tool_policy"],
         REQUIREMENT_PARSE_V1["output_schema"],
+        REQUIREMENT_PARSE_V1["self_check"],
         REQUIREMENT_PARSE_V1["safety_policy"],
     ])
     return "\n\n".join(s for s in sections if s)
