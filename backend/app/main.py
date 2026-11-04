@@ -52,6 +52,7 @@ from app.infra.checkpoint.factory import init_checkpointer, close_checkpointer
 from app.infra.checkpoint.session import session_manager
 from app.infra.execution import registry
 from app.infra.execution.progress import ProgressTraceHandler
+from app.infra.execution import progress_detail
 from app.infra.trace.sdk import get_tracer
 from app.infra.auth.repository import ensure_default_user, verify_user
 from app.infra.auth.startup_guard import validate_auth_security_config
@@ -705,14 +706,20 @@ async def _run_requirement_graph(
         handler = ProgressTraceHandler(
             on_frame=lambda frame, _task=task: registry.publish(_task, frame),
         )
-        with mcp_down.scoped(bool(mcp_down_flag)):
-            result = await run_with_timeout(
-                graph.ainvoke(
-                    initial,
-                    {"configurable": {"thread_id": session_id}, "callbacks": [handler]},
-                ),
-                MAX_TASK_DURATION,
-            )
+        # 节点把「这一步的结论」写进 detail（意图/口径/待确认项…），收尾帧带上
+        detail_sink: dict[str, str] = {}
+        detail_token = progress_detail.install(detail_sink)
+        try:
+            with mcp_down.scoped(bool(mcp_down_flag)):
+                result = await run_with_timeout(
+                    graph.ainvoke(
+                        initial,
+                        {"configurable": {"thread_id": session_id}, "callbacks": [handler]},
+                    ),
+                    MAX_TASK_DURATION,
+                )
+        finally:
+            progress_detail.reset(detail_token)
         # 图跑完：把最后一个节点的 running 收成 success（end 事件归因不了，
         # 见 progress.ProgressTraceHandler 的说明）
         handler.close_all()

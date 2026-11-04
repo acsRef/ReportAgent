@@ -431,6 +431,77 @@ def _metric_hints_for(card) -> str | None:
     return knowledge.render_metric_hints([m.name for m in resolved]) or None
 
 
+# 明细投影只认「SUM(单列)」这种能安全脱掉聚合的口径（COUNT/比率/FILTER 没有单行原值）
+_SIMPLE_SUM_RE = re.compile(r"^SUM\(\s*([A-Za-z_][\w.]*)\s*\)$")
+
+
+def _detail_projection_hint(card) -> str | None:
+    """明细模式的**确定性投影**：日期 + 维度列 + 原值指标列（P1-②）。
+
+    实测病灶：「帮我分析一下销量」→ 明细 SQL 只 `SELECT quantity`，表格只有一列
+    「销量」，图表把销量同时当 x/y 画出一排无意义柱子。光在 prompt 里写「要原始列」
+    模型照样只选指标列，所以这里给一份照抄清单。
+
+    列与别名全部来自知识库（`schema_hints.yaml` / `metrics.yaml`），不硬编码表名：
+    - 日期：`time_bucket_column("day")`（缺省 `dim_date.full_date`）；
+    - 维度：卡片声明的维度映射成物理列；卡片没声明就取知识库里**不同维度表**的前两个；
+    - 指标：只接 `SUM(<列>)` 这类有「原值」语义的口径（COUNT/比率/FILTER 口径在明细里
+      没有单行原值，跳过——宁缺勿造列）。
+    """
+    from app.knowledge import registry as knowledge
+
+    projections: list[str] = []
+
+    day_column = knowledge.time_bucket_column("day")
+    if day_column:
+        projections.append(f"{day_column} AS 日期")
+
+    dimension_columns: list[str] = []
+
+    def _push_dimension(column: str) -> None:
+        if column and column not in dimension_columns:
+            dimension_columns.append(column)
+
+    for dim in (getattr(card, "dimensions", None) or []):
+        _push_dimension(knowledge.dimension_column(str(dim)) or "")
+
+    if not dimension_columns:
+        # 卡片没说维度 → 取知识库里**不同维度表**的前两个（区域 + 品类），保证明细可读
+        seen_tables: set[str] = set()
+        for item in (knowledge._schema_hints().get("dimension_terms") or []):  # noqa: SLF001
+            column = str(item.get("column") or "")
+            table = column.split(".")[0] if "." in column else ""
+            if not column or table in seen_tables:
+                continue
+            seen_tables.add(table)
+            _push_dimension(column)
+            if len(dimension_columns) >= 2:
+                break
+
+    for column in dimension_columns:
+        label = knowledge.label_for_dimension(column) or column
+        projections.append(f"{column} AS {label}")
+
+    resolved, _unresolved = knowledge.resolve_metrics(
+        list(getattr(card, "target_metrics", None) or [])
+    )
+    for metric in resolved:
+        # 明细要「单行原值」——只有 SUM(单列) 能安全脱掉聚合；COUNT/比率/FILTER 口径跳过
+        match = _SIMPLE_SUM_RE.match(metric.expr.strip())
+        if match is None:
+            continue
+        projections.append(f"{match.group(1)} AS {metric.name}")
+
+    if len(projections) <= 1:
+        return None
+    lines = "\n".join(f"  {p}," for p in projections).rstrip(",")
+    return (
+        "明细投影（逐字照抄这些列与别名，禁止只 SELECT 指标列）：\n"
+        f"{lines}\n"
+        "  —— 日期列 + 至少一个维度列必须在 SELECT 里，否则前端表格只剩一列、图表无法作图"
+    )
+
+
 def _format_confirmed_requirement(card) -> str | None:
     """把 PATCH 确认后的 RequirementCard 序列化成 SQL plan prompt
     消费的结构化字符串（中文字段标签）。无卡时返回 None，plan
@@ -508,6 +579,13 @@ def _format_confirmed_requirement(card) -> str | None:
             "- 金额取原值（不要 ROUND 到万级），并带上可读的日期/门店/品类列\n"
             "- 按时间倒序，LIMIT 200"
         )
+        # 2026-11-04（P1-② 明细类列太薄）：只写「要原始列」模型仍然只 SELECT 指标列
+        # ——实测「帮我分析一下销量」的明细表只有一列「销量」，图表把销量同时当
+        # x/y 画出一排无意义柱子。这里给**确定性投影**（日期 + 维度 + 指标），
+        # 模型照抄即可；列名与别名全部来自知识库（换 schema 只改 YAML）。
+        projection = _detail_projection_hint(card)
+        if projection:
+            parts.append(projection)
     if card.assumptions:
         accepted = [a for a in card.assumptions if a.accepted is True]
         if accepted:

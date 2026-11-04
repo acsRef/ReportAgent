@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import TracePanel from '../TracePanel'
 import type { TimelineEntry } from '../../../types/report'
@@ -115,3 +115,18 @@ const BUILD_INTERRUPTED: TimelineEntry[] = [
   { ...entry('解析需求', 'success'), kind: 'agent' as const, timestamp: 1_700_000_000_000 },
   { ...entry('生成 SQL', 'error'), kind: 'sql' as const, timestamp: 1_700_000_004_000 },
 ]
+
+  it('步骤显示这一步的结论（detail）——用户要的「思考内容」', () => {
+    const withDetail: TimelineEntry[] = [
+      {
+        ...entry('识别意图', 'success'),
+        kind: 'agent',
+        detail: '意图=report（业务问题）',
+      },
+    ]
+    render(<TracePanel entries={withDetail} running={false} />)
+    fireEvent.click(screen.getByText('展开'))
+
+    expect(screen.getByText('意图=report（业务问题）')).toBeTruthy()
+  })
+

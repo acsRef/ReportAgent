@@ -13,7 +13,7 @@
  * Explicit config.xField/yField always win over inference.
  */
 
-export type ChartType = 'bar' | 'line' | 'pie'
+export type ChartType = 'bar' | 'line' | 'pie' | 'table'
 
 export interface PreparedChart {
   chartType: ChartType
@@ -25,6 +25,11 @@ export interface PreparedChart {
 
 export function prepareChart(data: Record<string, unknown>): PreparedChart {
   const rawType = String(data.type || 'bar')
+  // 2026-11-04：后端明确说「画不了图」时不能强画。此前任何非 line/pie 都被当成 bar，
+  // 于是「明细结果只有一列销量」也画出一排柱子（x 和 y 是同一列，纯噪声）。
+  if (rawType === 'table') {
+    return { chartType: 'table', rows: [], xField: '', yField: '', seriesField: null }
+  }
   const chartType: ChartType = rawType === 'line' || rawType === 'pie' ? rawType : 'bar'
   const config = (data.config as Record<string, unknown> | undefined) || {}
   const rows =
@@ -56,6 +61,11 @@ export function prepareChart(data: Record<string, unknown>): PreparedChart {
     if (chartType !== 'pie' && categoricalKeys.length >= 2) {
       seriesField = categoricalKeys.find((key) => key !== xField) ?? null
     }
+  }
+
+  // 没有真正的维度（x 只能退到 y 自己）→ 不可视化，交给表格
+  if (!xField || !yField || xField === yField) {
+    return { chartType: 'table', rows: [], xField: '', yField: '', seriesField: null }
   }
 
   return { chartType, rows, xField, yField, seriesField }

@@ -20,7 +20,7 @@ const CHART_COLORS = [
   'var(--chart-6)',
 ]
 
-const TYPE_LABELS: Record<PreparedChart['chartType'], string> = {
+const TYPE_LABELS: Record<string, string> = {
   bar: '柱状图',
   line: '折线图',
   pie: '饼图',
@@ -28,6 +28,9 @@ const TYPE_LABELS: Record<PreparedChart['chartType'], string> = {
 
 export default function ChartBlock({ block, bare, height = 280 }: Props) {
   const prepared = prepareChart(block.data as Record<string, unknown>)
+  // 后端判定「这份结果画不了图」（单列数值 / 无可比维度）→ 不渲染图，下方数据明细则照常展示。
+  // 2026-11-04：此前非 line/pie 一律当柱状图，把一列销量画成一排噪声柱子。
+  if (prepared.chartType === 'table') return null
   const option = buildOption(prepared)
 
   const chart = (

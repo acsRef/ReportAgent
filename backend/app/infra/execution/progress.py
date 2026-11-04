@@ -48,8 +48,14 @@ _NOISE_NAMES = frozenset({
 })
 
 
-def format_progress_frame(node: str, status: str) -> Optional[dict]:
-    """node + 生命周期状态 → SSE trace 帧；未映射节点返回 None。"""
+def format_progress_frame(
+    node: str, status: str, detail_text: str = "",
+) -> Optional[dict]:
+    """node + 生命周期状态 → SSE trace 帧；未映射节点返回 None。
+
+    `detail_text` = 这一步的**结论**（P1-②/2026-11-04 用户要求「思考的内容也要输出」）：
+    意图、口径、行数、失败原因这类确定性短句，由 `progress_detail.detail()` 写入。
+    """
     hit = PROGRESS_NODES.get(node)
     if hit is None:
         return None
@@ -57,7 +63,7 @@ def format_progress_frame(node: str, status: str) -> Optional[dict]:
     return {
         "event": "trace",
         "data": json.dumps(
-            {"step": label, "status": status, "detail": "", "kind": kind},
+            {"step": label, "status": status, "detail": detail_text, "kind": kind},
             ensure_ascii=False,
         ),
     }
@@ -98,7 +104,14 @@ class ProgressTraceHandler(AsyncCallbackHandler):
         if self._last.get(node) == status:
             return
         self._last[node] = status
-        frame = format_progress_frame(node, status)
+        # 只有「收尾」帧带内容（running 时节点还没有结论）
+        detail_text = ""
+        if status in ("success", "error"):
+            from app.infra.execution import progress_detail
+
+            label = PROGRESS_NODES.get(node, ("", ""))[1]
+            detail_text = progress_detail.current(label)
+        frame = format_progress_frame(node, status, detail_text)
         if frame is not None:
             self._on_frame(frame)
 

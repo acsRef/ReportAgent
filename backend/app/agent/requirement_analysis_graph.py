@@ -42,6 +42,19 @@ logger = logging.getLogger(__name__)
 _TYPICAL_CONTEXT_BUDGET_CHARS = 8000  # 预估 conversation+system+context 块占位（≈2000 tokens），用于 remaining_token_budget 估算
 
 
+def _progress_detail(node_label: str, text: str) -> None:
+    """把「这一步的结论」写进执行过程帧（plan 2026-11-04-trace-visible-reasoning）。
+
+    失败静默：过程帧只是可观测性，不能因为写 detail 出错拖垮需求解析。
+    """
+    try:
+        from app.infra.execution import progress_detail as _pd
+
+        _pd.detail(node_label, text)
+    except Exception:  # noqa: BLE001 - 观测量不影响主链
+        pass
+
+
 class RequirementAnalysisState(TypedDict, total=False):
     user_query: str
     user_id: int
@@ -74,6 +87,10 @@ def _security_guard(state: RequirementAnalysisState) -> dict:
         "security_level": result.level,
         "security_warning": result.reason,
     }
+    _progress_detail(
+        "安全检查",
+        f"{'拦截' if result.blocked else '通过'}（{result.level}，风险分 {result.score}）",
+    )
     if result.blocked:
         out["error"] = ErrorDetail(
             code="SECURITY_REJECTED",
@@ -130,9 +147,14 @@ async def _classify_intent(state: RequirementAnalysisState) -> dict:
     q = state["user_query"]
     # 闲聊快路径：不查字典、不跑 LLM（省 token/延迟）。
     if any(k in q.lower() for k in _CHITCHAT_KEYWORDS):
+        _progress_detail("识别意图", "闲聊（关键词命中，不建需求卡）")
         return {"intent": IntentKind.CHITCHAT.value, "intent_reason": "闲聊关键词命中", "dict_context": ""}
     dict_hit, dict_context = await _fetch_dict_context(q)
     res = classify_intent(q, dict_hit=dict_hit)
+    _progress_detail(
+        "识别意图",
+        f"意图={res.kind.value}（{res.reason}）" + ("｜字典命中" if dict_hit else ""),
+    )
     return {
         "intent": res.kind.value,
         "intent_reason": res.reason,
@@ -194,6 +216,14 @@ async def _data_agent(state: RequirementAnalysisState) -> dict:
         "raw_schema": "",
         "trace_id": state.get("trace_id", ""),
     })
+    schema = ds.get("schema_context")
+    tables = getattr(schema, "tables", None) or []
+    _progress_detail(
+        "准备分析数据",
+        f"检索到 {len(tables)} 张表：" + "、".join(
+            str(getattr(t, "name", "") or "") for t in tables[:5]
+        ) if tables else "未检索到可用表结构（走本地兜底）",
+    )
     return {
         "schema_context": ds.get("schema_context"),
         "execution_status": "RUNNING",
@@ -277,6 +307,19 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
         dictionary_context=dictionary_context or None,
         prior_card=prior_card,
     )
+    # 过程帧内容：这一段解析出的结论（时间/口径/待确认），让「解析需求」不只是四个字
+    pending = "、".join(str(getattr(mf, "label", "") or "") for mf in (card.missing_fields or []))
+    _progress_detail(
+        "解析需求",
+        "｜".join(
+            part for part in (
+                f"时间 {card.time_range}" if card.time_range else "时间未限",
+                "口径 " + "、".join(card.target_metrics) if card.target_metrics else "口径待定",
+                f"范围 {'、'.join(card.scope)}" if card.scope else "",
+                f"待确认 {len(card.missing_fields)} 项（{pending[:40]}）" if card.missing_fields else "无待确认项",
+            ) if part
+        ),
+    )
     return {"requirement_card": card}
 
 
@@ -316,6 +359,7 @@ async def _persist_draft(state: RequirementAnalysisState) -> dict:
                 )
     except Exception as exc:
         logger.exception("persist_draft failed")
+        _progress_detail("保存需求卡", f"保存失败：{str(exc)[:60]}")
         return {
             "execution_status": "FAILED",
             "error": ErrorDetail(code="PERSIST_FAILED", message=str(exc)[:200]),
@@ -327,6 +371,11 @@ async def _persist_draft(state: RequirementAnalysisState) -> dict:
         tracer = get_tracer(trace_id)
         tracer.end("AWAITING_CONFIRM" if not card.missing_fields else "AWAITING_MISSING")
 
+    _progress_detail(
+        "保存需求卡",
+        f"已保存 #{draft_id} · {'需要补充' if card.missing_fields else '可直接确认'}"
+        f"（{len(card.missing_fields)} 项待定）",
+    )
     return {
         "draft_id": draft_id,
         "execution_status": "SUCCESS",
@@ -367,6 +416,7 @@ async def _requirement_preview(state: RequirementAnalysisState) -> dict:
         metrics, time_range=card.time_range, scope=list(card.scope or []),
     )
     if not result.ok:
+        _progress_detail("口径预览", "预览不可用（时间范围/表关系不支持）→ 退回纯文字选项")
         return {}
 
     by_name = {item.name: item for item in result.items}
@@ -379,6 +429,13 @@ async def _requirement_preview(state: RequirementAnalysisState) -> dict:
         if metric is not None and item is not None:
             hint = format_hint(item, metric, base_note=metric.note or opt.hint or "")
         options.append(opt.model_copy(update={"hint": hint}))
+    # 过程帧内容：把几个候选的真实总量写出来（用户就是靠这个做选择）
+    preview_parts = [
+        f"{item.name} {format_hint(item, knowledge.resolve_metric(item.name), base_note='')}"
+        for item in result.items
+        if item.ok and knowledge.resolve_metric(item.name) is not None
+    ]
+    _progress_detail("口径预览", "、".join(preview_parts) or "已算出候选口径")
     new_field = metric_field.model_copy(update={"options": options})
     new_card = card.model_copy(update={
         "missing_fields": [

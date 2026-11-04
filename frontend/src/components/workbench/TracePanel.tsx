@@ -115,17 +115,22 @@ export default function TracePanel({ entries, note = null, running }: Props) {
               <span className="wb-trace-icon" aria-hidden="true">
                 {STATUS_ICON[entry.status] ?? '·'}
               </span>
-              <span className="wb-trace-step-name">{entry.nodeName}</span>
-              {entry.kind && (
-                <span className="wb-trace-kind">{KIND_TEXT[entry.kind] ?? entry.kind}</span>
-              )}
-              {entry.detail && <span className="wb-trace-detail">{entry.detail}</span>}
-              <span className="wb-trace-meta">
-                {entry.status === 'running'
-                  ? STATUS_TEXT.running
-                  : steps[index] > 0
-                    ? `≈${(steps[index] / 1000).toFixed(1)}s`
-                    : (STATUS_TEXT[entry.status] ?? '')}
+              <span className="wb-trace-step-body">
+                <span className="wb-trace-step-line">
+                  <span className="wb-trace-step-name">{entry.nodeName}</span>
+                  {entry.kind && (
+                    <span className="wb-trace-kind">{KIND_TEXT[entry.kind] ?? entry.kind}</span>
+                  )}
+                  <span className="wb-trace-meta">
+                    {entry.status === 'running'
+                      ? STATUS_TEXT.running
+                      : steps[index] > 0
+                        ? `≈${(steps[index] / 1000).toFixed(1)}s`
+                        : (STATUS_TEXT[entry.status] ?? '')}
+                  </span>
+                </span>
+                {/* 这一步的**结论**（意图 / 口径 / 行数 / 失败原因）——用户要的「思考内容」 */}
+                {entry.detail && <span className="wb-trace-detail">{entry.detail}</span>}
               </span>
             </li>
           ))}

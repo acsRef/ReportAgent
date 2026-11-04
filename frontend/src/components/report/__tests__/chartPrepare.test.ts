@@ -68,3 +68,26 @@ describe('prepareChart — field inference', () => {
     expect(p.chartType).toBe('bar')
   })
 })
+
+// 2026-11-04：后端说 table 就是画不了图（单列数值 / 无可比维度）——不许强画柱状图。
+describe('prepareChart — 不可视化时退回表格', () => {
+  it('type=table 直接返回 table（不再被强转成 bar）', () => {
+    const p = prepareChart({ type: 'table', config: { data: [{ 销量: 1 }] } })
+
+    expect(p.chartType).toBe('table')
+    expect(p.rows).toEqual([])
+  })
+
+  it('只有一列数值（x 只能退到 y 自己）→ table', () => {
+    const p = prepareChart({ type: 'bar', config: { data: [{ 销量: 1 }, { 销量: 8 }] } })
+
+    expect(p.chartType).toBe('table')
+  })
+
+  it('有真实维度时仍然是可画的柱状图（回归）', () => {
+    const p = prepareChart({ type: 'bar', config: { data: REGION_ROWS } })
+
+    expect(p.chartType).toBe('bar')
+    expect(p.xField).not.toBe(p.yField)
+  })
+})
