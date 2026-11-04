@@ -99,7 +99,17 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
     onChange({ ...card, status: 'missing', confirmed_at: null })
   }
 
-  const pill = card.status === 'missing' ? `需要补充 ${card.missing_fields.length} 项` : STATUS_PILL[card.status]
+  const pendingAssumptions = card.assumptions.filter((a) => a.accepted === null).length
+  // 2026-11-04：status=missing 但 missing_fields 为空时，之前显示「需要补充 0 项」——自相矛盾。
+  // 真正待办是「还没表态的假设」，如实说。
+  const pill =
+    card.status === 'missing'
+      ? card.missing_fields.length > 0
+        ? `需要补充 ${card.missing_fields.length} 项`
+        : pendingAssumptions > 0
+          ? `待确认 ${pendingAssumptions} 项假设`
+          : '待确认'
+      : STATUS_PILL[card.status]
 
   return (
     <div className={`wb-requirement-card ${card.status} wb-reveal`}>

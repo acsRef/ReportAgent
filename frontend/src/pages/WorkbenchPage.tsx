@@ -128,6 +128,13 @@ export default function WorkbenchPage() {
   const prevCardRef = useRef<RC | null>(null)
   const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
+  // 2026-11-04：**详情视图属于「一次查看」，不是一种模式**。
+  // 之前 `detailsOpen` 一旦点开就再不复位 → 之后每一轮新问题都直接渲染整张大卡
+  // （用户看到的就是「卡片怎么老在上面」）。这里随新卡到来 / 新一轮发送复位。
+  useEffect(() => {
+    setDetailsOpen(false)
+  }, [requirement?.id, requirement?.version])
+
   // 需求已确认并开始执行（或已出报告）→ 卡片只读。改需求走下方输入框（adjust）。
   // 2026-11-04（plan chat-like-conversation-flow）：`report_ready` 不再算锁定——
   // 它是**上一轮**的终态；重发追问到达的新草稿是待确认的可编辑卡，
@@ -141,6 +148,8 @@ export default function WorkbenchPage() {
   const requirementMode = requirementUiMode(phase, requirement, cardLocked, detailsOpen)
   const questionField = requirementMode === 'question' ? pickNextQuestion(requirement) : null
   const showConfirmBar = requirementMode === 'confirm'
+  // 正在等用户答（提问或确认）——这个阶段的状态文案由那条助手消息表达，不再重复
+  const awaitingCard = phase === 'awaiting_confirm' || phase === 'awaiting_missing'
   // 整卡只在两种情况下出现：执行中（只读）或用户主动「展开详情」
   const showCard = requirementMode === 'card'
 
@@ -405,7 +414,8 @@ export default function WorkbenchPage() {
     setStageIndex(1)
     setLiveDetail(undefined)
     setTurnBaseVersion(selectedReportVersion)
-    // 新一轮开始：清掉上一轮的执行过程（否则面板会把两轮步骤混在一起）
+    // 新一轮开始：收起详情 + 清掉上一轮的执行过程（否则面板会把两轮步骤混在一起）
+    setDetailsOpen(false)
     dispatch({ type: 'timeline/cleared' })
     const sid = activeSessionId ?? crypto.randomUUID()
     if (!activeSessionId) {
@@ -737,12 +747,13 @@ export default function WorkbenchPage() {
           )}
           {lastQuestion && phase !== 'idle' && <UserBubble text={lastQuestion} />}
 
-          {/* 2026-11-04（plan requirement-slot-contract Phase 5）：需求澄清改成
-              「一次只问一个槽位」+ 紧凑确认条；整卡降级为「展开详情」。
-              后端仍然下发整卡（`requirement` 事件不变），这里只改呈现与节奏。 */}
+          {/* 2026-11-04：对话顺序 = 用户说 → 一条助手消息（思考一行 + 提问/确认）。
+              用户明确要求「应该是一整个的、不要卡片、太占地方」——所以 trace 和
+              提问/确认合并进**同一个气泡**，不再各占一块。 */}
           {questionField && !cardLocked && (
             <QuestionBar
               field={questionField}
+              trace={<TracePanel entries={timeline} note={timelineNote} running={busy || sending} />}
               onPick={(key, value) => {
                 void handleAnswerQuestion(key, value)
               }}
@@ -751,16 +762,41 @@ export default function WorkbenchPage() {
             />
           )}
 
+          {/* 确认 = 同一条消息形态：一句话 + 参数小结 + 一个按钮 */}
           {showConfirmBar && requirement && (
             <ConfirmBar
               card={requirement}
               changeNote={changeNote}
               busy={patching || confirming}
+              trace={<TracePanel entries={timeline} note={timelineNote} running={busy || confirming} />}
               onConfirm={async () => {
                 await handlePatchAndConfirm(requirement)
               }}
               onExpand={() => setDetailsOpen(true)}
             />
+          )}
+
+          {/* 没有提问/确认可出时（解析中 / 生成中 / 已出报告），思考单独成一条消息 */}
+          {!questionField && !showConfirmBar && !cardLocked && (
+            <div className="wb-message wb-reveal">
+              <div className="wb-msg-avatar agent">A</div>
+              <div className="wb-bubble wb-bit-bubble">
+                <TracePanel entries={timeline} note={timelineNote} running={busy || sending} />
+              </div>
+            </div>
+          )}
+
+          {requirement && showCard && detailsOpen && !cardLocked && (
+            // 详情是「一次性查看」：给一个明确的收回入口，否则用户会被大卡困住
+            <div className="wb-detail-back">
+              <button
+                type="button"
+                className="wb-quiet-btn"
+                onClick={() => setDetailsOpen(false)}
+              >
+                收起详情 ↑
+              </button>
+            </div>
           )}
 
           {requirement && showCard && (
@@ -778,21 +814,13 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {/* 2026-11-02：状态区（LLM 在干什么）放在卡片下方——此前它渲染在需求卡
-              上方，用户看到「进度条 → 卡 → 报告」这种反直觉顺序。 */}
+          {/* 状态文案只在「没有专属消息」的阶段出现：parsing 已由思考那条消息承载，
+              awaiting_* 由提问/确认消息承载，再说一遍就是重复。 */}
           {casualReply && <AgentBubble markdown={casualReply} />}
-          {phase !== 'idle' && !casualReply && agentCopy(phase) && (
+          {phase !== 'idle' && !casualReply && agentCopy(phase) &&
+            phase !== 'parsing' && !awaitingCard && (
             <AgentBubble markdown={agentCopy(phase)} />
           )}
-
-          {/* 2026-11-04（plan trace-visible-reasoning）：执行过程面板——把 Agent 每一步
-              摊开（安全校验 → 识别意图 → 解析需求 → 口径预览 → 规划 → 生成/校验/执行 SQL
-              → 评估/诊断 → 成文），中断/停止/超时/重连都在头部说明，不让人对着转圈猜。 */}
-          <TracePanel
-            entries={timeline}
-            note={timelineNote}
-            running={busy || sending || confirming}
-          />
 
           {phase === 'parsing' && <ParsingCard onStop={handleStopParsing} />}
           {phase === 'error' && canRetryFailedAction({ phase, error }) && (

@@ -1231,3 +1231,105 @@
   line-height: 1.5;
   word-break: break-word;
 }
+
+.wb-detail-back {
+  max-width: 860px;
+  margin: 0 0 8px 41px;
+  display: flex;
+  justify-content: flex-end;
+}
+@media (max-width: 880px) {
+  .wb-detail-back { margin-left: 0; }
+}
+
+/* ---------- 需求澄清/确认：作为普通助手消息（2026-11-04） ---------- */
+/* 用户明确要求「不要卡片、就是对话」：这里复用 .wb-message / .wb-bubble 的视觉，
+   只在气泡里放可点选项与一个确认按钮。 */
+.wb-ask-bubble { display: flex; flex-direction: column; gap: var(--sp-s); max-width: 720px; }
+.wb-ask-text { margin: 0; font-size: 13px; color: var(--ink); }
+.wb-ask-options { display: flex; flex-wrap: wrap; gap: var(--sp-s); }
+.wb-ask-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 13px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-m);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+.wb-ask-option:hover:not(:disabled) { border-color: var(--teal); background: var(--teal-pale); }
+.wb-ask-option:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.wb-ask-option:disabled { opacity: 0.55; cursor: default; }
+.wb-ask-option-label { font-weight: 600; }
+.wb-ask-option-hint { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.wb-ask-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wb-ask-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--teal-soft);
+  color: var(--teal-deep);
+  font-size: 12px;
+}
+.wb-ask-foot { display: flex; align-items: center; gap: var(--sp-m); margin-top: var(--sp-xs); }
+.wb-ask-confirm { align-self: flex-start; }
+.wb-ask-link {
+  border: none;
+  background: transparent;
+  color: var(--teal-deep);
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+}
+.wb-ask-note { font-size: 11px; color: var(--muted); }
+
+/* ---------- 「思考」= 助手消息里的一行摘要（2026-11-04 返工） ---------- */
+/* 用户要求：一整个、不要卡片、太占地方。这里没有边框/缩进，只有一行可展开摘要。 */
+.wb-think { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--sp-s); }
+.wb-think-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.wb-think-toggle:hover { color: var(--teal-deep); }
+.wb-think.is-running .wb-think-toggle { color: var(--amber); }
+.wb-think-arrow { font-size: 10px; }
+.wb-think-note { font-size: 11px; color: var(--amber); line-height: 1.5; }
+.wb-think-list {
+  margin: 2px 0 0;
+  padding: 0 0 0 10px;
+  list-style: none;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.wb-think-step {
+  display: grid;
+  grid-template-columns: 12px auto auto 1fr;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.wb-think-icon { color: var(--faint); }
+.wb-think-icon.is-success { color: var(--teal); }
+.wb-think-icon.is-error { color: var(--red); }
+.wb-think-icon.is-running { color: var(--amber); }
+.wb-think-name { color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+.wb-think-status { color: var(--faint); font-size: 10px; white-space: nowrap; }
+.wb-think-detail { color: var(--muted); overflow-wrap: anywhere; }
+.wb-bit-bubble { display: flex; flex-direction: column; }

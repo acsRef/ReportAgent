@@ -25,7 +25,10 @@ function makeCard(overrides: Partial<RequirementCard> = {}): RequirementCard {
   }
 }
 
-function renderBar(card: RequirementCard, extra: { changeNote?: string | null; busy?: boolean } = {}) {
+function renderBar(
+  card: RequirementCard,
+  extra: { changeNote?: string | null; busy?: boolean; trace?: React.ReactNode } = {},
+) {
   const onConfirm = vi.fn()
   const onExpand = vi.fn()
   render(
@@ -35,35 +38,36 @@ function renderBar(card: RequirementCard, extra: { changeNote?: string | null; b
       onConfirm={onConfirm}
       onExpand={onExpand}
       busy={extra.busy ?? false}
+      trace={extra.trace}
     />,
   )
   return { onConfirm, onExpand }
 }
 
-describe('ConfirmBar — 槽位问完后的紧凑确认条', () => {
-  it('一行摘要显示已确认的时间/粒度/口径/范围/方法', () => {
+describe('ConfirmBar — 一条助手消息做确认（2026-11-04 返工）', () => {
+  it('先说「我按下面这些执行」，再列参数小结', () => {
     renderBar(makeCard())
 
-    expect(screen.getByText('需求已明确')).toBeTruthy()
+    expect(screen.getByText('需求清楚了，我按下面这些执行：')).toBeTruthy()
     for (const text of ['2024年', '按周', '净销售额', '华东', '趋势分析']) {
       expect(screen.getByText(text)).toBeTruthy()
     }
   })
 
-  it('「确认并生成报告」触发 onConfirm，「展开详情」触发 onExpand', () => {
+  it('「确认并生成报告」触发 onConfirm，「需求详情」触发 onExpand', () => {
     const { onConfirm, onExpand } = renderBar(makeCard())
 
     fireEvent.click(screen.getByText('确认并生成报告'))
-    fireEvent.click(screen.getByText('展开详情'))
+    fireEvent.click(screen.getByText('需求详情'))
 
     expect(onConfirm).toHaveBeenCalledTimes(1)
     expect(onExpand).toHaveBeenCalledTimes(1)
   })
 
-  it('补充轮的变化说明挂在确认条上', () => {
+  it('补充轮的变更说明直接画进这句话里（不再是另一块提示条）', () => {
     renderBar(makeCard(), { changeNote: '数据范围 → 华东' })
 
-    expect(screen.getByText('↻ 数据范围 → 华东')).toBeTruthy()
+    expect(screen.getByText('已按你的补充更新：数据范围 → 华东')).toBeTruthy()
   })
 
   it('busy 时确认按钮禁用（避免重复 PATCH/confirm）', () => {
@@ -74,7 +78,7 @@ describe('ConfirmBar — 槽位问完后的紧凑确认条', () => {
     expect(onConfirm).not.toHaveBeenCalled()
   })
 
-  it('没有任何可摘要字段时给出兜底文案', () => {
+  it('没有可摘要字段时只出这句话与按钮', () => {
     renderBar(makeCard({
       time_range: null,
       granularity: null,
@@ -83,6 +87,14 @@ describe('ConfirmBar — 槽位问完后的紧凑确认条', () => {
       analysis_methods: [],
     }))
 
-    expect(screen.getByText('按你的问题直接分析')).toBeTruthy()
+    expect(screen.getByText('需求清楚了，我按下面这些执行：')).toBeTruthy()
+    expect(screen.getByText('确认并生成报告')).toBeTruthy()
+  })
+
+  it('思考过程与确认在同一条消息里（trace 插槽）', () => {
+    renderBar(makeCard(), { trace: <span>思考了 2 步 · 3.0s</span> })
+
+    expect(screen.getByText('思考了 2 步 · 3.0s')).toBeTruthy()
+    expect(screen.getAllByText('A')).toHaveLength(1)
   })
 })
