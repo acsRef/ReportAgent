@@ -67,21 +67,34 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         "\n- granularity：用户说「每个月/按月/每周/按季度」时必须输出对应值；"
         "完全不涉及时间分组时输出 null——**不要默认填 month**"
         "\n- comparison：是否要同比/环比/指定基线；不需要则 none"
-        "\n\n【分析角度（最重要，2026-11-03 重写）】"
+        "\n- detail_level：用户要「逐条/明细/原始数据/详细数据/把行给我」→ detail；"
+        "要汇总/趋势/排名/对比 → aggregate；完全没提 → null（沿用上一轮，不要猜）。"
+        "\n  注意：「那个月的**数据详细图**」= detail（他要看的是那一个月的每一行，不是一个月度汇总）。"
+        "\n【分析角度（最重要，2026-11-03 重写；2026-11-04 补「说清楚了就别问」）】"
         "\n1. 先读「可用表结构」里**真实存在的字段**，再判断哪里不清楚。"
         "\n2. `analysis_methods` 只在用户**明确表达**分析角度时才允许非空："
         "「趋势/走势/变化」→ trend_analysis；「对比/排名/占比」→ group_compare；"
         "「异常/波动」→ anomaly_detection。用户没表达 → 必须是 []，"
         "并在 clarifications 里追问「分析角度」。**绝不允许默认填 trend_analysis**。"
-        "\n3. 缺口只能来自「用户没说、且字段里存在多种合理选择」："
+        "\n3. 【哪些算「已经说清楚」，一律不许再问 analysis_intent】"
+        "\n   - 点名了**具体时间点/区间**：「2024年7月」「上个月」「第7周」；"
+        "\n   - 要**明细/逐条/原始数据/详细数据**（这类是「把行给我」，不是「哪种视角」）；"
+        "\n   - 点名了**极值那一期**：「销售额最高的月份」「最少的那一周」「哪天卖得最好」"
+        "「把最差的那个月给我」；"
+        "\n   - 点名了对比对象（「华东和华南」「各区域」）或具体维度（「各品类」）。"
+        "\n   以上情况：把对应信息写进 time_range / granularity / target_metrics / "
+        "dimensions，clarifications 里**不要**出现 analysis_intent。"
+        "\n   只有用户**真的没给角度**（例如「看一下今年的销售情况」「分析下销售」）时，"
+        "才追问 analysis_intent——而且选项必须贴着这句话里的字段，不要套模板。"
+        "\n4. 缺口只能来自「用户没说、且字段里存在多种合理选择」："
         "analysis_intent（总览/按月趋势/区域对比/品类对比/明细）、metric（一词多口径）、"
         "time_range、granularity、scope。"
-        "\n4. 每条 clarification 必须给：question（面向用户的中文问句，≤30 字，"
+        "\n5. 每条 clarification 必须给：question（面向用户的中文问句，≤30 字，"
         "不要只写「指标」「范围」）、options（2-4 个，label ≤12 字）、"
         "options[].value 用「前缀:值」编码（intent:overview / intent:trend / "
         "intent:compare_region / intent:compare_category / intent:detail / "
         "metric:<字段> / time:<范围> / scope:<取值>）、options[].column 写依据的真实字段名。"
-        "\n5. 严禁给出表结构里不存在的列；想不出 2 个候选就说明它不歧义，不要列。"
+        "\n6. 严禁给出表结构里不存在的列；想不出 2 个候选就说明它不歧义，不要列。"
     ),
     # --- APPENDIX（按需注入，见 builder） -----------------------------------
     "rules_dictionary": (
@@ -117,13 +130,14 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
         '\n  "target_metrics": ["order_amount"],'
         '\n  "time_range": "2024年" | null,'
         '\n  "granularity": "month" | null,'
+        '\n  "detail_level": "detail" | "aggregate" | null,'
         '\n  "scope": ["华东"] | [],'
         '\n  "dimensions": ["时间", "区域"],'
         '\n  "analysis_methods": [],'
         '\n  "confidence": 0.85,'
         '\n  "clarifications": ['
         '\n    {"key": "analysis_intent",'
-        '\n     "question": "你想看2024年销售情况的哪种视角？",'
+        '\n     "question": "<只在用户真的没说角度时才给，否则这一段整段删掉>",'
         '\n     "options": ['
         '\n       {"label": "全年总览", "value": "intent:overview", "column": "fact_orders.order_amount"},'
         '\n       {"label": "按月趋势", "value": "intent:trend", "column": "dim_date.month"},'
@@ -143,13 +157,16 @@ REQUIREMENT_PARSE_V1: dict[str, str] = {
     # --- CHECK --------------------------------------------------------------
     "self_check": (
         "【输出前自检（逐条确认，任一条不成立就改）】"
-        "\n1. 用户没表达分析角度时，我是否留空 analysis_methods 并给了 analysis_intent 追问？"
+        "\n1. 用户**没说**分析角度时，我是否留空 analysis_methods 并给了 analysis_intent 追问？"
+        "\n   反向也要自检：用户已经说了具体时间点 / 明细 / 极值那一期 / 对比对象，"
+        "我是不是还留着 analysis_intent 追问？（有就删掉——问已经回答过的问题是缺陷）"
         "\n2. trend / compare 的判断，是否有真实存在的时间列 / 维度列支撑？"
         "\n3. 每条 clarification 的选项，是否都引用了可用表结构里存在的字段？"
         "\n4. target_metrics 是否都能对上业务口径？对不上的，是否走了澄清而不是臆造？"
         "\n5. time_range 是否含年份（「今年」必须按当前日期换算）？"
         "\n6. 明细（detail）是否与聚合/分组互相矛盾？"
         "\n7. 我有没有把「模型推断」写成用户明确说的内容？"
+        "\n8. 我给出的问题，是不是把用户原话里已经说了的东西又问了一遍？"
     ),
     # --- FORBIDDEN ----------------------------------------------------------
     "safety_policy": (

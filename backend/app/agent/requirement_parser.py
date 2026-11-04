@@ -454,6 +454,12 @@ _DETAIL_PATTERNS = re.compile(
 _AGGREGATE_PATTERNS = re.compile(r"汇总|合计|总计|趋势|同比|环比|占比|排名")
 
 
+def _normalize_detail_level_value(raw: object) -> str | None:
+    """模型自己给的 detail_level（2026-11-04：它也想表达「这是明细」时别丢）。"""
+    text = str(raw or "").strip().lower()
+    return text if text in ("detail", "aggregate") else None
+
+
 def _normalize_detail_level(user_query: str) -> str | None:
     """从用户原话识别「要明细还是要汇总」；都没说则返回 None（沿用上一轮）。"""
     text = str(user_query or "")
@@ -466,44 +472,84 @@ def _normalize_detail_level(user_query: str) -> str | None:
 
 # 「最高/最低的那一期」（2026-11-04，plan 2026-11-04-top-period-detail-intent）。
 # 用户说「2024 年里销售额最多的那个月的明细」——这是一次**选期**，不是「哪种视角」。
-# 允许中间夹「的 / 那个 / 这个 / 一 / 个」；单位必出现，否则不认（避免「最高的销售额」
-# 这种只要一个数、不选期的问法被误判）。
-_TOP_PERIOD_MAX_RE = re.compile(
-    r"(?:最多|最高|最大|峰值|最火|最好)[^，。；\s]{0,4}?"
-    r"(?:那个|这个|哪一?个?|一|的)?\s*(月份|月|周|日|天|季度|年)"
-)
-_TOP_PERIOD_MIN_RE = re.compile(
-    r"(?:最少|最低|最小|最差|最冷)[^，。；\s]{0,4}?"
-    r"(?:那个|这个|哪一?个?|一|的)?\s*(月份|月|周|日|天|季度|年)"
-)
-
+#
+# 2026-11-04 返工（用户：「我的问法挺正常的，为什么就是不对」）：原来只认
+# 「最多/最高/最大/最低/最少/最差 + 紧跟着的单位」，于是
+# 「把**最差**的那个月的明细给我看看」这种再正常不过的话反而不认——
+# 单位前面隔了「的那个」，或者极值词写在单位后面（「哪个月最差」）。
+# 现在两边都扫：极值词在前（窗口内找单位）+ 单位在前（窗口内找极值词），
+# 并补上口语词（卖得最好/最不好、旺季/淡季、峰值、最惨、最旺…）。
+_TOP_PERIOD_UNIT_RE = r"(月份|月|星期|礼拜|周|日|天|季度|季)"
 _TOP_PERIOD_UNITS: dict[str, str] = {
     "月份": "month", "月": "month",
-    "周": "week",
+    "周": "week", "星期": "week", "礼拜": "week",
     "日": "day", "天": "day",
-    "季度": "quarter",
-    "年": "year",
+    "季度": "quarter", "季": "quarter",
 }
+# 说明：刻意**不认「年」**——「2024年销售额最高的数值是多少」里的「年」是年份不是选期，
+# 「最高的那一年」这种诉求在单年数据集里也不成立；把「年」当单位会误判成选期。
+_TOP_PERIOD_MAX_WORDS = (
+    "最多", "最高", "最大", "峰值", "最旺", "旺季", "最好", "最火", "最热", "卖得最好",
+)
+_TOP_PERIOD_MIN_WORDS = (
+    "最少", "最低", "最小", "最差", "最惨", "淡季", "最冷", "最不好", "卖得最差",
+)
+# 极值词之后最多隔多少个非标点字符再找单位（「最多的那个月」= 4 个字符）
+_TOP_PERIOD_WINDOW = 8
 
 
 def _top_period_from_query(user_query: str) -> dict | None:
     """从原话识别「按哪一期取最高/最低」：{'direction': max|min, 'unit': month|...}。
 
-    「2024年销售额最高的月份」「最多那一周」都算；「最高的销售额」不算（没提期）。
+    两种语序都认（用户怎么说话就怎么认）：
+    - 「销售额**最高的**那个**月**」/「把**最差**的那个**月**的明细给我看看」；
+    - 「哪**个月**最差」/「哪**天**卖得最好」。
+
+    不认「最高的销售额」（只有极值、没提期——那是要一个数，不是选期）。
     """
     text = str(user_query or "")
     if not text:
         return None
-    for pattern, direction in (
-        (_TOP_PERIOD_MAX_RE, "max"),
-        (_TOP_PERIOD_MIN_RE, "min"),
-    ):
-        match = pattern.search(text)
-        if not match:
-            continue
-        unit = _TOP_PERIOD_UNITS.get(match.group(1))
-        if unit:
-            return {"direction": direction, "unit": unit}
+
+    candidates: list[tuple[int, str, str]] = []   # (位置, 方向, 单位)
+
+    def _push(position: int, word: str, direction: str) -> None:
+        # 极值词之后：窗口内找单位
+        tail = text[position + len(word): position + len(word) + _TOP_PERIOD_WINDOW]
+        tail = re.split(r"[，。；！？,.;!?]", tail)[0]
+        unit_match = re.search(_TOP_PERIOD_UNIT_RE, tail)
+        if unit_match:
+            unit = _TOP_PERIOD_UNITS.get(unit_match.group(1))
+            if unit:
+                candidates.append((position, direction, unit))
+                return
+        # 单位在极值词之前：窗口内找单位
+        head = text[max(0, position - _TOP_PERIOD_WINDOW): position]
+        head = re.split(r"[，。；！？,.;!?]", head)[-1]
+        unit_matches = list(re.finditer(_TOP_PERIOD_UNIT_RE, head))
+        # 「2024年」这种数字+单位是年份，不是选期，跳过
+        unit_matches = [
+            m for m in unit_matches
+            if not (m.start() > 0 and head[m.start() - 1].isdigit())
+        ]
+        if unit_matches:
+            unit = _TOP_PERIOD_UNITS.get(unit_matches[-1].group(1))
+            if unit:
+                candidates.append((unit_matches[-1].start(), direction, unit))
+
+    for word in _TOP_PERIOD_MAX_WORDS:
+        for match in re.finditer(re.escape(word), text):
+            _push(match.start(), word, "max")
+    for word in _TOP_PERIOD_MIN_WORDS:
+        for match in re.finditer(re.escape(word), text):
+            _push(match.start(), word, "min")
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    _, direction, unit = candidates[0]
+    return {"direction": direction, "unit": unit}
+
     return None
 
 _CN_MONTHS = {
@@ -978,7 +1024,11 @@ def parse_requirement(
     explicit_granularity = _granularity_from_query(user_query)
     if explicit_granularity:
         granularity = explicit_granularity
-    detail_level = _normalize_detail_level(user_query)
+    # 明细 / 汇总：**用户原话优先**，其次是模型自己给的值（2026-11-04：prompt 里已让模型
+    # 输出 detail_level；之前只认代码词表，模型看懂了也会被丢掉）。
+    detail_level = _normalize_detail_level(user_query) or _normalize_detail_level_value(
+        parsed.get("detail_level")
+    )
 
     # status: complete requires NO missing fields AND all assumptions
     # explicitly accepted. If the LLM left assumptions unresolved
