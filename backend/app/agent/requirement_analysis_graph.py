@@ -333,6 +333,61 @@ async def _persist_draft(state: RequirementAnalysisState) -> dict:
     }
 
 
+@traced_node("requirement_preview")
+async def _requirement_preview(state: RequirementAnalysisState) -> dict:
+    """口径歧义时，给澄清选项补上**真实数值**（plan 2026-11-04-requirement-slot-contract Phase 2）。
+
+    只在「卡上有 ≥2 个口径候选」时触发：把每个候选的当年总量算出来写进
+    `RequirementOption.hint`，用户就能做识别题而不是填空题。
+
+    契约边界（CLAUDE.md §4.1）：SQL 由 `metrics.yaml` 目录拼装（无 LLM、无自由列名），
+    只服务澄清、不产出数据表；任何失败一律**静默退回纯文字选项**（不阻塞澄清、不显示假数）。
+    """
+    card = state.get("requirement_card")
+    if card is None:
+        return {}
+    metric_field = next((mf for mf in card.missing_fields if mf.key == "metric"), None)
+    if metric_field is None or len(metric_field.options) < 2:
+        return {}
+
+    from app.knowledge import registry as knowledge
+
+    names = [
+        opt.value.split(":", 1)[1]
+        for opt in metric_field.options
+        if opt.value.startswith("metric:")
+    ]
+    metrics = [m for m in (knowledge.resolve_metric(n) for n in names) if m is not None]
+    if len(metrics) < 2:
+        return {}
+
+    from app.services.metric_preview_service import format_hint, preview_metrics
+
+    result = await preview_metrics(
+        metrics, time_range=card.time_range, scope=list(card.scope or []),
+    )
+    if not result.ok:
+        return {}
+
+    by_name = {item.name: item for item in result.items}
+    options = []
+    for opt in metric_field.options:
+        name = opt.value.split(":", 1)[1] if opt.value.startswith("metric:") else ""
+        metric = knowledge.resolve_metric(name) if name else None
+        item = by_name.get(name)
+        hint = opt.hint
+        if metric is not None and item is not None:
+            hint = format_hint(item, metric, base_note=metric.note or opt.hint or "")
+        options.append(opt.model_copy(update={"hint": hint}))
+    new_field = metric_field.model_copy(update={"options": options})
+    new_card = card.model_copy(update={
+        "missing_fields": [
+            new_field if mf.key == "metric" else mf for mf in card.missing_fields
+        ],
+    })
+    return {"requirement_card": new_card}
+
+
 # --- Graph build ----------------------------------------------------------
 
 
@@ -351,13 +406,16 @@ def build_requirement_analysis_graph():
     workflow.add_node("interface_requirement", _interface_requirement)
     workflow.add_node("data_agent", _data_agent)
     workflow.add_node("requirement_parse", _requirement_parse)
+    # 2026-11-04：口径歧义时给澄清选项补真实数值（不修改语义、失败即跳过）
+    workflow.add_node("requirement_preview", _requirement_preview)
     workflow.add_node("persist_draft", _persist_draft)
 
     workflow.set_entry_point("security_guard")
     workflow.add_conditional_edges("security_guard", _route_security)
     workflow.add_conditional_edges("classify_intent", _route_intent)
     workflow.add_edge("data_agent", "requirement_parse")
-    workflow.add_edge("requirement_parse", "persist_draft")
+    workflow.add_edge("requirement_parse", "requirement_preview")
+    workflow.add_edge("requirement_preview", "persist_draft")
     workflow.add_edge("interface_requirement", "persist_draft")
     workflow.add_edge("casual_reply", END)
     workflow.add_edge("persist_draft", END)
