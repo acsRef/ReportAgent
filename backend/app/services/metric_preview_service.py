@@ -232,6 +232,189 @@ def build_preview_sql(
     return sql
 
 
+# --- 最高/最低的那一期（2026-11-04，plan top-period-detail-intent） ------------
+
+# 选期是执行链的关键一步，不像澄清预览那样可以随便退回——给更宽的预算。
+TOP_PERIOD_TIMEOUT_S = 6.0
+
+
+@dataclass(frozen=True)
+class TopPeriodResult:
+    """「销售额最高的那一期」的确定性解析结果。"""
+
+    ok: bool
+    unit: str = "month"
+    # 人话标签：`2024年7月` / `2024年第41周`
+    label: str = ""
+    # 直接可用的 SQL 过滤条件（例如 `dim_date.year = 2024`、`dim_date.month = 7`）
+    filters: tuple[str, ...] = ()
+    # 期列 + 期值（供 SQL 校验判断「有没有真的只取这一期」）
+    period_column: str = ""
+    period_value: str = ""
+    value: Decimal | None = None
+    reason: str = ""
+
+
+_TOP_PERIOD_ORDER = {"max": "DESC", "min": "ASC"}
+
+
+def build_top_period_sql(
+    metric: MetricDef,
+    *,
+    unit: str,
+    direction: str,
+    time_range: str | None,
+    scope: list[str] | None = None,
+    today: datetime.date | None = None,
+) -> tuple[str, str] | None:
+    """注册表指标 → 一条「按 unit 聚合、取极值那一期」的查询。
+
+    返回 `(sql, bucket_column)`；形状不支持时返回 None（fail-open，交回 LLM 两段式）。
+    口径表达式 / 时间桶列 / JOIN 链路全部来自 `metrics.yaml` + `schema_hints.yaml`。
+    """
+    bounds = resolve_period_bounds(time_range, today)
+    if bounds is None:
+        return None
+    base = _base_fact(metric.expr, metric.joins)
+    if not base:
+        return None
+    bucket = knowledge.time_bucket_column(unit)
+    if not bucket:
+        return None
+
+    hints = knowledge._schema_hints()  # noqa: SLF001
+    time_cfg = hints.get("time_dimension") or {}
+    dim_table = str(time_cfg.get("table") or "")
+    date_column = str(time_cfg.get("date_column") or "")
+    fk_column = (time_cfg.get("default_join") or {}).get(base)
+    if not dim_table or not date_column or not fk_column:
+        return None
+
+    joins = [
+        f"LEFT JOIN {dim_table} ON {dim_table}.{date_column} = {base}.{fk_column}",
+        *metric.joins,
+    ]
+    where = [
+        f"{dim_table}.{date_column} >= '{bounds[0].isoformat()}'",
+        f"{dim_table}.{date_column} < '{bounds[1].isoformat()}'",
+    ]
+    regions = [s for s in (scope or []) if s and s != "ALL"]
+    if regions:
+        chains = _parse_fk_chains()
+        store_fk = chains.get(base, {}).get("dim_store")
+        region_column = knowledge.dimension_column("区域")
+        if not store_fk or not region_column:
+            return None
+        joins.append(
+            f"LEFT JOIN dim_store ON dim_store.{store_fk} = {base}.{store_fk}"
+        )
+        quoted = ", ".join("'" + r.replace("'", "''") + "'" for r in regions)
+        where.append(f"{region_column} IN ({quoted})")
+
+    order = _TOP_PERIOD_ORDER.get(direction, "DESC")
+    year_column = knowledge.time_bucket_column("year") or f"{dim_table}.year"
+    sql = (
+        f"SELECT {year_column} AS years, {bucket} AS period, {metric.expr} AS value\n"
+        f"FROM {base}\n"
+        + "\n".join(joins)
+        + "\nWHERE " + " AND ".join(where)
+        + f"\nGROUP BY {year_column}, {bucket}"
+        + f"\nORDER BY value {order}\nLIMIT 1"
+    )
+    return sql, bucket
+
+
+def _period_filters(unit: str, year: str, period: str, bucket: str) -> tuple[str, ...]:
+    """(期值) → 可直接写进 SQL 的确定性过滤条件。"""
+    table = knowledge._schema_hints().get("time_dimension", {}).get("table") or ""  # noqa: SLF001
+    prefix = f"{table}." if table else ""
+    year_column = knowledge.time_bucket_column("year") or f"{prefix}year"
+    if unit == "day":
+        date_column = knowledge.time_bucket_column("day") or bucket
+        return (f"{date_column} = '{period}'",)
+    if unit == "year":
+        return (f"{year_column} = {period}",)
+    unit_column = knowledge.time_bucket_column(unit) or bucket
+    return (f"{year_column} = {year}", f"{unit_column} = {period}")
+
+
+def _period_label(unit: str, year: str, period: str) -> str:
+    if unit == "month":
+        return f"{year}年{int(float(period))}月"
+    if unit == "week":
+        return f"{year}年第{int(float(period))}周"
+    if unit == "quarter":
+        return f"{year}年第{int(float(period))}季度"
+    if unit == "year":
+        return f"{period}年"
+    return str(period)
+
+
+async def resolve_top_period(
+    metric: MetricDef | None,
+    *,
+    unit: str,
+    direction: str,
+    time_range: str | None,
+    scope: list[str] | None = None,
+    timeout: float = TOP_PERIOD_TIMEOUT_S,
+    today: datetime.date | None = None,
+) -> TopPeriodResult:
+    """先算出「销售额最高/最低的那一期」，再把它变成确定性过滤条件。
+
+    为什么要自己算而不是让 LLM 写两段式 SQL：实测模型会写成
+    `SELECT ... ; SELECT ...` 两条语句（sqlglot 直接判语法错），或者干脆退回全区间汇总。
+    选期是**确定性事实**，算一次比赌采样可靠。
+    """
+    if metric is None:
+        return TopPeriodResult(ok=False, reason="no_metric")
+    built = build_top_period_sql(
+        metric, unit=unit, direction=direction, time_range=time_range,
+        scope=scope, today=today,
+    )
+    if built is None:
+        return TopPeriodResult(ok=False, unit=unit, reason="unsupported_shape")
+    sql, bucket = built
+
+    from app.tools import sql_tools
+
+    try:
+        raw = await run_with_timeout(asyncio.to_thread(sql_tools.execute_sql, sql), timeout)
+    except asyncio.TimeoutError:
+        logger.info("top-period resolve timeout: %s", unit)
+        return TopPeriodResult(ok=False, unit=unit, reason="timeout")
+    except Exception as exc:  # noqa: BLE001 - 解析失败退回两段式，不阻塞执行
+        logger.warning("top-period resolve failed: %s", exc)
+        return TopPeriodResult(ok=False, unit=unit, reason="error")
+
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return TopPeriodResult(ok=False, unit=unit, reason="bad_payload")
+    if not isinstance(payload, dict) or payload.get("error"):
+        return TopPeriodResult(ok=False, unit=unit, reason="query_error")
+    rows = payload.get("rows") or []
+    if not rows:
+        return TopPeriodResult(ok=False, unit=unit, reason="empty")
+
+    row = rows[0] if isinstance(rows[0], dict) else {}
+    year = str(row.get("years") if row.get("years") is not None else "")
+    period = str(row.get("period") if row.get("period") is not None else "")
+    if not period:
+        return TopPeriodResult(ok=False, unit=unit, reason="empty")
+    from app.utils.numbers import to_decimal
+
+    return TopPeriodResult(
+        ok=True,
+        unit=unit,
+        label=_period_label(unit, year, period),
+        filters=_period_filters(unit, year, period, bucket),
+        period_column=bucket,
+        period_value=period,
+        value=to_decimal(row.get("value")),
+    )
+
+
 # --- 执行（fail-open） ------------------------------------------------------
 
 

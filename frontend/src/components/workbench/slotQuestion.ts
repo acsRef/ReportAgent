@@ -132,6 +132,22 @@ export function methodLabel(method: string): string {
   return METHOD_TEXT[method] ?? method
 }
 
+/**
+ * 最高/最低的那一期 → 一句人话（2026-11-04，plan top-period-detail-intent）。
+ *
+ * 用户说「我只要2024年里最多月份的那个月的明细」时，之前界面上看不到「它听懂了
+ * 哪一期」——只有一句「需求清楚了」，加上一个「哪种视角？」的追问。现在把这条
+ * 明确画出来：`销售额最高的月份`。
+ */
+export function topPeriodText(card: RequirementCard | null): string | null {
+  const top = card?.top_period
+  if (!top) return null
+  const unit = GRANULARITY_TEXT[top.unit] ?? top.unit
+  const word = top.direction === 'min' ? '最低' : '最高'
+  const metric = (top.metric ?? '').trim()
+  return metric ? `${metric}${word}的${unit.replace(/^按/, '')}` : `${word}的${unit}`
+}
+
 export function confirmChips(card: RequirementCard | null): ConfirmChip[] {
   if (!card) return []
   const chips: ConfirmChip[] = []
@@ -139,6 +155,8 @@ export function confirmChips(card: RequirementCard | null): ConfirmChip[] {
   if (card.granularity) {
     chips.push({ key: 'granularity', text: GRANULARITY_TEXT[card.granularity] ?? card.granularity })
   }
+  const topPeriod = topPeriodText(card)
+  if (topPeriod) chips.push({ key: 'top_period', text: topPeriod })
   if (card.target_metrics?.length) {
     chips.push({ key: 'metric', text: card.target_metrics.join('、') })
   }

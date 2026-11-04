@@ -86,6 +86,25 @@ def card_guard_text(card_dict: dict) -> str:
     return "\n".join(parts)
 
 
+def _normalize_metric_name(raw: str) -> str:
+    """澄清选项里的口径 → 注册表的**业务中文名**（order_amount → 销售额）。
+
+    为什么必须在这一层做：模型自己生成的澄清选项常写物理列名
+    （`metric:order_amount`），一旦原样存进 `target_metrics`，下一轮补充时
+    `resolve_metric_slot(..., inherited=order_amount)` 认不出来 → 用户被**重复问口径**
+    （2026-11-04 实测：追问「最多月份的那个月明细」时又问了一次「用哪个口径？」）。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return text
+    try:
+        from app.agent.requirement_parser import _display_metric
+
+        return _display_metric(text)
+    except Exception:  # noqa: BLE001 - 映射失败就保留原值，不影响其它路径
+        return text
+
+
 def _apply_intent(card_dict: dict, intent: str) -> None:
     """把「分析角度」确定性翻译成卡体字段（2026-11-03）。
 
@@ -169,7 +188,7 @@ async def patch_requirement(
         if isinstance(value, str) and value.startswith("intent:"):
             _apply_intent(card_dict, value.split(":", 1)[1])
         elif isinstance(value, str) and value.startswith("metric:"):
-            card_dict["target_metrics"] = [value.split(":", 1)[1]]
+            card_dict["target_metrics"] = [_normalize_metric_name(value.split(":", 1)[1])]
         elif isinstance(value, str) and value.startswith("time:"):
             card_dict["time_range"] = value.split(":", 1)[1]
         elif isinstance(value, str) and value.startswith("scope:"):
@@ -180,7 +199,7 @@ async def patch_requirement(
             card_dict["scope"] = sel if isinstance(sel, list) else [sel]
         elif key == "metric":
             metrics = sel if isinstance(sel, list) else [sel]
-            card_dict["target_metrics"] = metrics
+            card_dict["target_metrics"] = [_normalize_metric_name(str(m)) for m in metrics]
         elif key == "granularity":
             # 2026-10-28：粒度现在有卡体字段，不再塞进 dimensions 的「粒度:X」标签
             # （标签只能给 LLM 看，结构化字段才能进 _format_confirmed_requirement）。

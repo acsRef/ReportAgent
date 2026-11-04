@@ -333,6 +333,7 @@ def _anomaly_cross_dimension(user_query: str) -> str | None:
 
 def _apply_deterministic_intent(
     card: RequirementCard, kind: str, user_query: str = "",
+    top_period: dict | None = None,
 ) -> None:
     """把确定性判定的分析角度写进卡片（与 requirement_service._apply_intent 同语义）。
 
@@ -375,6 +376,30 @@ def _apply_deterministic_intent(
         card.detail_level = "detail"
         card.analysis_methods = []
         card.granularity = None
+    elif kind == "top_period":
+        # 2026-11-04（plan top-period-detail-intent）：「2024年里销售额最高的那个月的明细」
+        # 是一次**选期**，不是「哪种视角」。用户的说法优先于模型：模型这一轮把
+        # analysis_intent 判成 missing 并问「你想看哪种视角」，等于把说清楚的需求又丢了。
+        spec = top_period or _top_period_from_query(query) or {
+            "direction": "max", "unit": "month",
+        }
+        from app.models.requirement import RequirementTopPeriod
+
+        unit = str(spec.get("unit") or "month")
+        direction = str(spec.get("direction") or "max")
+        card.top_period = RequirementTopPeriod(direction=direction, unit=unit)  # type: ignore[arg-type]
+        # 选期本身就是「按这个单位聚合一次」，所以粒度必须落下来（否则 SQL 会按年分组）。
+        card.granularity = unit  # type: ignore[assignment]
+        # 选期 = 一次取极值，没有任何既有方法与之对应；继承上一轮的 anomaly_detection
+        # 只会让 Execution 又去做全区间异常检测。
+        card.analysis_methods = []
+        card.dimensions = ["时间"]
+        # 「那个月的**数据详细图**」= 明细；只说「最高的月份」则是该期汇总。
+        card.detail_level = "detail" if _DETAIL_PATTERNS.search(query) else None
+        if not card.time_range:
+            card.time_range = "今年"
+        if not card.target_metrics:
+            card.target_metrics = ["销售额"]
     elif kind == "anomaly":
         cross_dim = _anomaly_cross_dimension(query)
         # 用户原话里的粒度永远是第一位（「哪几天」= day、「各月」= month）。
@@ -418,7 +443,14 @@ _YEAR_RE = re.compile(r"(?:19|20)\d{2}")
 
 # 明细诉求（2026-11-03）：「给我这两个月的明细数据」此前没有任何字段承载，
 # SQL 仍 GROUP BY month 只出 2 行。这里做确定性识别，卡片带 detail_level。
-_DETAIL_PATTERNS = re.compile(r"明细|逐笔|逐条|原始数据|流水|每一笔|每笔")
+#
+# 2026-11-04（plan top-period-detail-intent）：用户原话「…那个月数据**详细图**」
+# 说得很清楚，但裸词表里没有「详细」，于是 detail_level 停在 aggregate、SQL 去聚合。
+# 只加「详细 + 数据/图」这类组合词——裸「详细」是叙述诉求（「详细讲一下」），不是明细。
+_DETAIL_PATTERNS = re.compile(
+    r"明细|逐笔|逐条|原始数据|流水|每一笔|每笔"
+    r"|详细图|明细图|详细数据|明细数据|数据详细|每一条|全部字段|所有字段|清单"
+)
 _AGGREGATE_PATTERNS = re.compile(r"汇总|合计|总计|趋势|同比|环比|占比|排名")
 
 
@@ -430,6 +462,50 @@ def _normalize_detail_level(user_query: str) -> str | None:
     if _AGGREGATE_PATTERNS.search(text):
         return "aggregate"
     return None
+
+
+# 「最高/最低的那一期」（2026-11-04，plan 2026-11-04-top-period-detail-intent）。
+# 用户说「2024 年里销售额最多的那个月的明细」——这是一次**选期**，不是「哪种视角」。
+# 允许中间夹「的 / 那个 / 这个 / 一 / 个」；单位必出现，否则不认（避免「最高的销售额」
+# 这种只要一个数、不选期的问法被误判）。
+_TOP_PERIOD_MAX_RE = re.compile(
+    r"(?:最多|最高|最大|峰值|最火|最好)[^，。；\s]{0,4}?"
+    r"(?:那个|这个|哪一?个?|一|的)?\s*(月份|月|周|日|天|季度|年)"
+)
+_TOP_PERIOD_MIN_RE = re.compile(
+    r"(?:最少|最低|最小|最差|最冷)[^，。；\s]{0,4}?"
+    r"(?:那个|这个|哪一?个?|一|的)?\s*(月份|月|周|日|天|季度|年)"
+)
+
+_TOP_PERIOD_UNITS: dict[str, str] = {
+    "月份": "month", "月": "month",
+    "周": "week",
+    "日": "day", "天": "day",
+    "季度": "quarter",
+    "年": "year",
+}
+
+
+def _top_period_from_query(user_query: str) -> dict | None:
+    """从原话识别「按哪一期取最高/最低」：{'direction': max|min, 'unit': month|...}。
+
+    「2024年销售额最高的月份」「最多那一周」都算；「最高的销售额」不算（没提期）。
+    """
+    text = str(user_query or "")
+    if not text:
+        return None
+    for pattern, direction in (
+        (_TOP_PERIOD_MAX_RE, "max"),
+        (_TOP_PERIOD_MIN_RE, "min"),
+    ):
+        match = pattern.search(text)
+        if not match:
+            continue
+        unit = _TOP_PERIOD_UNITS.get(match.group(1))
+        if unit:
+            return {"direction": direction, "unit": unit}
+    return None
+
 _CN_MONTHS = {
     "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
     "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
@@ -941,9 +1017,14 @@ def parse_requirement(
     # 2026-11-03 确定性优先：能从原话直接判定分析角度时，服务端拍板——
     # 丢掉模型多余的「你想看哪种视角」追问，并把 intent 落到卡体字段。
     # 「2024年各区域销售额」这类明确问法不该再多问一轮。
-    det_intent = _deterministic_intent(user_query)
+    # 2026-11-04：最高/最低的那一期（+是不是要明细）也走这条确定性通道——它比
+    # 「哪种视角」更具体，模型问那句话等于把说清楚的需求丢了。
+    top_period = _top_period_from_query(user_query)
+    det_intent = "top_period" if top_period else _deterministic_intent(user_query)
     if det_intent is not None:
-        _apply_deterministic_intent(card, det_intent, user_query=user_query)
+        _apply_deterministic_intent(
+            card, det_intent, user_query=user_query, top_period=top_period,
+        )
         card.missing_fields = [
             mf for mf in card.missing_fields if mf.key != "analysis_intent"
         ]
@@ -968,6 +1049,9 @@ def parse_requirement(
     # 卡片展示层规范化：物理列名 → 中文，维度去重（2026-11-03）
     card.target_metrics = [_display_metric(m) for m in card.target_metrics]
     card.dimensions = _display_dimensions(card.dimensions)
+    # 最高期用的口径跟卡体保持一致（中文名：chip 与 prompt 都读它）
+    if card.top_period is not None and card.target_metrics:
+        card.top_period.metric = str(card.target_metrics[0])
     # 补充轮常见说法「只看华东」：模型经常漏抽，这里确定性补上
     explicit_scope = _extract_scope_from_query(user_query)
     if explicit_scope:

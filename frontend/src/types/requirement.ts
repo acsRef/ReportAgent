@@ -60,6 +60,16 @@ export type RequirementGranularity = 'day' | 'week' | 'month' | 'quarter' | 'yea
 /** 展示粒度：detail = 逐条明细（不聚合）。镜像后端 RequirementDetailLevel。 */
 export type RequirementDetailLevel = 'aggregate' | 'detail'
 
+/**
+ * 最高/最低的那一期（2026-11-04，plan 2026-11-04-top-period-detail-intent）。
+ * 镜像后端 `RequirementTopPeriod`：direction=取极值方向，unit=按哪一期取。
+ */
+export interface RequirementTopPeriod {
+  direction: 'max' | 'min'
+  unit: RequirementGranularity
+  metric?: string | null
+}
+
 export interface RequirementCard {
   id: string
   version: number
@@ -70,6 +80,8 @@ export interface RequirementCard {
   granularity: RequirementGranularity | null
   /** 2026-11-03：明细/汇总。旧会话没有该字段 → 可选。 */
   detail_level?: RequirementDetailLevel | null
+  /** 2026-11-04：最高/最低的那一期。旧会话没有该字段 → 可选。 */
+  top_period?: RequirementTopPeriod | null
   scope: string[]
   dimensions: string[]
   analysis_methods: string[]

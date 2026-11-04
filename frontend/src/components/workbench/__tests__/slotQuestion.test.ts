@@ -5,6 +5,7 @@ import {
   pickQuestionField,
   pickNextQuestion,
   requirementUiMode,
+  topPeriodText,
 } from '../slotQuestion'
 import type { RequirementCard, RequirementMissingField } from '../../../types/requirement'
 
@@ -174,5 +175,32 @@ describe('requirementUiMode — 需求区该显示什么（含 409 回归钉子�
     expect(pickNextQuestion(openCard)?.key).toBe('metric')
     expect(pickNextQuestion(withAssumption)?.key).toBe('assumption:a1')
     expect(pickNextQuestion(doneCard)).toBeNull()
+  })
+})
+
+describe('topPeriodText — 「最高的那一期」要让人看见（plan top-period-detail-intent）', () => {
+  it('销售额最高的月份 → 一句人话', () => {
+    expect(topPeriodText(card({ top_period: { direction: 'max', unit: 'month', metric: '销售额' } })))
+      .toBe('销售额最高的月')
+  })
+
+  it('最低 + 周', () => {
+    expect(topPeriodText(card({ top_period: { direction: 'min', unit: 'week', metric: '订单数' } })))
+      .toBe('订单数最低的周')
+  })
+
+  it('没有选期 → null（旧卡不受影响）', () => {
+    expect(topPeriodText(card({ top_period: null }))).toBeNull()
+    expect(topPeriodText(null)).toBeNull()
+  })
+
+  it('确认条把选期作为 chip 摆出来', () => {
+    const chips = confirmChips(card({
+      time_range: '2024年',
+      granularity: 'month',
+      target_metrics: ['销售额'],
+      top_period: { direction: 'max', unit: 'month', metric: '销售额' },
+    }))
+    expect(chips.map((c) => c.text)).toContain('销售额最高的月')
   })
 })

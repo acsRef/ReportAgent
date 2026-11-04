@@ -64,6 +64,18 @@ class RequirementAssumption(BaseModel):
     alternatives: list[RequirementOption] = Field(default_factory=list)
 
 
+# 2026-11-04（plan 2026-11-04-top-period-detail-intent）：
+# 「2024年里销售额最高的那个月」这类问法——先选期、再取该期的数据/明细。
+# 之前卡片没有任何字段承载它，SQL 只能做全区间聚合（实测 v2 变成 GROUP BY year,region
+# 的一行汇总，用户要的「最高那周/那月」根本没出现）。
+class RequirementTopPeriod(BaseModel):
+    direction: Literal["max", "min"]
+    # 按哪一期取极值（月 / 周 / 日 / 季 / 年）
+    unit: RequirementGranularity
+    # 用哪个指标取极值（None = 注册表默认口径）
+    metric: str | None = None
+
+
 class RequirementCard(BaseModel):
     id: str
     version: int = Field(default=1, ge=1)
@@ -73,6 +85,8 @@ class RequirementCard(BaseModel):
     time_range: str | None = None
     granularity: RequirementGranularity | None = None
     detail_level: RequirementDetailLevel | None = None
+    # 「最高/最低的那一期」（2026-11-04）。为空 = 普通全区间查询。
+    top_period: RequirementTopPeriod | None = None
     scope: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     analysis_methods: list[str] = Field(default_factory=list)

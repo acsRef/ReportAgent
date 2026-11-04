@@ -289,6 +289,9 @@ class SQLAgentState(TypedDict, total=False):
     granularity: Optional[str]
     # 展示粒度：detail = 逐条明细（_plan 清空 dimensions/聚合）。
     detail_level: Optional[str]
+    # 最高/最低的那一期（2026-11-04）：{direction: max|min, unit: day|week|month|...,
+    # metric: 口径名}。为空 = 普通全区间查询。由父图从需求卡透传。
+    top_period: Optional[dict]
     # 指标白名单渲染结果（2026-11-03）：需求卡解析出的指标表达式，只渲染这些。
     # 为空时退回全量注册表（无卡片场景）。
     metric_hints: Optional[str]
@@ -619,6 +622,28 @@ def _generate_sql(state: SQLAgentState) -> dict:
             "直接 SELECT 原始列（日期、门店、品类、金额等）；"
             "按时间倒序；末尾加 LIMIT 200。"
         )
+    # 2026-11-04（top-period-detail-intent）：最高/最低的那一期必须在生成阶段就拆两步，
+    # 否则模型会把「最高的那一周」当成「整段区间的汇总」（实测 v2 = GROUP BY year,region 一行）。
+    top_period = state.get("top_period") or None
+    if top_period:
+        unit = str(top_period.get("unit") or "month")
+        unit_label = _GRANULARITY_DIM_LABELS.get(unit, unit)
+        word = "最高" if str(top_period.get("direction") or "max") == "max" else "最低"
+        if top_period.get("resolved"):
+            filters = " AND ".join(top_period.get("filters") or []) or (
+                f"{top_period.get('period_column') or unit} = {top_period.get('period_value')}"
+            )
+            prompt += (
+                f"\n\n【选期已算好（确定性）】{top_period.get('metric') or '指标'}{word}的"
+                f"{unit_label} = {top_period.get('label')}：把 `WHERE {filters}` 写进查询，"
+                f"只取这一期的数据；**禁止**再把全区间汇总一遍，也禁止按期 GROUP BY。"
+            )
+        else:
+            prompt += (
+                f"\n\n【必需结构：先选期、再取数】用户要的是{word}的那一{unit_label}："
+                f"必须先用 WITH 子句聚合选出那一期（GROUP BY 期 + ORDER BY <指标> DESC LIMIT 1），"
+                f"再只取该期的数据；明细模式下外层不许聚合。不许把全区间汇总一遍。"
+            )
     sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
     sql = extract_sql(sql)
     retry = state.get("retry_counters", {}) or {}
@@ -638,9 +663,92 @@ def _generate_sql(state: SQLAgentState) -> dict:
 
 _DETAIL_AGGREGATE_RE = re.compile(r"\b(SUM|AVG|COUNT|MIN|MAX)\s*\(", re.IGNORECASE)
 _DETAIL_GROUP_RE = re.compile(r"\bGROUP\s+BY\b", re.IGNORECASE)
+_TOP_PERIOD_LIMIT_RE = re.compile(r"\bLIMIT\s+1\b", re.IGNORECASE)
+_CTE_START_RE = re.compile(r"^\s*WITH\b", re.IGNORECASE)
 
 
-def _detail_contract_violation(sql: str) -> str | None:
+def _strip_cte_blocks(sql: str) -> str:
+    """去掉 `WITH x AS (...)` 这些 CTE 块，只留**最终查询**。
+
+    为什么需要：最高期的查询必须先在 CTE 里聚合选期（`ORDER BY SUM(...) DESC LIMIT 1`），
+    而明细模式又规定「禁止聚合」。两者不冲突——限制的是**最终查询**的形状，
+    不是选期用的中间结果。这里用括号配平切掉 CTE，剩下最终 SELECT 供契约检查。
+    """
+    text = sql or ""
+    match = re.match(r"\s*WITH\s+(?:RECURSIVE\s+)?", text, re.IGNORECASE)
+    if not match:
+        return text
+    index = match.end()
+    while index < len(text):
+        open_index = text.find("(", index)
+        if open_index == -1:
+            return text
+        if not re.search(r"\bAS\b", text[index:open_index], re.IGNORECASE):
+            return text
+        depth = 0
+        cursor = open_index
+        while cursor < len(text):
+            if text[cursor] == "(":
+                depth += 1
+            elif text[cursor] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            cursor += 1
+        if depth != 0:
+            return text
+        index = cursor + 1
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index < len(text) and text[index] == ",":
+            index += 1
+            while index < len(text) and text[index] in " \t\r\n":
+                index += 1
+            continue
+        return text[index:]
+    return text
+
+
+def _top_period_contract_violation(sql: str, top_period: dict | None = None) -> str | None:
+    """最高/最低期的确定性契约（2026-11-04，plan top-period-detail-intent）。
+
+    实测：需求卡写着「销售额最高的那一周」，SQL 却是 `GROUP BY year, region` 的一行
+    汇总——全区间又被汇总了一遍。两种形态分开校验：
+
+    - **系统已算出具体期**（`resolved=True`）：SQL 必须真的带那一期的过滤条件
+      （例如 `dim_date.month = 11`），否则就是把全区间算了一遍；
+    - 算不出来（退回两段式）：必须有 `LIMIT 1` 的选期结构。
+
+    违规都按 validation 失败交给既有 repair 环，而不是把错的结果当成功返回。
+    """
+    text = sql or ""
+    spec = top_period or {}
+    if spec.get("resolved"):
+        column = str(spec.get("period_column") or "")
+        value = str(spec.get("period_value") or "")
+        label = str(spec.get("label") or "")
+        bare = column.split(".")[-1].lower()
+        if not bare or bare not in text.lower():
+            return (
+                f"缺少「只取 {label or '选定那一期'}」的过滤条件："
+                f"必须加上 {column} 的过滤（选定期 = {value}），不许把全区间再汇总一遍"
+            )
+        if value and not re.search(rf"(?<![\d.]){re.escape(value)}(?![\d.])", text):
+            return (
+                f"缺少「只取 {label or '选定那一期'}」的过滤条件："
+                f"必须加上 {column} = {value}，不许把全区间再汇总一遍"
+            )
+        return None
+    if not _TOP_PERIOD_LIMIT_RE.search(text):
+        return (
+            "缺少「选出最高/最低那一期」的结构：必须先用聚合 + "
+            "ORDER BY <指标> DESC LIMIT 1 选出那一期（可放在 WITH 子句里），"
+            "再只取该期的数据；不许把全区间再汇总一遍"
+        )
+    return None
+
+
+def _detail_contract_violation(sql: str, *, allow_cte_aggregate: bool = False) -> str | None:
     """明细模式的确定性契约：不许聚合、不许 GROUP BY。
 
     2026-11-03 实测（多轮 e2e）：「给我这两个月的明细数据」卡上 `detail_level=detail`、
@@ -650,8 +758,11 @@ def _detail_contract_violation(sql: str) -> str | None:
     违规就交给既有 repair 环（带 repair_ctx 重生成），而不是把 1 行当成功返回。
 
     2026-11-04 追加：还必须带日期/维度列（否则表格只剩一列、图表没法作图）。
+
+    2026-11-04（top-period-detail-intent）：`allow_cte_aggregate=True` 时只检查
+    **CTE 之外的最终查询**——「选出最高那一期」本身必须聚合，那不算违反明细契约。
     """
-    text = sql or ""
+    text = _strip_cte_blocks(sql or "") if allow_cte_aggregate else (sql or "")
     if _DETAIL_AGGREGATE_RE.search(text):
         return (
             "明细模式禁止聚合函数（SUM/AVG/COUNT/MIN/MAX）："
@@ -663,7 +774,7 @@ def _detail_contract_violation(sql: str) -> str | None:
         )
     # 2026-11-04：明细还必须带日期/维度列。实测「帮我分析一下销量」即使给了照抄投影，
     # 模型仍会只 `SELECT quantity` → 表格只有一列、图表画成一排噪声柱。
-    if not _has_dimension_column(text):
+    if not _has_dimension_column(sql or ""):
         return (
             "明细模式必须包含日期或维度列（如 dim_date.full_date AS 日期、"
             "dim_store.region AS 区域、dim_product.category AS 品类）："
@@ -672,13 +783,43 @@ def _detail_contract_violation(sql: str) -> str | None:
     return None
 
 
+def _select_list(sql: str) -> str:
+    """SQL 的 SELECT 投影列表（跳过 CTE，只看最终查询最外层 SELECT 到 FROM 之间）。
+
+    为什么需要：`_has_dimension_column` 之前扫全文——而 `dim_date.full_date` 出现在
+    JOIN 的 ON 子句、`dim_store.region` 出现在 WHERE 里都是常事，于是「只 SELECT 一列」
+    的明细也能过闸（实测 2026-11-04：明细表只有一列「销售额」）。
+    """
+    text = _strip_cte_blocks(sql or "")
+    lower = text.lower()
+    depth = 0
+    from_index = -1
+    for index, char in enumerate(lower):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and lower.startswith("from", index):
+            before = lower[index - 1] if index > 0 else " "
+            after = lower[index + 4] if index + 4 < len(lower) else " "
+            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                from_index = index
+                break
+    select_index = lower.find("select")
+    if select_index < 0:
+        return text
+    end = from_index if from_index > select_index else len(text)
+    return text[select_index + len("select"):end]
+
+
 def _has_dimension_column(sql: str) -> bool:
-    """SQL 里是否出现任何「可读维度列」（日期 / 区域 / 品类 / 品牌…）。
+    """SELECT 投影里是否有「可读维度列」（日期 / 区域 / 品类 / 品牌…）。
 
     列名从知识库来（`schema_hints.yaml`），`table.column` 与裸列名都认。
+    只看投影，不看 JOIN/WHERE——那些地方出现维度列不代表表格里有这一列。
     """
-    text = (sql or "").lower()
-    if not text:
+    text = _select_list(sql).lower()
+    if not text.strip():
         return False
     candidates: list[str] = []
     day_column = knowledge.time_bucket_column("day")
@@ -705,11 +846,22 @@ def _validate(state: SQLAgentState) -> dict:
     logger.info("validate_sql result for sql[:60]=%s -> %s", (sql or "")[:60], validation)
     # 明细契约（2026-11-03）：SQL 本身合法但形状违反需求 → 同样按 validation 失败处理，
     # 由 DiagnosePolicy → repair 重生成。放在 safety/EXPLAIN 之后，不绕过任何安全闸。
-    if validation.get("valid") and state.get("detail_level") == "detail":
-        violation = _detail_contract_violation(sql)
-        if violation:
-            logger.warning("detail contract violated, routing to repair: %s", violation)
-            validation = {"valid": False, "error": violation, "error_kind": "syntax"}
+    if validation.get("valid"):
+        is_detail = state.get("detail_level") == "detail"
+        top_period = state.get("top_period")
+        # 2026-11-04：最高期查询要先在 CTE 里聚合选期，明细契约只看最终查询。
+        if is_detail:
+            violation = _detail_contract_violation(
+                sql, allow_cte_aggregate=bool(top_period),
+            )
+            if violation:
+                logger.warning("detail contract violated, routing to repair: %s", violation)
+                validation = {"valid": False, "error": violation, "error_kind": "syntax"}
+        if validation.get("valid") and top_period:
+            violation = _top_period_contract_violation(sql, top_period)
+            if violation:
+                logger.warning("top-period contract violated, routing to repair: %s", violation)
+                validation = {"valid": False, "error": violation, "error_kind": "syntax"}
     return {"validation_result": validation}
 
 

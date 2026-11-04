@@ -57,6 +57,7 @@ pytest backend/tests/api -q
 | 12 | 历史轮次条「未生成报告」去噪 + 版本按时间归属（`historyTurns.ts`，plan `2026-11-04-history-turn-pairing.md`） | `6c00893` |
 | 13 | 「需求详情」就地展开（`RequirementCardView variant="inline"`）：修掉展开后的空白气泡与浮空「收起详情」，确认按钮原地不动 | `ac9f1d5` |
 | 14 | 确认条补可见的「补充或修改」第二动作（supplement 通道后端已支持、界面从没露出） | `8ce551b` |
+| 15 | 「最高的那个月的明细」听懂 + 真出明细：需求层 top_period/detail 确定性识别；选期由系统算（注册表 GROUP BY 期取极值 → 确定性 WHERE）；明细契约改看 SELECT 投影 | 见 plan |
 
 ### 2026-11-03 做完的事
 

@@ -153,6 +153,16 @@ def resolve_metric_slot(
 
     if inherited:
         inherited_metric = knowledge.resolve_metric(inherited)
+        if inherited_metric is None:
+            # 旧卡 / 模型澄清选项可能写的是物理列名（order_amount）——归一到业务名再解析，
+            # 否则「上一轮已确认」的口径会认不出来，用户被重复问一次口径
+            # （2026-11-04 实测）。
+            try:
+                from app.agent.requirement_parser import _display_metric
+
+                inherited_metric = knowledge.resolve_metric(_display_metric(str(inherited)))
+            except Exception:  # noqa: BLE001 - 归一失败就当没继承，继续走提问
+                inherited_metric = None
         if inherited_metric is not None:
             return MetricSlot(
                 state="filled",
@@ -233,7 +243,9 @@ def slot_states(card, metric_slot: MetricSlot | None = None) -> dict[str, SlotSt
             "filled" if getattr(card, "granularity", None) else "missing"
         )
 
-    if not is_detail and not methods:
+    if not is_detail and not methods and getattr(card, "top_period", None) is None:
+        # 2026-11-04：最高/最低的那一期本身就是明确的分析诉求（选期 + 取该期数据），
+        # 不该再问「你想看哪种视角」。
         states["analysis_intent"] = "missing"
 
     # 已经列进 missing_fields 的 key 一律算「待补」（服务端/模型已判定缺失）。

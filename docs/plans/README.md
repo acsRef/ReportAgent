@@ -25,6 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
+| [2026-11-04-top-period-detail-intent.md](2026-11-04-top-period-detail-intent.md) | 「最高的那个月的明细」这类寻常问法：①需求层确定性识别「最高/最低 + 期单位 + 明细」（此前「详细图」不在词表、`_deterministic_intent` 对「最多月份」返回 None → 模型反问「哪种视角」）②**选期由系统算**（`resolve_top_period` 走注册表口径跑一条 GROUP BY 期取极值，变成确定性 WHERE），不再让模型写 CTE（实测它会写两条语句直接语法错）③明细投影契约改看 SELECT 投影（此前 JOIN/WHERE 里的维度列也算数 → 明细表只有一列）④顺手修「重复问口径」：澄清选项的物理列名归一成业务名 | 真链路 2024-11 明细 200 行 × 4 列；待提交 |
 | [2026-11-04-confirm-supplement-action.md](2026-11-04-confirm-supplement-action.md) | 确认条给出可见的「补充或修改」第二动作（用户质问「难道我就只能确认并生成报告吗 没有补充吗？」）：supplement 通道后端早已支持、界面从没露出；次要胶囊按钮 → 焦点交回输入框 + `title` 说明怎么补，`busy` 时禁用 | 待提交 |
 | [2026-11-04-requirement-details-inline.md](2026-11-04-requirement-details-inline.md) | 「需求详情」改成**就地展开**：①`requirementUiMode` 去掉 `detailsOpen`，展开不再换形态（此前切成 `card` → 确认条消失、只剩思考那条消息、`TracePanel` 返回 null 留下**空气泡**）②详情用 `RequirementCardView variant="inline"`（无外壳/标题/底部动作/缺失区）内联进同一条气泡，确认按钮原地不动③空分组（如「预计报告内容」）不再画空壳④`hasTrace` 闸：没有 trace 不渲染思考消息 | 起因用户截图「展开是空白、很丑」；待提交 |
 | [2026-10-28-mainline-correctness-fixes.md](2026-10-28-mainline-correctness-fixes.md) | 主线正确性 6 修复：①粒度成卡体字段 + plan 后确定性改写 dimensions ②多轮继承不再要求 complete（≠locked 即可）③`chart_advisor` 按列名识别时间维度（月份=int 不再退化成表格）④`_SCHEMA_TERM_HINTS` 口径映射注入 plan+generate（防造 `sales_amount`）⑤业务实体缺失转 `requested_object`（防造 `dim_supplier`）⑥错误 kind 贯通父图 + SSE 两跳；评测断言 `rows_gt 0→6`、空结果年份 2025→2027 | 已验证：backend 1218 passed / frontend 309 / 主线 20 例 16 pass 0 fail（sql_success_rate 1.0）/ fault 注入真链路 kind=object_not_found |

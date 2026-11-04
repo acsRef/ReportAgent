@@ -1,6 +1,6 @@
 import RadioGroup from '../atelier/RadioGroup'
 import CheckboxGroup from '../atelier/CheckboxGroup'
-import { methodLabel } from './slotQuestion'
+import { methodLabel, topPeriodText } from './slotQuestion'
 import {
   isDraftReadyForReview,
   type RequirementAssumption,
@@ -58,6 +58,7 @@ const GRANULARITY_LABELS: Record<NonNullable<RC['granularity']>, string> = {
 export default function RequirementCardView({ card, onChange, onConfirm, onFocusComposer, readOnly = false, changeNote = null, variant = 'full' }: Props) {
   const ready = isDraftReadyForReview(card)
   const inline = variant === 'inline'
+  const topPeriod = topPeriodText(card)
 
   function setSelectedValue(key: string, value: string | string[] | null) {
     onChange({
@@ -154,6 +155,16 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
                 {card.target_metrics.map((metric) => (
                   <span key={metric} className="wb-chip">{metric}</span>
                 ))}
+              </div>
+            </div>
+          )}
+          {/* 2026-11-04：把「最高/最低的那一期」明确画出来——用户说得很清楚时，
+              界面上必须能看到「它听懂了哪一期」。 */}
+          {topPeriod && (
+            <div>
+              <div className="wb-req-label">选期方式</div>
+              <div className="wb-chips">
+                <span className="wb-chip method">{topPeriod}</span>
               </div>
             </div>
           )}

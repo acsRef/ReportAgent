@@ -275,7 +275,47 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
 
     # Build the authoritative requirement string the LLM will use.
     card = state.get("requirement_card")
-    confirmed_requirement = _format_confirmed_requirement(card)
+    # 2026-11-04（plan top-period-detail-intent）：最高/最低的那一期由**系统算**，
+    # 不让模型写两段式 SQL（实测会写成 `SELECT ...; SELECT ...` 两条语句直接语法错）。
+    # 算出来就变成确定性 WHERE；算不出来 `_top_period_hint` 退回 CTE 两段式指令。
+    top_period_state: dict | None = None
+    top_resolved = None
+    _top = getattr(card, "top_period", None) if card is not None else None
+    if _top is not None:
+        metric_name = str(getattr(_top, "metric", "") or "") or next(
+            iter(getattr(card, "target_metrics", None) or []), "",
+        )
+        metric_def = None
+        if metric_name:
+            _resolved, _unresolved = knowledge.resolve_metrics([str(metric_name)])
+            metric_def = _resolved[0] if _resolved else None
+        try:
+            from app.services import metric_preview_service
+
+            top_resolved = await metric_preview_service.resolve_top_period(
+                metric_def,
+                unit=str(getattr(_top, "unit", "") or "month"),
+                direction=str(getattr(_top, "direction", "") or "max"),
+                time_range=getattr(card, "time_range", None),
+                scope=list(getattr(card, "scope", None) or []),
+            )
+        except Exception as exc:  # noqa: BLE001 - 选期失败退两段式，不阻塞执行
+            logger.warning("resolve_top_period failed: %s", exc)
+        if top_resolved is not None and top_resolved.ok:
+            logger.info(
+                "top period resolved: %s (%s)", top_resolved.label, top_resolved.filters,
+            )
+        top_period_state = {
+            "direction": str(getattr(_top, "direction", "") or "max"),
+            "unit": str(getattr(_top, "unit", "") or "month"),
+            "metric": metric_name or None,
+            "resolved": bool(top_resolved is not None and top_resolved.ok),
+            "label": getattr(top_resolved, "label", "") if top_resolved else "",
+            "period_column": getattr(top_resolved, "period_column", "") if top_resolved else "",
+            "period_value": getattr(top_resolved, "period_value", "") if top_resolved else "",
+            "filters": list(getattr(top_resolved, "filters", ()) or ()) if top_resolved else [],
+        }
+    confirmed_requirement = _format_confirmed_requirement(card, top_resolved=top_resolved)
 
     # confirm 流（POST /confirm）的 user_query 为空时，用确认卡合成
     # 一个非空查询，否则 _plan 拿到空串、产不出任何信号。
@@ -331,6 +371,9 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
         "assembled_context": assembled_context or None,  # P4c: 含 recall 的全景 context
         "granularity": getattr(card, "granularity", None),  # 粒度确定性透传（_plan 改写 dimensions）
         "detail_level": getattr(card, "detail_level", None),  # 明细模式：_plan 清空维度/聚合
+        # 2026-11-04（top-period-detail-intent）：最高/最低的一期 → sql_graph 需要
+        # 在生成阶段再强调、在校验阶段检查「真的只取那一期」。
+        "top_period": top_period_state,
         # 指标白名单（2026-11-03）：卡片解析出的指标才给模型，避免把整张注册表塞进去
         "metric_hints": _metric_hints_for(card),
         "fault_override": state.get("fault_override"),  # P15 e2e T4: e2e fault seam 透传
@@ -502,7 +545,79 @@ def _detail_projection_hint(card) -> str | None:
     )
 
 
-def _format_confirmed_requirement(card) -> str | None:
+def _top_period_hint(card, top_resolved=None) -> str | None:
+    """「最高/最低的那一期」的确定性指令（2026-11-04，plan top-period-detail-intent）。
+
+    实测病灶：「那最多那一周为什么销售额这么多」→ SQL 变成 `GROUP BY year, region`
+    的一行汇总，「最高那周」完全没出现；「2024年里销售额最高的那个月的明细」同理。
+
+    两条路径：
+    1) **已算出具体期**（`resolve_top_period` 成功）：直接把期写成确定性过滤条件
+       （`dim_date.year = 2024 AND dim_date.month = 11`）——模型只需要「照这个 WHERE 取数」，
+       成功率最高；
+    2) 算不出来：退回两段式指令（CTE + ORDER BY ... LIMIT 1），由 sql_graph 的契约兜底。
+    """
+    from app.knowledge import registry as knowledge
+
+    top = getattr(card, "top_period", None)
+    if top is None:
+        return None
+
+    unit = str(getattr(top, "unit", "") or "month")
+    direction = str(getattr(top, "direction", "") or "max")
+    word = "最高" if direction == "max" else "最低"
+    unit_label = _GRANULARITY_LABELS.get(unit, unit)
+    is_detail = getattr(card, "detail_level", None) == "detail"
+    final_shape = (
+        "按明细投影返回该期的**逐条明细**（不再聚合、不加 GROUP BY），按时间倒序、LIMIT 200"
+        if is_detail
+        else "只返回该期的汇总/对比结果，不要再按期分组"
+    )
+
+    if top_resolved is not None and getattr(top_resolved, "ok", False):
+        label = getattr(top_resolved, "label", "") or f"{word}的{unit_label}"
+        filters = list(getattr(top_resolved, "filters", ()) or ())
+        metric_name = str(getattr(top, "metric", "") or "")
+        return (
+            f"【选期结果（确定性，系统已算出）】{metric_name}{word}的{unit_label} = {label}\n"
+            f"筛选条件（确定性，必须逐字使用）：{' AND '.join(filters)}\n"
+            f"—— 这就是「{word}的那一{unit_label}」；{final_shape}。\n"
+            f"—— **禁止**再把全区间汇总一遍，也**禁止**按期 GROUP BY。"
+        )
+
+    period_column = knowledge.time_bucket_column(unit) or _GRANULARITY_COLUMNS.get(unit)
+    if not period_column:
+        return None
+
+    metric_name = str(getattr(top, "metric", "") or "") or (
+        (getattr(card, "target_metrics", None) or [None])[0]
+    )
+    metric_expr = None
+    if metric_name:
+        resolved, _unresolved = knowledge.resolve_metrics([str(metric_name)])
+        if resolved:
+            metric_expr = resolved[0].expr
+    if not metric_expr:
+        metric_expr = "SUM(<指标列>)"
+
+    order = "DESC" if direction == "max" else "ASC"
+    return (
+        f"【必需结构：{word}的{unit_label}（确定性，必须照此拆成两步）】\n"
+        f"1) 用 CTE 选出{word}的那一期：\n"
+        f"   WITH top_period AS (\n"
+        f"     SELECT {period_column} AS 期\n"
+        f"     FROM ... <与最终查询相同的 WHERE 条件>\n"
+        f"     GROUP BY {period_column}\n"
+        f"     ORDER BY {metric_expr} {order}\n"
+        f"     LIMIT 1\n"
+        f"   )\n"
+        f"2) {final_shape}\n"
+        f"   —— 必须 JOIN/过滤 top_period（例如 `{period_column} = (SELECT 期 FROM top_period)`）；\n"
+        f"   —— 少这一步就是把全区间又汇总了一遍，用户要的「{word}的那一{unit_label}」根本没出现。"
+    )
+
+
+def _format_confirmed_requirement(card, *, top_resolved=None) -> str | None:
     """把 PATCH 确认后的 RequirementCard 序列化成 SQL plan prompt
     消费的结构化字符串（中文字段标签）。无卡时返回 None，plan
     退回从自由文本 user_query 推断。
@@ -527,6 +642,11 @@ def _format_confirmed_requirement(card) -> str | None:
     hint = _period_filter_hint(card.time_range)
     if hint:
         parts.append(hint)
+    # 2026-11-04：先选期、再取该期的数据/明细。这条要在明细块之前给出，否则明细块
+    # 的「禁止聚合」会把选期所需的 CTE 聚合也一起禁掉（见 sql_graph 的 CTE 例外）。
+    top_hint = _top_period_hint(card, top_resolved)
+    if top_hint:
+        parts.append(top_hint)
     if card.scope:
         # 2026-11-02 实测：「分析2024年华东销售趋势」的 SQL 出现 WHERE region='华东'
         # 之外还 GROUP BY region → 每行多一个恒为「华东」的列、图表退化成一根柱子。

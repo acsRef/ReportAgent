@@ -1,0 +1,164 @@
+# 后端链路矩阵（plan 2026-11-05-chain-matrix）
+#
+# 目的：不再一条条手写探针——把**寻常中文问法**做成可重跑矩阵，一次跑完整条链路
+#   /chat（需求解析）→ 澄清按 GT 作答 → PATCH → /confirm（规划/SQL/校验/执行）→ 落库
+# 断言写在意图层（口径 / 时间 / 粒度 / 明细 / 选期 / SQL 形状 / 行数 / 列数），
+# 不钉渲染文案，避免「换个说法就红」。
+#
+# 字段说明：
+#   turns[].query            用户原话（多轮按顺序跑；断言只针对最后一轮）
+#   expect.metric            期望口径（注册表中文名；澄清时优先选它）
+#   expect.time_range_has    卡片 time_range 必须包含的子串
+#   expect.scope_has         卡片 scope 必须包含的值
+#   expect.granularity       期望粒度
+#   expect.detail_level      期望展示粒度
+#   expect.top_period        期望选期 {direction: max|min, unit: month|week|...}
+#   expect.no_slots          不许再出现的澄清项 key（说清楚了就不该再问）
+#   expect.sql_must          最终 SQL 必须包含的片段（忽略大小写与空白）
+#   expect.sql_must_not      最终 SQL 不允许包含的片段
+#   expect.rows_min/max      结果行数区间
+#   expect.min_columns       结果列数下限（明细可读性）
+#   patience                 允许的澄清轮数（默认 3）
+
+cases:
+  - id: trend_anomaly_week
+    patience: 3
+    turns:
+      - query: "2024年华东销售趋势和异常"
+    expect:
+      metric: 销售额
+      time_range_has: "2024"
+      scope_has: 华东
+      sql_must: ["week_of_year"]
+      rows_min: 40
+      rows_max: 60
+
+  - id: top_month_detail
+    patience: 3
+    turns:
+      - query: "2024年华东销售趋势和异常"
+      - query: "我只要2024年份中最多月份的那个月数据详细图"
+    expect:
+      metric: 销售额
+      time_range_has: "2024"
+      scope_has: 华东
+      detail_level: detail
+      top_period: {direction: max, unit: month}
+      no_slots: [analysis_intent]
+      sql_must: ["dim_date.month", "limit 200"]
+      sql_must_not: ["group by"]
+      rows_min: 50
+      min_columns: 3
+
+  - id: region_rank
+    patience: 3
+    turns:
+      - query: "2024年各区域销售额排名"
+    expect:
+      metric: 销售额
+      time_range_has: "2024"
+      sql_must: ["region"]
+      rows_min: 4
+      rows_max: 8
+
+  - id: monthly_trend
+    patience: 3
+    turns:
+      - query: "今年每个月的销售额"
+    expect:
+      metric: 销售额
+      granularity: month
+      sql_must: ["month"]
+      rows_min: 12
+      rows_max: 12
+
+  - id: lowest_month
+    patience: 3
+    turns:
+      - query: "2024年销售额最低的月份是哪个月"
+    expect:
+      metric: 销售额
+      time_range_has: "2024"
+      top_period: {direction: min, unit: month}
+      no_slots: [analysis_intent]
+      sql_must: ["month"]
+      rows_min: 1
+      rows_max: 12
+
+  - id: category_best
+    patience: 3
+    turns:
+      - query: "哪个品类卖得最好"
+    expect:
+      metric: 销售额
+      sql_must: ["category"]
+      rows_min: 3
+      rows_max: 12
+
+  - id: july_detail
+    patience: 3
+    turns:
+      - query: "2024年7月的明细数据"
+    expect:
+      metric: 销售额
+      detail_level: detail
+      time_range_has: "2024"
+      sql_must: ["month", "limit 200"]
+      sql_must_not: ["group by"]
+      rows_min: 20
+      min_columns: 3
+
+  - id: two_regions_compare
+    patience: 3
+    turns:
+      - query: "华东和华南的销售额对比"
+    expect:
+      metric: 销售额
+      scope_has: 华东
+      sql_must: ["region"]
+      rows_min: 2
+      rows_max: 6
+
+  - id: daily_trend
+    patience: 3
+    turns:
+      - query: "2024年每天的销售额走势"
+    expect:
+      metric: 销售额
+      granularity: day
+      time_range_has: "2024"
+      rows_min: 300
+
+  - id: refund_total
+    patience: 3
+    turns:
+      - query: "2024年退款金额是多少"
+    expect:
+      metric: 退款金额
+      time_range_has: "2024"
+      rows_min: 1
+
+  - id: order_count_by_region
+    patience: 3
+    turns:
+      - query: "2024年各区域订单数"
+    expect:
+      metric: 订单数
+      time_range_has: "2024"
+      sql_must: ["count"]
+      rows_min: 4
+      rows_max: 8
+
+  - id: detail_after_trend
+    patience: 4
+    turns:
+      - query: "2024年华东销售额按月趋势"
+      - query: "把最差的那个月的明细给我看看"
+    expect:
+      detail_level: detail
+      top_period: {direction: min, unit: month}
+      no_slots: [analysis_intent]
+      sql_must: ["month", "limit 200"]
+      sql_must_not: ["group by"]
+      rows_min: 20
+      min_columns: 3
