@@ -19,7 +19,13 @@ export interface AnalysisState {
   selectedReportVersion: number | null
   /** 完整对话消息（快照恢复 + 每轮结束后刷新）——历史轮次时间线的数据源。 */
   messages: ConversationMessage[]
+  /** 「执行过程」步骤（trace 帧，按节点去重）——2026-11-04 起真正接线。 */
   timeline: TimelineEntry[]
+  /**
+   * 过程面板的异常说明（中断/停止/超时/重连/后台完成）。
+   * 与「步骤」分开存：说明是临时提醒，不该混进步骤列表。
+   */
+  timelineNote: string | null
   error: AnalysisError | null
   // Pagination (Plan B 步骤 2, 2026-08-09) — session 列表分页状态：
   // sessionsOffset = 已加载条数；hasMoreSessions = 服务端是否还有下一页；
@@ -41,8 +47,22 @@ export type AnalysisAction =
   | { type: 'report/received'; report: ReportVersion }
   | { type: 'report/selected'; version: number }
   | { type: 'timeline/received'; entry: TimelineEntry }
+  | { type: 'timeline/cleared' }
+  | { type: 'timeline/note'; note: string | null }
+  /** 一轮结束时的收尾：把还挂在「进行中」的步骤按原因定性。 */
+  | { type: 'timeline/closed'; reason: TimelineCloseReason }
   | { type: 'analysis/failed'; error: AnalysisError }
   | { type: 'analysis/reset' }
+
+/** 过程收尾原因：done=正常收尾 / stopped=用户停止 / interrupted=断流 / error=后端报错。 */
+export type TimelineCloseReason = 'done' | 'stopped' | 'interrupted' | 'error'
+
+const CLOSE_NOTE: Record<TimelineCloseReason, string | null> = {
+  done: null,
+  stopped: '已停止显示，任务在后台继续执行，完成后会自动更新',
+  interrupted: '连接中断，任务可能在后台继续；恢复后会自动更新',
+  error: '执行在中途失败，已完成的步骤保留在上方',
+}
 
 export const initialAnalysisState: AnalysisState = {
   phase: 'idle',
@@ -53,6 +73,7 @@ export const initialAnalysisState: AnalysisState = {
   selectedReportVersion: null,
   messages: [],
   timeline: [],
+  timelineNote: null,
   error: null,
   sessionsOffset: 0,
   hasMoreSessions: true,
@@ -198,13 +219,42 @@ export function analysisReducer(
       return { ...state, selectedReportVersion: action.version }
 
     case 'timeline/received': {
+      // 按 **nodeName** 去重（2026-11-04）：progress 帧是「同一节点 running → success」，
+      // 每帧 id 都不同，按 id 去重会让步骤列表越叠越长。
       const existingIndex = state.timeline.findIndex(
-        (entry) => entry.id === action.entry.id,
+        (entry) => entry.nodeName === action.entry.nodeName,
       )
       const timeline = [...state.timeline]
       if (existingIndex >= 0) timeline[existingIndex] = action.entry
       else timeline.push(action.entry)
-      return { ...state, timeline }
+      return { ...state, timeline, timelineNote: null }
+    }
+
+    case 'timeline/cleared':
+      return { ...state, timeline: [], timelineNote: null }
+
+    case 'timeline/note':
+      return { ...state, timelineNote: action.note }
+
+    case 'timeline/closed': {
+      // 还挂在「进行中」的步骤按原因定性：
+      //   done → success（这一轮正常跑完，最后一步只是没来得及发 success 帧）
+      //   stopped → pending（用户停止观看，后台还在跑）
+      //   interrupted / error → error（真的断在这里）
+      const status: TimelineEntry['status'] =
+        action.reason === 'done'
+          ? 'success'
+          : action.reason === 'stopped'
+            ? 'pending'
+            : 'error'
+      const timeline = state.timeline.map((entry) =>
+        entry.status === 'running' ? { ...entry, status } : entry,
+      )
+      const note =
+        action.reason === 'done' && timeline.every((e) => e.status !== 'running')
+          ? null
+          : CLOSE_NOTE[action.reason]
+      return { ...state, timeline, timelineNote: note }
     }
 
     case 'analysis/failed':

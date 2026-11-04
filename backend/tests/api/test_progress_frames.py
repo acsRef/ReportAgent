@@ -31,7 +31,20 @@ def test_format_known_node_running():
 
 def test_format_unknown_node_returns_none():
     assert format_progress_frame("sql_gate", "running") is None
-    assert format_progress_frame("security_guard", "success") is None
+    assert format_progress_frame("idempotency_guard", "success") is None
+
+
+def test_requirement_nodes_are_mapped():
+    """2026-11-04（plan trace-visible-reasoning）：需求轮节点也要有 progress 帧。
+
+    此前只有 confirmed-execution 图的节点在表里，需求轮前端只看到一条 phase=parsing。
+    `security_guard` 是需求图节点（confirmed 图同名节点的帧也复用这条映射）。
+    """
+    assert json.loads(format_progress_frame("security_guard", "running")["data"])["step"] == "安全检查"
+    assert json.loads(format_progress_frame("classify_intent", "running")["data"])["step"] == "识别意图"
+    assert json.loads(format_progress_frame("requirement_parse", "running")["data"])["step"] == "解析需求"
+    assert json.loads(format_progress_frame("requirement_preview", "running")["data"])["step"] == "口径预览"
+    assert json.loads(format_progress_frame("persist_draft", "success")["data"])["step"] == "保存需求卡"
 
 
 def test_format_all_mapped_kinds():

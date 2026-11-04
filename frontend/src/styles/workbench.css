@@ -1134,3 +1134,90 @@
   color: var(--muted);
   margin-left: var(--sp-s);
 }
+
+/* ---------- 执行过程面板（2026-11-04，plan trace-visible-reasoning） ---------- */
+/* 用户要看「Agent 在想什么」但不看 CoT：这里按步骤铺开 trace 帧，
+   中断/停止/失败/重连在头部与说明行里显式表达。 */
+.wb-trace {
+  max-width: 860px;
+  margin: 0 0 14px 41px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-m);
+  background: var(--paper);
+  overflow: hidden;
+}
+.wb-trace.is-running { border-color: var(--teal-soft); }
+.wb-trace-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-s);
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: var(--canvas);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.wb-trace-head:hover { background: var(--teal-pale); }
+.wb-trace-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--teal);
+  flex: 0 0 auto;
+}
+.wb-trace.is-running .wb-trace-dot {
+  background: var(--amber);
+  animation: wb-trace-pulse 1.2s ease-in-out infinite;
+}
+@keyframes wb-trace-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.wb-trace-title { font-weight: 600; }
+.wb-trace-toggle { margin-left: auto; color: var(--muted); font-size: 11px; }
+.wb-trace-note {
+  padding: 6px 12px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 11px;
+  border-top: 1px solid var(--line);
+}
+.wb-trace-list {
+  margin: 0;
+  padding: 8px 12px 10px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wb-trace-step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-s);
+  font-size: 12px;
+  color: var(--muted);
+}
+.wb-trace-icon { width: 12px; flex: 0 0 auto; color: var(--faint); }
+.wb-trace-step.is-running .wb-trace-icon { color: var(--amber); }
+.wb-trace-step.is-success .wb-trace-icon { color: var(--teal); }
+.wb-trace-step.is-error .wb-trace-icon { color: var(--red); }
+.wb-trace-step.is-running .wb-trace-step-name { color: var(--ink); }
+.wb-trace-step.is-success .wb-trace-step-name { color: var(--ink-2); }
+.wb-trace-step.is-error .wb-trace-step-name { color: var(--red); }
+.wb-trace-step-name { font-weight: 500; }
+.wb-trace-kind {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--teal-pale);
+  color: var(--teal-deep);
+  font-size: 10px;
+}
+.wb-trace-detail { color: var(--muted); }
+.wb-trace-meta { margin-left: auto; font-size: 10px; color: var(--faint); }
+
+@media (max-width: 880px) {
+  .wb-trace { margin-left: 0; }
+}

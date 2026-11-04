@@ -48,6 +48,8 @@ export const useAnalysisStore: AnalysisStoreApi = create<AnalysisStore>()(
         draft.selectedReportVersion = next.selectedReportVersion
         draft.messages = next.messages
         draft.timeline = next.timeline
+        // 2026-11-04：过程面板的异常说明（新增字段必须同步写回，否则界面不更新）
+        draft.timelineNote = next.timelineNote
         draft.error = next.error
         // Plan B 步骤 2：分页状态字段（reducer 算出来，store 必须显式写回）
         draft.sessionsOffset = next.sessionsOffset

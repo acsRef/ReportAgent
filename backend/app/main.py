@@ -699,11 +699,23 @@ async def _run_requirement_graph(
     events: list[dict] = []
     try:
         await _safe_update_phase(session_id, "parsing", None)
+        # 2026-11-04（plan trace-visible-reasoning）：需求轮也发 trace 帧——用户要能看见
+        # 「Agent 在想什么」（安全检查 → 识别意图 → 解析需求 → 口径预览 → 保存需求卡）。
+        # 与 confirmed 图同一套机制（P11 契约：不新增顶层事件类型，progress 由 trace 载荷细化）。
+        handler = ProgressTraceHandler(
+            on_frame=lambda frame, _task=task: registry.publish(_task, frame),
+        )
         with mcp_down.scoped(bool(mcp_down_flag)):
             result = await run_with_timeout(
-                graph.ainvoke(initial, {"configurable": {"thread_id": session_id}}),
+                graph.ainvoke(
+                    initial,
+                    {"configurable": {"thread_id": session_id}, "callbacks": [handler]},
+                ),
                 MAX_TASK_DURATION,
             )
+        # 图跑完：把最后一个节点的 running 收成 success（end 事件归因不了，
+        # 见 progress.ProgressTraceHandler 的说明）
+        handler.close_all()
         completed = True
 
         # 安全闸：HIGH → 拒绝（不建卡、不落库；与改造前逐字段一致）。
@@ -768,6 +780,7 @@ async def _run_requirement_graph(
     except asyncio.TimeoutError:
         # 与执行轮同一总预算：绝不允许「永远停在 parsing」。
         final_phase = "error"
+        handler.fail_pending()  # 过程面板：卡住的步骤标 error，不留永远 ◐
         await _safe_update_phase(session_id, "error", mode)
         events.append(_requirement_failure_event(
             "TASK_TIMEOUT",
@@ -778,6 +791,7 @@ async def _run_requirement_graph(
     except Exception as exc:  # noqa: BLE001 - 兜底必须产生终态事件
         final_phase = "error"
         logger.exception("requirement task failed: session=%s", session_id)
+        handler.fail_pending()
         await _safe_update_phase(session_id, "error", mode)
         envelope = classify_exception(exc, failed_action=mode)
         events.append({

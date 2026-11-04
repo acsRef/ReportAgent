@@ -33,6 +33,9 @@ export function handleSSEEvent(evt: AnalysisStreamEvent, ctx: StreamEventCtx): v
       ctx.setSending(false)
       break
     case 'trace':
+      // 2026-11-04（plan trace-visible-reasoning）：trace 帧进 store 的 timeline，
+      // 由「执行过程」面板渲染；同时回调给页面做进度卡。
+      dispatch({ type: 'timeline/received', entry: evt.entry })
       ctx.onTrace?.(evt.entry)
       break
     case 'report': {
@@ -50,6 +53,8 @@ export function handleSSEEvent(evt: AnalysisStreamEvent, ctx: StreamEventCtx): v
     case 'error':
       ctx.msgApi.error(evt.error.message ?? '处理失败')
       dispatch({ type: 'analysis/failed', error: evt.error })
+      // 2026-11-04：把还挂着「进行中」的步骤标成失败——用户能一眼看到**在哪一步断的**
+      dispatch({ type: 'timeline/closed', reason: 'error' })
       ctx.setSending(false)
       // Review-2 / 历史 known-red 修复：FAILED 版本落库后后端只发 error 事件
       // （P9/P10 出口收编），前端此前从不刷新版本列表 → ReportPaper 的
@@ -60,6 +65,8 @@ export function handleSSEEvent(evt: AnalysisStreamEvent, ctx: StreamEventCtx): v
       break
     case 'done':
       ctx.setSending(false)
+      // 正常收尾：把仍在「进行中」的步骤收掉（避免面板永远停在 ◐）
+      dispatch({ type: 'timeline/closed', reason: 'done' })
       dispatch({ type: 'phase/received', phase: evt.finalPhase })
       break
     default:

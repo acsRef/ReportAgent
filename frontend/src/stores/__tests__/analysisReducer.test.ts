@@ -13,6 +13,7 @@ import type {
   SessionSummary,
 } from '../../types/analysis'
 import type { RequirementCard } from '../../types/requirement'
+import type { TimelineEntry } from '../../types/report'
 
 function makeRequirement(version = 1, status: 'missing' | 'complete' | 'locked' = 'complete'): RequirementCard {
   return {
@@ -256,5 +257,101 @@ describe('canRetryFailedAction', () => {
 
   it('false when error is null', () => {
     expect(canRetryFailedAction({ phase: 'error', error: null })).toBe(false)
+  })
+})
+
+// ── 执行过程（trace）状态（2026-11-04，plan trace-visible-reasoning）─────────
+describe('timeline/received — 执行过程步骤', () => {
+  const entry = (nodeName: string, status: TimelineEntry['status'], timestamp = 1000) => ({
+    id: `${nodeName}-${status}`,
+    nodeName,
+    status,
+    timestamp,
+  })
+
+  it('同一节点 running → success 只保留一行（按 nodeName 去重）', () => {
+    let state: AnalysisState = { ...initialAnalysisState }
+    state = analysisReducer(state, {
+      type: 'timeline/received',
+      entry: entry('解析需求', 'running'),
+    })
+    state = analysisReducer(state, {
+      type: 'timeline/received',
+      entry: entry('解析需求', 'success'),
+    })
+
+    expect(state.timeline).toHaveLength(1)
+    expect(state.timeline[0].status).toBe('success')
+  })
+
+  it('不同节点按到达顺序追加', () => {
+    let state: AnalysisState = { ...initialAnalysisState }
+    for (const name of ['安全检查', '识别意图', '解析需求']) {
+      state = analysisReducer(state, {
+        type: 'timeline/received',
+        entry: entry(name, 'success'),
+      })
+    }
+
+    expect(state.timeline.map((e) => e.nodeName)).toEqual(['安全检查', '识别意图', '解析需求'])
+  })
+
+  it('收到步骤会清掉上一次的异常说明', () => {
+    let state: AnalysisState = {
+      ...initialAnalysisState,
+      timelineNote: '连接中断，任务可能在后台继续',
+    }
+    state = analysisReducer(state, {
+      type: 'timeline/received',
+      entry: entry('解析需求', 'running'),
+    })
+
+    expect(state.timelineNote).toBeNull()
+  })
+
+  it('timeline/cleared 清空步骤与说明（新一轮开始）', () => {
+    let state: AnalysisState = {
+      ...initialAnalysisState,
+      timeline: [entry('解析需求', 'success')] as TimelineEntry[],
+      timelineNote: 'x',
+    }
+    state = analysisReducer(state, { type: 'timeline/cleared' })
+
+    expect(state.timeline).toEqual([])
+    expect(state.timelineNote).toBeNull()
+  })
+
+  it('timeline/closed(stopped) 把进行中步骤标成 pending 并给说明', () => {
+    let state: AnalysisState = {
+      ...initialAnalysisState,
+      timeline: [entry('撰写报告内容', 'running')] as TimelineEntry[],
+    }
+    state = analysisReducer(state, { type: 'timeline/closed', reason: 'stopped' })
+
+    expect(state.timeline[0].status).toBe('pending')
+    expect(state.timelineNote).toContain('已停止显示')
+  })
+
+  it('timeline/closed(interrupted) 标成 error 并说明可能在后台继续', () => {
+    let state: AnalysisState = {
+      ...initialAnalysisState,
+      timeline: [entry('解析需求', 'running')] as TimelineEntry[],
+    }
+    state = analysisReducer(state, { type: 'timeline/closed', reason: 'interrupted' })
+
+    expect(state.timeline[0].status).toBe('error')
+    expect(state.timelineNote).toContain('连接中断')
+  })
+
+  it('timeline/closed(done) 把进行中步骤收成 success 且不留说明', () => {
+    let state: AnalysisState = {
+      ...initialAnalysisState,
+      timeline: [entry('汇总报告', 'running')] as TimelineEntry[],
+    }
+    state = analysisReducer(state, { type: 'timeline/closed', reason: 'done' })
+
+    // 正常收尾的最后一步只是没来得及发 success 帧——不能标成失败
+    expect(state.timeline[0].status).toBe('success')
+    expect(state.timelineNote).toBeNull()
   })
 })

@@ -10,6 +10,7 @@ import { UserBubble, AgentBubble } from '../components/workbench/MessageBubbles'
 import WorkbenchEmpty from '../components/workbench/WorkbenchEmpty'
 import ParsingCard from '../components/workbench/ParsingCard'
 import ProgressCard from '../components/workbench/ProgressCard'
+import TracePanel from '../components/workbench/TracePanel'
 import ErrorCard from '../components/workbench/ErrorCard'
 import RightRail from '../components/workbench/RightRail'
 import SessionRail from '../components/workbench/SessionRail'
@@ -104,6 +105,9 @@ export default function WorkbenchPage() {
   const reportVersions = useAnalysisStore((s) => s.reportVersions)
   const selectedReportVersion = useAnalysisStore((s) => s.selectedReportVersion)
   const messages = useAnalysisStore((s) => s.messages)
+  // 2026-11-04：执行过程（trace 步骤 + 异常说明）
+  const timeline = useAnalysisStore((s) => s.timeline)
+  const timelineNote = useAnalysisStore((s) => s.timelineNote)
   const auth = useAuthStore()
   const toast = useToast()
   const [sessionsLoading, setSessionsLoading] = useState(false)
@@ -190,10 +194,22 @@ export default function WorkbenchPage() {
     useCallback(() => {
       if (!activeSessionId) return
       void loadSessionSnapshot(activeSessionId, toast).then(() => {
+        // 2026-11-04：后台补齐完成——过程面板补一条收尾步骤，清掉中断/停止说明
+        dispatch({
+          type: 'timeline/received',
+          entry: {
+            id: `background-done-${Date.now()}`,
+            nodeName: '后台执行完成',
+            status: 'success',
+            kind: 'agent',
+            timestamp: Date.now(),
+          },
+        })
+        dispatch({ type: 'timeline/closed', reason: 'done' })
         toast.success('后台任务已完成，内容已更新')
       })
       setExecPolling(false)
-    }, [activeSessionId, toast]),
+    }, [activeSessionId, dispatch, toast]),
   )
 
   // SessionSummary ← API 响应的字段映射；两处共用（useEffect + loadMore）。
@@ -248,6 +264,16 @@ export default function WorkbenchPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // 2026-11-04：离开工作台（路由跳转 / 登出 / 关闭标签页）时断掉本方 SSE。
+  // 后端任务是独立后台任务，会继续跑完落库；不主动断的话，离开后的帧会打在
+  // 已经不存在的界面上（React 已经卸载，但网络请求还在）。
+  useEffect(
+    () => () => {
+      abortStream()
+    },
+    [],
+  )
+
   // Smooth-scroll to the bottom when a report lands (prototype behavior).
   useEffect(() => {
     if (phase === 'report_ready' && scrollRef.current) {
@@ -280,6 +306,8 @@ export default function WorkbenchPage() {
     // 直到 60s timeout；同时停止必须同步关掉 streaming 标记，否则确认按钮被锁。
     setSending(false)
     dispatch({ type: 'phase/received', phase: 'awaiting_confirm' })
+    // 执行过程面板：把进行中的步骤标「已停止」+ 说明后台仍在跑（2026-11-04）
+    dispatch({ type: 'timeline/closed', reason: 'stopped' })
     setExecPolling(true)
     toast.info('已停止显示，报告仍在后台生成，完成后将通知你')
   }
@@ -300,6 +328,7 @@ export default function WorkbenchPage() {
       type: 'phase/received',
       phase: settlePhaseFor(useAnalysisStore.getState().requirement),
     })
+    dispatch({ type: 'timeline/closed', reason: 'stopped' })
     setExecPolling(true)
     toast.info('已停止等待，需求解析在后台继续，出结果后会自动更新')
   }
@@ -343,12 +372,18 @@ export default function WorkbenchPage() {
   }, [hasMoreSessions, sessionsPageLoading, sessionsOffset, dispatch, toast])
 
   function handleLogout() {
+    // 2026-11-04：退出/离开前断掉本方连接的 SSE（后台任务继续跑并由后端落库），
+    // 避免登出后仍有事件写进已清空的 store。
+    abortStream()
+    dispatch({ type: 'analysis/reset' })
     auth.logout()
     toast.success('已退出登录')
     navigate('/login', { replace: true })
   }
 
   function handleNewAnalysis() {
+    // 切到「新分析」= 不再观看上一轮：断流 + 清过程，后端任务照常跑完落库
+    abortStream()
     dispatch({ type: 'analysis/reset' })
     setComposer('')
     setLastQuestion(null)
@@ -370,6 +405,8 @@ export default function WorkbenchPage() {
     setStageIndex(1)
     setLiveDetail(undefined)
     setTurnBaseVersion(selectedReportVersion)
+    // 新一轮开始：清掉上一轮的执行过程（否则面板会把两轮步骤混在一起）
+    dispatch({ type: 'timeline/cleared' })
     const sid = activeSessionId ?? crypto.randomUUID()
     if (!activeSessionId) {
       dispatch({ type: 'session/selected', sessionId: sid })
@@ -385,6 +422,9 @@ export default function WorkbenchPage() {
         base_report_version: mode === 'adjust' ? selectedReportVersion : undefined,
       },
       (evt) => {
+        // 2026-11-04：**串台防护**——用户在上一轮还没跑完时切了会话/新建分析，
+        // 这条流的事件如果继续写进 store，会把旧会话的结果画到新会话界面上。
+        if (useAnalysisStore.getState().activeSessionId !== sid) return
         // 终态到达即撤掉「响应过慢」提示闸——否则它的 timer 会误伤后续某一轮。
         if (evt.type === 'done' || evt.type === 'error') sendTimeoutRef.current.clear()
         handleSSEEvent(evt, {
@@ -401,6 +441,7 @@ export default function WorkbenchPage() {
       // 发送框永久禁用、phase 停在 parsing，用户只能刷新（那会把解析一起取消）。
       ({ sawTerminal, aborted }) => {
         if (sawTerminal || aborted) return
+        if (useAnalysisStore.getState().activeSessionId !== sid) return
         sendTimeoutRef.current.clear()
         setSending(false)
         dispatch({
@@ -414,6 +455,8 @@ export default function WorkbenchPage() {
             sql: null,
           },
         })
+        // 执行过程面板：把进行中的步骤标成「中断」，并给出说明（不是静默转圈）
+        dispatch({ type: 'timeline/closed', reason: 'interrupted' })
         setExecPolling(true)
       },
     )
@@ -427,9 +470,13 @@ export default function WorkbenchPage() {
   }
 
   function handleSelectSession(sessionId: string) {
+    // 2026-11-04：切会话 = 不再观看上一轮。必须**先断掉当前流**，否则上一个会话的
+    // 事件会继续写进新会话的界面（串台）。后台任务照常跑完落库，切回来由快照/轮询补齐。
+    abortStream()
     dispatch({ type: 'session/selected', sessionId })
     setCasualReply(null)
     setTurnBaseVersion(null)
+    setLiveDetail(undefined)
     // live 气泡应显示「最后一次提问」。此前取 first_message（会话第一条），
     // 重进会话时会显示错的问题——2026-11-02 修正。
     setLastQuestion(
@@ -443,6 +490,14 @@ export default function WorkbenchPage() {
     // 并在 phase=report_ready/error 时错误地触发「报告已在后台生成」通知。
     void loadSessionSnapshot(sessionId, toast).then((busy) => {
       setExecPolling(busy)
+      // 2026-11-04：切回来时若该会话仍在后台跑，明确告诉用户在等什么
+      // （否则界面像「卡住了」——过程面板此时是空的，因为 trace 只在内存里）。
+      if (busy) {
+        dispatch({
+          type: 'timeline/note',
+          note: '（重连）该会话有任务正在后台执行，完成后会自动更新',
+        })
+      }
       // 用真实消息里的最后一条提问覆盖 last_message（列表接口的 last_message
       // 是助手侧文案，不一定是用户问题）。
       const loaded = useAnalysisStore.getState().messages
@@ -729,6 +784,16 @@ export default function WorkbenchPage() {
           {phase !== 'idle' && !casualReply && agentCopy(phase) && (
             <AgentBubble markdown={agentCopy(phase)} />
           )}
+
+          {/* 2026-11-04（plan trace-visible-reasoning）：执行过程面板——把 Agent 每一步
+              摊开（安全校验 → 识别意图 → 解析需求 → 口径预览 → 规划 → 生成/校验/执行 SQL
+              → 评估/诊断 → 成文），中断/停止/超时/重连都在头部说明，不让人对着转圈猜。 */}
+          <TracePanel
+            entries={timeline}
+            note={timelineNote}
+            running={busy || sending || confirming}
+          />
+
           {phase === 'parsing' && <ParsingCard onStop={handleStopParsing} />}
           {phase === 'error' && canRetryFailedAction({ phase, error }) && (
             <ErrorCard

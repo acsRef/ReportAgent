@@ -263,6 +263,56 @@ async def test_task_timeout_is_bounded_and_reports(monkeypatch):
     assert ("s7", "error", "new") in calls
 
 
+# --- 执行过程（trace 帧）----------------------------------------------------
+
+
+class TraceEmittingGraph:
+    """模拟 langgraph 回调：对给定节点发 running/success，验证需求轮也发 trace 帧。"""
+
+    def __init__(self, result: dict, nodes: tuple[str, ...]) -> None:
+        self._result = result
+        self._nodes = nodes
+
+    async def ainvoke(self, initial: dict, config: dict) -> dict:
+        for handler in config.get("callbacks") or []:
+            for node in self._nodes:
+                await handler.on_chain_start(
+                    {}, {}, metadata={"langgraph_node": node}, name=node,
+                )
+                await handler.on_chain_end(
+                    {}, metadata={"langgraph_node": node}, name=node,
+                )
+        return self._result
+
+
+async def test_requirement_turn_emits_trace_frames(monkeypatch):
+    """需求轮也要发 trace 帧（plan 2026-11-04-trace-visible-reasoning）。
+
+    用户要能看见「Agent 在想什么」：识别意图 → 解析需求 → 保存需求卡。
+    此前需求轮只发一条 phase=parsing，前端什么步骤都看不到。
+    """
+    calls: list = []
+    graph = TraceEmittingGraph(
+        {"requirement_card": _card(), "execution_status": "SUCCESS"},
+        ("classify_intent", "requirement_parse", "persist_draft"),
+    )
+    _patch(monkeypatch, graph, calls)
+    req = ChatRequest(user_query="2024年各区域销售额", session_id="s-trace", mode="new")
+
+    resp = await _chat_requirement_analysis(req, None, {"id": 1}, session_id="s-trace")
+    events = [e async for e in resp.body_iterator]
+
+    traces = [json.loads(e["data"]) for e in events if e["event"] == "trace"]
+    assert [t["step"] for t in traces] == [
+        "识别意图", "识别意图", "解析需求", "解析需求", "保存需求卡", "保存需求卡",
+    ]
+    assert traces[0]["status"] == "running" and traces[0]["kind"] == "agent"
+    assert traces[1]["status"] == "success"
+    # trace 帧不能挤掉原有终态事件
+    assert [e["event"] for e in events][-1] == "done"
+    assert "requirement" in [e["event"] for e in events]
+
+
 # --- 同会话重入 ------------------------------------------------------------
 
 
