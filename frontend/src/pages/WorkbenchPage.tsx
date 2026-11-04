@@ -41,7 +41,7 @@ import type { RequirementCard as RC } from '../types/requirement'
 import RequirementCardView from '../components/workbench/RequirementCardView'
 import QuestionBar from '../components/workbench/QuestionBar'
 import ConfirmBar from '../components/workbench/ConfirmBar'
-import { pickQuestionField } from '../components/workbench/slotQuestion'
+import { pickNextQuestion, ASSUMPTION_KEY_PREFIX } from '../components/workbench/slotQuestion'
 import ReportPaper from '../components/workbench/ReportPaper'
 import ConversationTimeline from '../components/workbench/ConversationTimeline'
 import type { TimelineTurn } from '../components/workbench/ConversationTimeline'
@@ -128,16 +128,12 @@ export default function WorkbenchPage() {
   const cardLocked =
     phase === 'generating' || phase === 'adjusting' || phase === 'report_ready' ||
     requirement?.status === 'locked'
-  // 当前该问的槽位（顺序由后端 `slot_order` 决定：口径 > 时间范围 > 粒度 > 范围 > 视角）
-  const questionField = cardLocked ? null : pickQuestionField(requirement)
-  const assumptionsPending = (requirement?.assumptions ?? []).some(
-    (assumption) => assumption.accepted === null,
-  )
+  // 当前该问的槽位（顺序由后端 `slot_order` 决定：口径 > 时间范围 > 粒度 > 范围 > 视角）。
+  // 槽位都填完后，未表态的**假设**也走同一条「一次一问」通道，否则用户会被整卡拦住。
+  const questionField = cardLocked ? null : pickNextQuestion(requirement)
   // 还有没表态的假设时不能出确认条——否则用户会「确认」一张自己没看过的假设。
-  const showConfirmBar = Boolean(requirement) && !cardLocked && !questionField && !assumptionsPending
-  const showCard = Boolean(requirement) && (
-    cardLocked || detailsOpen || (questionField === null && assumptionsPending)
-  )
+  const showConfirmBar = Boolean(requirement) && !cardLocked && !questionField
+  const showCard = Boolean(requirement) && (cardLocked || detailsOpen)
 
   // ── 卡片更新提示（2026-11-03）────────────────────────────────────────────
   // 用户补充需求时，卡片内容会被重算——不解释的话看起来像「又冒出一张新卡」。
@@ -459,6 +455,32 @@ export default function WorkbenchPage() {
    */
   async function handleAnswerQuestion(key: string, value: string | string[]) {
     if (!requirement || !activeSessionId || answering) return
+
+    // 假设也是问题：accept = 就按这个；revise = 交给输入框让用户自己说
+    if (key.startsWith(ASSUMPTION_KEY_PREFIX)) {
+      if (value === 'revise') {
+        composerRef.current?.focus()
+        return
+      }
+      const assumptionKey = key.slice(ASSUMPTION_KEY_PREFIX.length)
+      const next: RC = {
+        ...requirement,
+        assumptions: requirement.assumptions.map((assumption) =>
+          assumption.key === assumptionKey ? { ...assumption, accepted: true } : assumption,
+        ),
+      }
+      setAnswering(true)
+      try {
+        const res = await patchRequirement(activeSessionId, next)
+        dispatch({ type: 'requirement/received', requirement: res.requirement })
+      } catch (err) {
+        toast.error(`保存假设失败：${String(err).slice(0, 140)}`)
+      } finally {
+        setAnswering(false)
+      }
+      return
+    }
+
     const next: RC = {
       ...requirement,
       missing_fields: requirement.missing_fields.map((field) =>

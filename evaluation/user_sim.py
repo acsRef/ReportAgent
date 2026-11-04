@@ -54,6 +54,8 @@ class GroundTruthUser:
     asked_slots: list[str] = field(default_factory=list)
     must_not_ask_violations: list[str] = field(default_factory=list)
     answered_slots: list[str] = field(default_factory=list)
+    # GT 想要的选项在卡上根本不存在（代理没给出用户要的口径）→ 用户拒绝作答
+    gt_option_missing: list[str] = field(default_factory=list)
     # 夹具里声明的、本轮不该被问的槽位
     must_not_ask: tuple[str, ...] = ()
 
@@ -102,7 +104,12 @@ class GroundTruthUser:
         return None
 
     def _choose(self, slot: str, options: list[dict]):
-        """按 GT 选选项；GT 没有这一槽位 → 取第一个（「你决定」）。"""
+        """按 GT 选选项。
+
+        - GT 有这一槽位但从没出现在选项里 → **返回 None（用户拒绝作答）**：
+          真实用户不会替代理选一个错的；夹具据此判「代理没给出用户想要的口径选项」。
+        - GT 没有这一槽位 → 取第一个（「你决定」）。
+        """
         want = self._truth_value(slot)
         if want:
             wanted = want if isinstance(want, (list, tuple)) else [want]
@@ -113,6 +120,9 @@ class GroundTruthUser:
             ]
             if picked:
                 return picked if len(picked) > 1 else picked[0]
+            if slot not in self.gt_option_missing:
+                self.gt_option_missing.append(slot)
+            return None
         return options[0].get("value")
 
     def _truth_value(self, slot: str):
@@ -121,12 +131,20 @@ class GroundTruthUser:
 
 
 def _slot_key(missing_field: dict) -> str | None:
+    """澄清项 key → 槽位名。
+
+    已知 5 个槽位直接映射；模型现场生成的 key（`intent_view` / `analysis_*`）归到
+    `analysis_intent`，其余（如 `field_meaning:order_amount`）**原样当槽位**——
+    否则模拟器会跳过它、卡片永远停在 missing，看起来像产品 bug，实际是夹具盲区。
+    """
     key = str(missing_field.get("key") or "")
+    if not key:
+        return None
     if key in _SLOT_TO_TRUTH:
         return key
     if key.startswith("intent") or key.startswith("analysis"):
         return "analysis_intent"
-    return None
+    return key
 
 
 def _ordered_fields(card: dict) -> list[dict]:

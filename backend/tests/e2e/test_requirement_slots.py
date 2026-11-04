@@ -163,13 +163,15 @@ def _run_case(client, token) -> list[dict]:
             "follow_up_ok": converged,
             "turns_used": turns_used,
             "asked_slots": user.asked_slots,
+            "gt_option_missing": user.gt_option_missing,
             "must_not_ask_violations": user.must_not_ask_violations,
             "sql_metric_found": converged,
             "error": (error or {}).get("message") if error else None,
         })
         print(
             f"[slot-e2e] {case['id']:<32} converged={converged} priority_ok={priority_ok} "
-            f"turns={turns_used} asked={user.asked_slots} err={(error or {}).get('code')}"
+            f"turns={turns_used} asked={user.asked_slots} "
+            f"gt_missing={user.gt_option_missing} err={(error or {}).get('code')}"
         )
     return results
 

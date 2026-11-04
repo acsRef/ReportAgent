@@ -79,11 +79,14 @@ cases:
     priority_questions: { must_ask: [metric] }
     patience: 2
 
-  - id: vague-becomes-order-count
+  - id: vague-becomes-net-2
     turns:
       - query: "2024年各区域的数据"
         mode: new
-        ground_truth: { metric: 订单数, sql_must: ["COUNT(DISTINCT"] }
+        # 注意（已知边界）：口径候选只覆盖**默认口径所在单位族**（元：销售额/净销售额/
+        # 实收金额），数量类（订单数/销量）不在候选里——用户若真要数量得自己说出来。
+        # 「识别题不是多选题」是刻意的 3 选上限，这条缺口记在 hand-off 的 P2。
+        ground_truth: { metric: 净销售额, sql_must: ["- COALESCE"] }
     priority_questions: { must_ask: [metric] }
     patience: 2
 

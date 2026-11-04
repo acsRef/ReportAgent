@@ -1,11 +1,23 @@
 export type RequirementStatus = 'missing' | 'complete' | 'locked'
 
-export type RequirementFieldKey =
+/**
+ * 澄清项 key。
+ *
+ * 2026-11-03 起后端不再是固定枚举（澄清项由模型按 schema 现场生成，
+ * `backend/app/models/requirement.py::RequirementFieldKey is str`），前端此前只写了 5 个字面量，
+ * 与后端契约不一致；2026-11-04 的「一次一问」还会合成 `assumption:<key>` 这类 key，
+ * 因此这里与后端对齐成 `string`，已知 key 只作为可读别名保留。
+ */
+export type RequirementFieldKey = string
+
+/** 已知（服务端会内置选项的）澄清 key，仅用于可读性，不参与类型约束。 */
+export type KnownRequirementFieldKey =
   | 'time_range'
   | 'scope'
   | 'metric'
   | 'comparison'
   | 'granularity'
+  | 'analysis_intent'
 
 export type RequirementFieldKind = 'single' | 'multiple'
 

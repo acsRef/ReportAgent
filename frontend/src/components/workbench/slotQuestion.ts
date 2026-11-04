@@ -50,6 +50,33 @@ export function hasPendingQuestion(card: RequirementCard | null): boolean {
   return pickQuestionField(card) !== null
 }
 
+/** 未表态假设 → 合成一个问题（「就按这个 / 我要改」），让确认条不被假设卡住。 */
+export const ASSUMPTION_KEY_PREFIX = 'assumption:'
+
+export function pickPendingAssumption(card: RequirementCard | null): RequirementMissingField | null {
+  if (!card) return null
+  const pending = (card.assumptions ?? []).find(
+    (assumption) => assumption.accepted === null,
+  )
+  if (!pending) return null
+  return {
+    key: `${ASSUMPTION_KEY_PREFIX}${pending.key}`,
+    label: pending.text,
+    kind: 'single',
+    state: 'ambiguous',
+    options: [
+      { label: '就按这个', value: 'accept' },
+      { label: '我要改口径', value: 'revise' },
+    ],
+    selected_value: null,
+  }
+}
+
+/** 一次只问一个：优先问未填槽位，其次问未表态的假设。 */
+export function pickNextQuestion(card: RequirementCard | null): RequirementMissingField | null {
+  return pickQuestionField(card) ?? pickPendingAssumption(card)
+}
+
 /** 已经确定下来的槽位摘要（确认条用）：时间 / 粒度 / 口径 / 范围 / 角度。 */
 export interface ConfirmChip {
   key: string

@@ -92,6 +92,20 @@ def test_falls_back_to_first_option_when_gt_is_silent() -> None:
     assert filled["missing_fields"][0]["selected_value"] == "day"
 
 
+def test_refuses_when_gt_option_is_absent() -> None:
+    """GT 想要的口径没出现在选项里 → 用户拒绝作答（不替代理选个错的）。
+
+    这条是夹具可信度的关键：否则「代理只给了销售额/净销售额、用户其实要实收金额」
+    会被静默记成「用户选了销售额」，看起来收敛、实际是假绿。
+    """
+    user = GroundTruthUser(truth=GroundTruth(metric="实收金额"))
+    card = _card(_field("metric", [("销售额", "metric:销售额"), ("净销售额", "metric:净销售额")]))
+
+    assert user.answer_one(card) is None
+    assert user.gt_option_missing == ["metric"]
+    assert user.answered_slots == []
+
+
 def test_accepts_assumptions() -> None:
     user = GroundTruthUser(truth=GroundTruth(metric="销售额"))
     card = _card(

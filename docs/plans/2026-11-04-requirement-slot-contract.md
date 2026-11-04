@@ -1,4 +1,4 @@
-> 状态: 进行中
+> 状态: 已完成
 
 # Requirement 槽位契约：口径确定性填充 + 带数据澄清 + 多轮隔离 + 单问式呈现
 
@@ -166,3 +166,87 @@
 - 不接 BIRD 官方 runner / 600 任务 / BIRD COIN 成本模型 / Stress Mode / ITS 曲线；
 - 不新增 SSE 事件或卡片类型；`hint`/`slot_states`/`slot_order` 均为可选字段；
 - 不动 Report 层、异常检测、后台任务链路。
+
+## 落地记录（2026-11-04）
+
+### Phase 1｜槽位三态 + 口径确定性（commit `d62550a`）
+
+- 新增 `backend/app/agent/requirement_slots.py`：`match_metric_terms`（**最长命中优先**）、
+  `resolve_metric_slot`（三态 + 候选）、`slot_states` / `slot_order` / `next_slot`（确定性提问顺序）。
+- `requirement_parser` 接入：口径优先级 **用户原话 > 上一轮已确认 > 注册表 default > 模型猜**；
+  歧义时补 `RequirementMissingField(key="metric", state="ambiguous")`，选项 `value=metric:<注册表名>`。
+- `requirement_options.metric_options()` **删掉手写静态表**（含注册表没有的「客户数」）→ 从
+  `metrics.yaml` 派生；`RequirementCard` 增 `slot_states`/`slot_order`，`RequirementOption` 增 `hint`。
+- 契约镜像测试（`test_requirement_card_mirror.py`）与 `test_schema_grounding_alignment.py`
+  同步更新（同 commit，按既有规矩）；`test_requirement_merge_supplement` 的「退货率」按注册表
+  规范名 `退款率` 断言。
+
+### Phase 2｜口径预览（commit `9b7672f` + `3382d3c`）
+
+- 新增 `backend/app/services/metric_preview_service.py`：`resolve_period_bounds`（年份/年月/月区间/
+  ISO 区间/今年/最近 N 天→半开区间）、`build_preview_sql`（注册表 `expr`/`joins` + 时间过滤 +
+  可选 `dim_store` 区域过滤，**无 GROUP BY**）、`preview_metrics`（`asyncio.to_thread(execute_sql)`
+  + `run_with_timeout` + fail-open）。
+- 图节点 `requirement_preview`：`requirement_parse → requirement_preview → persist_draft`，
+  仅当口径 ≥2 候选时触发；数值写进 `RequirementOption.hint`。
+- **契约**：`CLAUDE.md` §4.1 新增「口径预览例外」限定（唯一契约修订点，实现约束四条）。
+- 实测（真链路）：`2024年各区域表现` → 三候选带真实数值
+  `销售额 2.63 亿元 / 净销售额 2.51 亿元 / 实收金额 2.47 亿元`；
+  `实收金额 + scope` 因无声明外键链路 → fail-open（不显示假数）。
+
+**偏差 1（重要）**：原设计「≥2 候选才问」在实测中不触发——模型恰好也猜默认口径，
+于是「用户没点名口径」这件事被静默带过。改为**用户没点名口径一律问**，
+候选 = 模型猜 ∪ 注册表 default ∪ 同单位其它指标（≤3，数据驱动不写死名字）。
+**偏差 2**：模型自己的粒度/口径猜不再压过默认值（与 2026-11-03 异常粒度同一条优先级原则）。
+
+### Phase 3｜多轮隔离（commit `a14be5d`）
+
+- `ContextRuntime.build()` 增加 **REQUIREMENT 档分流**：会话上下文改走
+  `prepare_user_utterances_context`（只取最近 5 条**用户原话**，≤400 字符，无 L2 摘要/L2.5 脉络、
+  无记忆写副作用）；召回里 **drop `kind=="query"`**（上一轮 SQL 参考帧）。
+  **这样既满足「不让 Agent 自拼 Context」的 Forbidden Pattern，又满足隔离目标**——
+  比原计划「graph 节点自己拼用户原话」更合规，故采用。
+- `_merge_prior_card` 之上再叠一层：supplement 轮用户没提口径 → 用 `inherited`（不再重复问）。
+- `knowledge.metrics_mentioned_in` 改最长命中优先（修「净销售额」命中「销售额」）。
+- 契约测试更新：`test_context_runtime_contract` 的通用五步管线改用 EXECUTION 档验证，
+  新增 `test_requirement_profile_isolates_conversation_and_query_memory` 钉住隔离语义。
+
+### Phase 4｜BIRD-INTERACT 式交互回归
+
+- `evaluation/requirement_slots.yaml`：**15 条** GT 夹具（显式口径 5 / 模糊口径 3 / 粒度 2 /
+  多轮 3 / 口语 2），字段含 `ground_truth.metric|granularity|sql_must`、
+  `priority_questions.must_ask|must_not_ask`、`patience`。
+- `evaluation/user_sim.py::GroundTruthUser`：**只按 GT 作答**、一次答一个槽位（按 `slot_order`）、
+  patience 上限、`must_not_ask` 违规记录、**GT 选项不存在时拒绝作答**（`gt_option_missing`）。
+- `backend/tests/e2e/test_requirement_slots.py`（env-gated）：逐 case 打印
+  `converged / priority_ok / turns / asked / gt_missing`，汇总 PRQ / FU / turns_avg / 违规数。
+- 单测：`backend/tests/graphs/test_user_sim.py`（9 例，含「GT 选项缺失必须拒绝」）。
+
+**两处测试装置缺陷（实测暴露，已修）**：① 模拟器按 `missing_fields` 原始顺序答题，会先答
+`analysis_intent`（→ overview 把口径留成模型猜的销售额），改为按 `slot_order`；
+② 模型现场生成的 `field_meaning:*` key 模拟器不认 → 直接跳过、卡片卡在 missing（看起来像产品 bug），
+改为「未知 key 原样当槽位」。
+**一处设计边界（记录不修）**：口径候选只覆盖默认口径所在**单位族**（元：销售额/净销售额/实收金额），
+数量类（订单数/销量）不在候选里——为的是守住「识别题不是多选题」的 3 选上限。
+
+### Phase 5｜呈现层「一次一问」（commit `aed44a9` + 后续）
+
+- 新增 `QuestionBar`（一条气泡只问一个槽位，选项带 `hint` 数值 + 「都不是，我补充说明」）、
+  `ConfirmBar`（`2024年 · 按周 · 净销售额 · 华东` + 确认并生成 + 展开详情）、
+  `slotQuestion.ts`（`pickQuestionField` / `pickPendingAssumption` / `pickNextQuestion` / `confirmChips`，
+  纯函数 + 10 例单测）。
+- `WorkbenchPage`：答一个槽位立即 `PATCH`（服务端算新卡，下一问来自真实槽位状态）；
+  整卡降级为「展开详情」；**未表态的假设也走同一条一次一问通道**（否则用户会被整卡拦住）。
+- `types/requirement.ts`：`RequirementFieldKey` 从 5 字面量**放宽为 `string`**（与后端
+  `RequirementFieldKey is str` 的契约对齐，也才能承载 `assumption:<key>` 合成 key）。
+
+### 验证证据
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| 后端离线 | `pytest backend/tests/{graphs,api,contracts,smoke} -q` | **924 passed** |
+| 交互 e2e | `REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s` | 15 例，见下 |
+| 真链路探针 | `python .e2elogs/probe_slots.py` | 7 问法 + 多轮：口径确定性落位 / 歧义带数字 / 追问沿用 / 改写覆盖 |
+| 前端 | `npm run test:run` / `npx tsc -b` / `npm run lint` | **364 passed** / 0 error / 0 error |
+| 浏览器 | `node .e2elogs/probe_slots_ui.mjs` | 一次一问 ✔ 三候选带数值 ✔ 下一问 ✔ 确认条 ✔ 展开详情 ✔ |
+
