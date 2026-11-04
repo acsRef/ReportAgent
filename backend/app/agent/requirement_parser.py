@@ -209,11 +209,13 @@ def _normalize_granularity(raw: object) -> str | None:
 # 同一条理由。线索词都取多字词，避免单字「月/周」误伤。
 # 判定顺序 day → week → month → quarter → year：越细的粒度越先命中。
 _GRANULARITY_QUERY_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("day", ("每天", "每日", "按日", "逐日", "日粒度", "单日", "按天", "哪天", "哪几天", "哪一日")),
-    ("week", ("每周", "按周", "逐周", "周粒度", "哪一周", "哪周", "周同比", "周环比")),
-    ("month", ("每月", "按月", "各月", "月度", "哪个月", "月粒度")),
-    ("quarter", ("每季度", "按季度", "季度粒度", "哪个季度")),
-    ("year", ("每年", "按年", "年度", "哪一年")),
+    ("day", ("每天", "每日", "按日", "逐日", "日粒度", "单日", "按天", "哪天", "哪几天", "哪一日",
+             "每一天")),
+    ("week", ("每周", "按周", "逐周", "周粒度", "哪一周", "哪周", "周同比", "周环比",
+              "每个星期", "每个礼拜")),
+    ("month", ("每月", "按月", "各月", "月度", "哪个月", "月粒度", "每个月", "逐月")),
+    ("quarter", ("每季度", "按季度", "季度粒度", "哪个季度", "每个季度")),
+    ("year", ("每年", "按年", "年度", "哪一年", "每一年")),
 )
 
 
@@ -1124,6 +1126,11 @@ def parse_requirement(
     if card.top_period is not None and card.target_metrics:
         card.top_period.metric = str(card.target_metrics[0])
 
+    # 置信度闸：理解得够确定就直接做，不确定才给选项（2026-11-04）。
+    _confidence, _ask = _apply_confidence_gate(
+        card, user_query, model_confidence=confidence,
+    )
+
     unresolved = [a for a in card.assumptions if a.accepted is None]
     if card.missing_fields or unresolved:
         card.status = "missing"
@@ -1224,6 +1231,117 @@ def _metric_candidate_options(slot) -> list:
 def _default_registry_metric():
     """注册表里标了 `default: true` 的指标（缺省口径）。"""
     return next((m for m in knowledge.all_metrics() if m.default), None)
+
+
+# --- 澄清的置信度闸（2026-11-04，用户：「应该是一个置信度，过了之后就是有选择框
+# 否则就是直接按照用户说的才对」）------------------------------------------------
+#
+# 设计：**要不要问你**不该由「某个槽位是否为空」决定，而应由「我对这句话的理解有多
+# 确定」决定。
+#   - 理解确定（置信度 ≥ 阈值）→ 直接按你说的做，把假设写在卡上（随时可改）；
+#   - 理解不确定（置信度 < 阈值）→ 才给选项。
+# 阈值可用 `REQUIREMENT_CLARIFY_CONFIDENCE` 调（默认 0.75）。
+_CLARIFY_CONFIDENCE_ENV = "REQUIREMENT_CLARIFY_CONFIDENCE"
+_DEFAULT_CLARIFY_CONFIDENCE = 0.75
+
+
+def _clarify_threshold() -> float:
+    import os
+
+    raw = os.getenv(_CLARIFY_CONFIDENCE_ENV, "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_CLARIFY_CONFIDENCE
+    return max(0.0, min(1.0, value))
+
+
+# 「问一个数」的说法：这类话虽然没说角度，但意图是明确的（要一个量），不该追问视角。
+_QUANTITY_ASK_RE = re.compile(r"是多少|多少钱|多少|合计|总共|一共|总量|总计")
+
+
+def _decision_confidence(
+    card: RequirementCard, user_query: str, model_confidence: float,
+) -> float:
+    """理解置信度 = 模型自评 + **原话里的确定性证据**，没有证据则封顶。
+
+    为什么不能只用模型自评：实测「看一下今年的销售情况」这类模糊问法它也给 0.95，
+    同一句话不同采样在 0.7~0.95 之间跳。而「用户到底说没说」是可以确定性判定的。
+
+    证据（都来自用户原话）：
+    - 明确的分析角度（趋势/对比/排名/各区域/异常…）+0.15；
+    - 明细/汇总 +0.10；「最高/最低的那一期」+0.15；明说的粒度 +0.05；
+    - 问一个数（多少/合计/总共）+0.10；点名口径 +0.05；给了年份 +0.05。
+
+    **没有角度类证据**（既没说趋势/对比，也没说明细/选期/粒度/数量）时，
+    置信度封顶 0.6（低于默认阈值 0.75）——这种话本来就该给选项。
+    """
+    score = float(model_confidence or 0.0)
+    text = str(user_query or "")
+
+    from app.agent.requirement_slots import match_metric_terms
+
+    angle_evidence = False
+    if _deterministic_intent(text):
+        score += 0.15
+        angle_evidence = True
+    if _normalize_detail_level(text) == "detail":
+        score += 0.10
+        angle_evidence = True
+    if _top_period_from_query(text):
+        score += 0.15
+        angle_evidence = True
+    if _granularity_from_query(text):
+        score += 0.05
+        angle_evidence = True
+    if _QUANTITY_ASK_RE.search(text):
+        score += 0.10
+        angle_evidence = True
+    if match_metric_terms(text):
+        score += 0.05
+    if _YEAR_RE.search(text):
+        score += 0.05
+
+    if not angle_evidence:
+        score = min(score, 0.6)
+    return max(0.0, min(1.0, round(score, 2)))
+
+
+def _apply_confidence_gate(
+    card: RequirementCard, user_query: str, *, model_confidence: float,
+) -> tuple[float, bool]:
+    """按置信度决定「直接做」还是「给选项」。返回 (置信度, 是否还要问)。
+
+    - 置信度 ≥ 阈值：把仅剩的「分析角度」追问撤掉（用户已经说清楚了），
+      记一条已接受假设说明「按你说的做」，后续可随时改；
+    - 置信度 < 阈值：保留追问（这次是真的不确定，需要选项）。
+    """
+    confidence = _decision_confidence(card, user_query, model_confidence)
+    card.confidence = confidence
+    threshold = _clarify_threshold()
+    ask = confidence < threshold
+    logger.info(
+        "clarify gate: confidence=%.2f threshold=%.2f ask=%s query=%s",
+        confidence, threshold, ask, user_query[:40],
+    )
+    if ask:
+        return confidence, True
+
+    dropped = [
+        mf for mf in card.missing_fields
+        if mf.key == "analysis_intent"
+        or mf.key.startswith("intent") or mf.key.startswith("analysis")
+    ]
+    if dropped:
+        card.missing_fields = [mf for mf in card.missing_fields if mf not in dropped]
+        card.assumptions.append(
+            RequirementAssumption(
+                key="intent_default:按原话执行",
+                text="按你原话里的分析方式执行（不再追问视角）；要换角度直接说",
+                accepted=True,
+            )
+        )
+    return confidence, False
 
 
 def _drop_satisfied_missing_fields(card: RequirementCard) -> None:
