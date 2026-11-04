@@ -27,21 +27,29 @@ function makeCard(overrides: Partial<RequirementCard> = {}): RequirementCard {
 
 function renderBar(
   card: RequirementCard,
-  extra: { changeNote?: string | null; busy?: boolean; trace?: React.ReactNode } = {},
+  extra: {
+    changeNote?: string | null
+    busy?: boolean
+    trace?: React.ReactNode
+    expanded?: boolean
+    details?: React.ReactNode
+  } = {},
 ) {
   const onConfirm = vi.fn()
-  const onExpand = vi.fn()
+  const onToggleDetails = vi.fn()
   render(
     <ConfirmBar
       card={card}
       changeNote={extra.changeNote ?? null}
       onConfirm={onConfirm}
-      onExpand={onExpand}
+      onToggleDetails={onToggleDetails}
+      expanded={extra.expanded ?? false}
       busy={extra.busy ?? false}
       trace={extra.trace}
+      details={extra.details}
     />,
   )
-  return { onConfirm, onExpand }
+  return { onConfirm, onToggleDetails }
 }
 
 describe('ConfirmBar — 一条助手消息做确认（2026-11-04 返工）', () => {
@@ -54,14 +62,36 @@ describe('ConfirmBar — 一条助手消息做确认（2026-11-04 返工）', ()
     }
   })
 
-  it('「确认并生成报告」触发 onConfirm，「需求详情」触发 onExpand', () => {
-    const { onConfirm, onExpand } = renderBar(makeCard())
+  it('「确认并生成报告」触发 onConfirm，「需求详情」触发 onToggleDetails', () => {
+    const { onConfirm, onToggleDetails } = renderBar(makeCard())
 
     fireEvent.click(screen.getByText('确认并生成报告'))
     fireEvent.click(screen.getByText('需求详情'))
 
     expect(onConfirm).toHaveBeenCalledTimes(1)
-    expect(onExpand).toHaveBeenCalledTimes(1)
+    expect(onToggleDetails).toHaveBeenCalledTimes(1)
+  })
+
+  // 2026-11-04（plan requirement-details-inline）：展开是**就地**的——
+  // 确认按钮必须还在原位，详情出现在同一条气泡里，不是另起一张大卡。
+  it('展开详情：确认按钮仍在原位，详情内联在同一个气泡里', () => {
+    renderBar(makeCard(), {
+      expanded: true,
+      details: <div data-testid="brief">核心指标</div>,
+    })
+
+    expect(screen.getByTestId('brief')).toBeTruthy()
+    expect(screen.getByText('确认并生成报告')).toBeTruthy()
+    expect(screen.getByText('收起详情 ↑')).toBeTruthy()
+    expect(screen.queryByText('需求详情')).toBeNull()
+    // 只有一个助手头像 = 仍然是一条消息，没有另起一块
+    expect(screen.getAllByText('A')).toHaveLength(1)
+  })
+
+  it('收起状态下不渲染详情内容', () => {
+    renderBar(makeCard(), { details: <div data-testid="brief">核心指标</div> })
+
+    expect(screen.queryByTestId('brief')).toBeNull()
   })
 
   it('补充轮的变更说明直接画进这句话里（不再是另一块提示条）', () => {

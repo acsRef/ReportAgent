@@ -146,9 +146,11 @@ export default function WorkbenchPage() {
   // ── 需求澄清的呈现时机（2026-11-04，plan chat-like-conversation-flow）────────
   // 判定集中在 `requirementUiMode`：只有 awaiting_* 相位才出提问条/确认条；
   // parsing 时上一轮的条必须消失（否则误点 → 409 SESSION_BUSY），report_ready 也不出条。
-  const requirementMode = requirementUiMode(phase, requirement, cardLocked, detailsOpen)
+  const requirementMode = requirementUiMode(phase, requirement, cardLocked)
   const questionField = requirementMode === 'question' ? pickNextQuestion(requirement) : null
   const showConfirmBar = requirementMode === 'confirm'
+  // 有没有「过程」可展示：没有 trace 也不渲染那条消息（否则是个空气泡）。
+  const hasTrace = timeline.length > 0 || Boolean(timelineNote)
   // 正在等用户答（提问或确认）——这个阶段的状态文案由那条助手消息表达，不再重复
   const awaitingCard = phase === 'awaiting_confirm' || phase === 'awaiting_missing'
   // 整卡只在两种情况下出现：执行中（只读）或用户主动「展开详情」
@@ -758,22 +760,36 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {/* 确认 = 同一条消息形态：一句话 + 参数小结 + 一个按钮 */}
+          {/* 确认 = 同一条消息形态：一句话 + 参数小结 + 一个按钮。
+              「需求详情」在**这条消息里**就地展开（plan requirement-details-inline）：
+              换页面/另起大卡会让唯一的动作（确认）从视野里消失，还多出一块空白气泡。 */}
           {showConfirmBar && requirement && (
             <ConfirmBar
               card={requirement}
               changeNote={changeNote}
               busy={patching || confirming}
+              expanded={detailsOpen}
               trace={<TracePanel entries={timeline} note={timelineNote} running={busy || confirming} />}
               onConfirm={async () => {
                 await handlePatchAndConfirm(requirement)
               }}
-              onExpand={() => setDetailsOpen(true)}
+              onToggleDetails={() => setDetailsOpen((open) => !open)}
+              details={
+                <RequirementCardView
+                  variant="inline"
+                  card={requirement}
+                  readOnly
+                  changeNote={changeNote}
+                  onChange={() => {}}
+                  onConfirm={() => {}}
+                />
+              }
             />
           )}
 
-          {/* 没有提问/确认可出时（解析中 / 生成中 / 已出报告），思考单独成一条消息 */}
-          {!questionField && !showConfirmBar && !cardLocked && (
+          {/* 没有提问/确认可出时（解析中 / 生成中 / 已出报告），思考单独成一条消息。
+              没有 trace（首帧还没来）就整块不渲染——否则留下一个空气泡（用户截图里的空白）。 */}
+          {!questionField && !showConfirmBar && !cardLocked && hasTrace && (
             <div className="wb-message wb-reveal">
               <div className="wb-msg-avatar agent">A</div>
               <div className="wb-bubble wb-bit-bubble">
@@ -782,19 +798,7 @@ export default function WorkbenchPage() {
             </div>
           )}
 
-          {requirement && showCard && detailsOpen && !cardLocked && (
-            // 详情是「一次性查看」：给一个明确的收回入口，否则用户会被大卡困住
-            <div className="wb-detail-back">
-              <button
-                type="button"
-                className="wb-quiet-btn"
-                onClick={() => setDetailsOpen(false)}
-              >
-                收起详情 ↑
-              </button>
-            </div>
-          )}
-
+          {/* 执行中（只读）才用整卡：这是「这一轮已经在跑了」的状态牌，不是详情视图 */}
           {requirement && showCard && (
             <RequirementCardView
               card={requirement}

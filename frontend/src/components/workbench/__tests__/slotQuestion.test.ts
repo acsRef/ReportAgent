@@ -131,37 +131,37 @@ describe('requirementUiMode — 需求区该显示什么（含 409 回归钉子�
   const doneCard = card({ status: 'complete', missing_fields: [], time_range: '2024年' })
 
   it('awaiting_* + 有槽位待问 → question', () => {
-    expect(requirementUiMode('awaiting_confirm', openCard, false, false)).toBe('question')
-    expect(requirementUiMode('awaiting_missing', openCard, false, false)).toBe('question')
+    expect(requirementUiMode('awaiting_confirm', openCard, false)).toBe('question')
+    expect(requirementUiMode('awaiting_missing', openCard, false)).toBe('question')
   })
 
   it('awaiting_* + 槽位都填完 → 一行确认条', () => {
-    expect(requirementUiMode('awaiting_confirm', doneCard, false, false)).toBe('confirm')
+    expect(requirementUiMode('awaiting_confirm', doneCard, false)).toBe('confirm')
   })
 
-  it('展开详情 → card', () => {
-    expect(requirementUiMode('awaiting_confirm', doneCard, false, true)).toBe('card')
+  it('展开详情不改变形态（仍是确认条，详情内联在消息里）', () => {
+    expect(requirementUiMode('awaiting_confirm', doneCard, false)).toBe('confirm')
   })
 
   // 回归钉子（2026-11-04 实测撞 409）：新一轮还在 parsing 时，上一轮的确认条必须消失
   it('parsing 相位一律 none（不许留上一轮的确认条 → 409 SESSION_BUSY）', () => {
-    expect(requirementUiMode('parsing', doneCard, false, false)).toBe('none')
-    expect(requirementUiMode('parsing', openCard, false, false)).toBe('none')
+    expect(requirementUiMode('parsing', doneCard, false)).toBe('none')
+    expect(requirementUiMode('parsing', openCard, false)).toBe('none')
   })
 
   it('report_ready / error / idle 也不出条（报告就是回答）', () => {
     for (const phase of ['report_ready', 'error', 'idle']) {
-      expect(requirementUiMode(phase, doneCard, false, false)).toBe('none')
+      expect(requirementUiMode(phase, doneCard, false)).toBe('none')
     }
   })
 
   it('执行中（cardLocked）→ 只读整卡', () => {
-    expect(requirementUiMode('generating', doneCard, true, false)).toBe('card')
-    expect(requirementUiMode('adjusting', openCard, true, false)).toBe('card')
+    expect(requirementUiMode('generating', doneCard, true)).toBe('card')
+    expect(requirementUiMode('adjusting', openCard, true)).toBe('card')
   })
 
   it('没有卡 → none', () => {
-    expect(requirementUiMode('awaiting_confirm', null, false, false)).toBe('none')
+    expect(requirementUiMode('awaiting_confirm', null, false)).toBe('none')
   })
 
   it('pickNextQuestion 优先槽位、其次假设', () => {

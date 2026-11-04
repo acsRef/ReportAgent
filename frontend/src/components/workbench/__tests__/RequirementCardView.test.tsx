@@ -270,3 +270,67 @@ describe('RequirementCardView — 时间粒度 chip', () => {
     expect(screen.queryByText('group_compare')).toBeNull()
   })
 })
+
+describe('RequirementCardView — inline 详情形态（2026-11-04 plan requirement-details-inline）', () => {
+  const inlineCard = () => makeCard({
+    status: 'complete',
+    missing_fields: [],
+    assumptions: [],
+    time_range: '2024年',
+    granularity: 'week',
+    scope: ['华东'],
+    expected_blocks: [],
+  })
+
+  function renderInline(overrides: Partial<RequirementCard> = {}) {
+    const { container } = render(
+      <ToastProvider>
+        <RequirementCardView
+          card={{ ...inlineCard(), ...overrides }}
+          onChange={() => {}}
+          onConfirm={() => {}}
+          readOnly
+          variant="inline"
+        />
+      </ToastProvider>,
+    )
+    return container
+  }
+
+  it('没有卡片外壳、没有 brief 标题、没有自己的确认按钮', () => {
+    const container = renderInline()
+    expect(container.querySelector('.wb-requirement-card.inline')).not.toBeNull()
+    expect(screen.queryByText('AGENT REQUIREMENT BRIEF')).toBeNull()
+    expect(screen.queryByText('需求解析与执行确认')).toBeNull()
+    expect(screen.queryByText('确认并生成报告')).toBeNull()
+    expect(screen.queryByText('修改需求')).toBeNull()
+    expect(screen.getByText('需求详情')).toBeTruthy()
+  })
+
+  it('参数仍然读得到：摘要 + 指标 / 时间范围 / 方法', () => {
+    renderInline()
+    expect(screen.getByText('分析 2024 年华东区域的销售表现')).toBeTruthy()
+    expect(screen.getByText('销售额')).toBeTruthy()
+    expect(screen.getByText('2024年')).toBeTruthy()
+    expect(screen.getByText('按周')).toBeTruthy()
+    expect(screen.getByText('华东')).toBeTruthy()
+    expect(screen.getByText('月度趋势')).toBeTruthy()
+  })
+
+  // 截图里的另一处难看：分组只有标题、下面一片空白
+  it('空分组不再渲染空壳（预计报告内容为空时不出现）', () => {
+    renderInline()
+    expect(screen.queryByText('预计报告内容')).toBeNull()
+  })
+
+  it('缺失项编辑区不进内联详情（问答在对话里问）', () => {
+    const container = renderInline({ status: 'missing', missing_fields: [{
+      key: 'time_range',
+      label: '时间范围',
+      kind: 'single',
+      options: [{ label: '本月', value: '本月' }],
+      selected_value: null,
+    }] })
+    expect(container.querySelector('.wb-missing-zone')).toBeNull()
+  })
+})

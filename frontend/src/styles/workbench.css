@@ -1233,13 +1233,68 @@
 }
 
 .wb-detail-back {
-  max-width: 860px;
-  margin: 0 0 8px 41px;
+  display: none;
+}
+
+/* ---------- 需求详情：折进助手消息里的内联形态（2026-11-04） ---------- */
+/* 用户截图：「展开详情」后上面是一个空白气泡、下面是另起一张大卡，很难看。
+   现在详情不换形态、不另起卡：它是确认气泡内部的一块内容，确认按钮仍在原位。 */
+.wb-ask-details {
+  margin-top: var(--sp-xs);
+  padding-top: var(--sp-s);
+  border-top: 1px solid var(--line);
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: var(--sp-xs);
+}
+.wb-inline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-m);
+}
+.wb-inline-label {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+}
+/* 内联形态去掉卡片外壳：没有边框/阴影/左侧状态条，让人读起来是「一段补充说明」 */
+.wb-requirement-card.inline {
+  max-width: none;
+  margin: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.wb-requirement-card.inline.complete,
+.wb-requirement-card.inline.missing,
+.wb-requirement-card.inline.locked {
+  border-left: none;
+  background: transparent;
+  box-shadow: none;
+}
+.wb-requirement-card.inline .wb-req-summary.inline {
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 600 12px/1.6 var(--font-display);
+}
+.wb-requirement-card.inline .wb-req-body.inline { padding: 0; }
+.wb-requirement-card.inline .wb-req-grid {
+  gap: 10px 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.wb-requirement-card.inline .wb-req-label {
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
 }
 @media (max-width: 880px) {
-  .wb-detail-back { margin-left: 0; }
+  .wb-requirement-card.inline .wb-req-grid { grid-template-columns: 1fr; }
 }
 
 /* ---------- 需求澄清/确认：作为普通助手消息（2026-11-04） ---------- */

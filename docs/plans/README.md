@@ -25,6 +25,7 @@
 
 | Plan | 主题 | 备注 |
 |---|---|---|
+| [2026-11-04-requirement-details-inline.md](2026-11-04-requirement-details-inline.md) | 「需求详情」改成**就地展开**：①`requirementUiMode` 去掉 `detailsOpen`，展开不再换形态（此前切成 `card` → 确认条消失、只剩思考那条消息、`TracePanel` 返回 null 留下**空气泡**）②详情用 `RequirementCardView variant="inline"`（无外壳/标题/底部动作/缺失区）内联进同一条气泡，确认按钮原地不动③空分组（如「预计报告内容」）不再画空壳④`hasTrace` 闸：没有 trace 不渲染思考消息 | 起因用户截图「展开是空白、很丑」；待提交 |
 | [2026-10-28-mainline-correctness-fixes.md](2026-10-28-mainline-correctness-fixes.md) | 主线正确性 6 修复：①粒度成卡体字段 + plan 后确定性改写 dimensions ②多轮继承不再要求 complete（≠locked 即可）③`chart_advisor` 按列名识别时间维度（月份=int 不再退化成表格）④`_SCHEMA_TERM_HINTS` 口径映射注入 plan+generate（防造 `sales_amount`）⑤业务实体缺失转 `requested_object`（防造 `dim_supplier`）⑥错误 kind 贯通父图 + SSE 两跳；评测断言 `rows_gt 0→6`、空结果年份 2025→2027 | 已验证：backend 1218 passed / frontend 309 / 主线 20 例 16 pass 0 fail（sql_success_rate 1.0）/ fault 注入真链路 kind=object_not_found |
 | [2026-10-28-ci-backend-only.md](2026-10-28-ci-backend-only.md) | CI 门禁调整：先收缩为后端 pytest（拆出 Playwright），同日按用户澄清扩回「每次提交都跑测试」——`ci.yml` = backend pytest + frontend vitest/tsc，任意分支 push 与 PR 触发 + concurrency 取消旧 run；`e2e-contract.yml` 只留 Playwright（手动/夜间，带 artifacts），不进 PR | 已验证：两 YAML 解析通过（jobs/triggers/concurrency 已核对）；本地 pytest 1188 passed 与拆分前一致 |
 | [2026-10-28-execution-idempotency.md](2026-10-28-execution-idempotency.md) | 执行幂等（B7 边界）：新增 `idempotency_guard` 图节点，键=`session_id:draft_id`；已 done 版本重放、FAILED 可重试、adjust 旁路；仓储 `find_done_by_draft` 单点判定 | 已验证：5 图例 + 1 真 PG 例；全量 1188 passed；真链路 confirm#2 只回同版本、无 trace、版本表 1 行 |

@@ -55,6 +55,7 @@ pytest backend/tests/api -q
 | 10 | 明细类列加确定性投影；`type=table` 不再强画图；每步 trace 带结论 | `a7435bc` `421793d` |
 | 11 | 澄清/确认改**一条普通对话消息**（思考一行 + 提问/确认，同一个气泡），卡片退出主流程 | `d24ffdd` |
 | 12 | 历史轮次条「未生成报告」去噪 + 版本按时间归属（`historyTurns.ts`，plan `2026-11-04-history-turn-pairing.md`） | `6c00893` |
+| 13 | 「需求详情」就地展开（`RequirementCardView variant="inline"`）：修掉展开后的空白气泡与浮空「收起详情」，确认按钮原地不动 | 本次 |
 
 ### 2026-11-03 做完的事
 

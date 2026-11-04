@@ -18,6 +18,14 @@ interface Props {
   readOnly?: boolean
   /** 补充轮带来的变化说明（2026-11-03）：让用户看到「同一张卡被更新」，而不是又冒出一张新卡。 */
   changeNote?: string | null
+  /**
+   * 呈现形态（2026-11-04，plan requirement-details-inline）。
+   *
+   * - `full`：完整 brief（kicker + 标题 + 状态 pill + 缺失项 + 底部动作）——执行中只读时用；
+   * - `inline`：**折进助手消息里的详情**——没有卡片外壳/标题/底部按钮，只有
+   *   一句需求摘要 + 参数网格。点「需求详情」展开的就是它，不再是屏幕中间另起一张大卡。
+   */
+  variant?: 'full' | 'inline'
 }
 
 const STATUS_PILL: Record<RC['status'], string> = {
@@ -47,8 +55,9 @@ const GRANULARITY_LABELS: Record<NonNullable<RC['granularity']>, string> = {
  * actions. No spinner anywhere — busy states live in the composer and
  * the progress card (WorkbenchPage).
  */
-export default function RequirementCardView({ card, onChange, onConfirm, onFocusComposer, readOnly = false, changeNote = null }: Props) {
+export default function RequirementCardView({ card, onChange, onConfirm, onFocusComposer, readOnly = false, changeNote = null, variant = 'full' }: Props) {
   const ready = isDraftReadyForReview(card)
+  const inline = variant === 'inline'
 
   function setSelectedValue(key: string, value: string | string[] | null) {
     onChange({
@@ -112,31 +121,42 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
       : STATUS_PILL[card.status]
 
   return (
-    <div className={`wb-requirement-card ${card.status} wb-reveal`}>
-      <div className="wb-req-head">
-        <div>
-          <div className="wb-req-kicker">AGENT REQUIREMENT BRIEF</div>
-          <h3 className="wb-req-title">需求解析与执行确认</h3>
+    <div className={`wb-requirement-card ${inline ? 'inline' : ''} ${card.status} wb-reveal`}>
+      {!inline && (
+        <div className="wb-req-head">
+          <div>
+            <div className="wb-req-kicker">AGENT REQUIREMENT BRIEF</div>
+            <h3 className="wb-req-title">需求解析与执行确认</h3>
+          </div>
+          <span className="wb-req-status">{pill}</span>
         </div>
-        <span className="wb-req-status">{pill}</span>
-      </div>
+      )}
 
-      <div className="wb-req-summary">{card.summary}</div>
+      {inline && (
+        <div className="wb-inline-head">
+          <span className="wb-inline-label">需求详情</span>
+          <span className="wb-req-status">{pill}</span>
+        </div>
+      )}
+
+      <div className={inline ? 'wb-req-summary inline' : 'wb-req-summary'}>{card.summary}</div>
 
       {changeNote && (
         <div className="wb-req-changenote">↻ 已按你的补充更新：{changeNote}</div>
       )}
 
-      <div className="wb-req-body">
+      <div className={inline ? 'wb-req-body inline' : 'wb-req-body'}>
         <div className="wb-req-grid">
-          <div>
-            <div className="wb-req-label">核心指标</div>
-            <div className="wb-chips">
-              {card.target_metrics.map((metric) => (
-                <span key={metric} className="wb-chip">{metric}</span>
-              ))}
+          {card.target_metrics.length > 0 && (
+            <div>
+              <div className="wb-req-label">核心指标</div>
+              <div className="wb-chips">
+                {card.target_metrics.map((metric) => (
+                  <span key={metric} className="wb-chip">{metric}</span>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
           <div>
             <div className="wb-req-label">时间与范围</div>
             <div className="wb-chips">
@@ -159,33 +179,40 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
                 )}
             </div>
           </div>
-          <div>
-            <div className="wb-req-label">分析维度</div>
-            <div className="wb-chips">
-              {card.dimensions.map((dimension) => (
-                <span key={dimension} className="wb-chip">{dimension}</span>
-              ))}
+          {card.dimensions.length > 0 && (
+            <div>
+              <div className="wb-req-label">分析维度</div>
+              <div className="wb-chips">
+                {card.dimensions.map((dimension) => (
+                  <span key={dimension} className="wb-chip">{dimension}</span>
+                ))}
+              </div>
             </div>
-          </div>
-          <div>
-            <div className="wb-req-label">建议分析方法</div>
-            <div className="wb-chips">
-              {card.analysis_methods.map((method) => (
-                <span key={method} className="wb-chip method">{methodLabel(method)}</span>
-              ))}
+          )}
+          {card.analysis_methods.length > 0 && (
+            <div>
+              <div className="wb-req-label">建议分析方法</div>
+              <div className="wb-chips">
+                {card.analysis_methods.map((method) => (
+                  <span key={method} className="wb-chip method">{methodLabel(method)}</span>
+                ))}
+              </div>
             </div>
-          </div>
-          <div style={{ gridColumn: '1 / -1' }}>
-            <div className="wb-req-label">预计报告内容</div>
-            <div className="wb-chips">
-              {card.expected_blocks.map((block) => (
-                <span key={block} className="wb-chip block">{block}</span>
-              ))}
+          )}
+          {/* 空分组不再画一个只有标题的空壳（截图里「预计报告内容」下面一片空白，很丑） */}
+          {card.expected_blocks.length > 0 && (
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div className="wb-req-label">预计报告内容</div>
+              <div className="wb-chips">
+                {card.expected_blocks.map((block) => (
+                  <span key={block} className="wb-chip block">{block}</span>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
-        {!readOnly && card.status === 'missing' && (card.missing_fields.length > 0 || card.assumptions.length > 0) && (
+        {!inline && !readOnly && card.status === 'missing' && (card.missing_fields.length > 0 || card.assumptions.length > 0) && (
           <div className="wb-missing-zone">
             <div className="wb-missing-heading">
               <span className="wb-missing-title">需要你确认的信息</span>
@@ -256,7 +283,9 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
         )}
       </div>
 
-      {readOnly ? (
+      {/* inline 详情没有自己的底部动作：确认按钮就在它上面那条消息的 foot 里，
+          两个「确认并生成报告」并排只会让人不知道该点哪个。 */}
+      {inline ? null : readOnly ? (
         <div className="wb-req-actions">
           <span className="wb-req-hint">需求已确认并锁定，报表生成中；要改需求请在下方输入框说明</span>
         </div>

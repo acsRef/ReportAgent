@@ -87,19 +87,22 @@ export type RequirementUiMode = 'question' | 'confirm' | 'card' | 'none'
  * `parsing`（新一轮还在解析）一律 `none`——**上一轮的确认条若留在屏幕上会被误点**，
  * 后端会以 409 SESSION_BUSY 拒绝（实测撞过）。`report_ready` / `error` 也不出条：
  * 这轮已经结束，报告就是回答。
+ *
+ * 「详情」不再是第四种形态（plan requirement-details-inline）：点开详情只是在
+ * 确认条**内部**展开一块内容，确认条本身还在，按钮也还在——所以 `detailsOpen`
+ * 不再参与判定，`card` 只剩「执行中只读整卡」这一种来源。
  */
 export function requirementUiMode(
   phase: RequirementCard['status'] | string,
   card: RequirementCard | null,
   cardLocked: boolean,
-  detailsOpen: boolean,
 ): RequirementUiMode {
   if (!card) return 'none'
   if (cardLocked) return 'card'
   const awaiting = phase === 'awaiting_confirm' || phase === 'awaiting_missing'
   if (!awaiting) return 'none'
   if (pickNextQuestion(card)) return 'question'
-  return detailsOpen ? 'card' : 'confirm'
+  return 'confirm'
 }
 
 /** 已经确定下来的槽位摘要（确认条用）：时间 / 粒度 / 口径 / 范围 / 角度。 */
