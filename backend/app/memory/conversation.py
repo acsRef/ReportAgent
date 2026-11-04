@@ -175,3 +175,46 @@ async def prepare_conversation_context(session_id: str, user_id: int | str) -> s
             user_id, updates, compressed_batch, session_id=session_id,
         )
     return context
+
+
+USER_UTTERANCE_LIMIT = 5
+USER_UTTERANCE_MAX_CHARS = 400
+
+
+async def prepare_user_utterances_context(
+    session_id: str,
+    user_id: int | str,
+    *,
+    limit: int = USER_UTTERANCE_LIMIT,
+    max_chars: int = USER_UTTERANCE_MAX_CHARS,
+) -> str:
+    """需求解析专用的**用户原话**上下文（2026-11-04，slot-contract Phase 3）。
+
+    只保留最近 N 条 `role=user` 的原话，去掉：
+    - assistant/system 行（本仓库里 assistant 内容为空，但通用性上也不该进）；
+    - L2 压缩摘要与 L2.5 长期脉络（**模型写的散文**——口径猜测就是从这里被逐轮
+      固化的：「上一轮说按实收口径」这种句子会诱导下一轮继续用实收口径）；
+    - 触发压缩与 L3 写入的副作用（需求解析不该有记忆写副作用）。
+
+    用途仅限**指代消解**（「这两个月」「再按品类看」指回哪个对象），
+    口径的权威来源永远是上一轮卡的结构化槽位（`_format_prior_block`）。
+    """
+    from app.infra.conversation.repository import get_messages
+
+    try:
+        messages = await get_messages(session_id, int(user_id))
+    except Exception as exc:  # noqa: BLE001 - 上下文读失败降级为空，不阻塞需求解析
+        logger.warning("user utterance context failed: %s", exc)
+        return ""
+
+    utterances = [
+        (m.get("content") or "").strip()
+        for m in messages
+        if m.get("role") == "user" and (m.get("content") or "").strip()
+    ][-limit:]
+    if not utterances:
+        return ""
+    text = "\n".join(f"user: {u}" for u in utterances)
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    return text

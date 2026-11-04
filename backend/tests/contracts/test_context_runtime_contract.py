@@ -165,13 +165,16 @@ class TestContextRuntimeFiveStepOrchestration:
             new=fake_recall_structured,
         ):
             runtime = ContextRuntime(policy=LegacyFallbackPolicy())  # P4c post-review F1: 显式传 LegacyFallbackPolicy
+            # 2026-11-04：这里改用 EXECUTION 档验证**通用五步管线**——REQUIREMENT 档
+            # 自 slot-contract Phase 3 起走「用户原话 only + 丢 query memory」的隔离
+            # 路径，由 `test_requirement_profile_isolates_*` 单独钉住。
             bundle = await runtime.build(
                 session_id="s-1", user_id=42,
-                query="2024 销售", agent="requirement_analyze",
+                query="2024 销售", agent="confirmed_execution_sql_agent",
             )
 
         # Step 1：agent 解析
-        assert bundle["agent_policy"] == "requirement"
+        assert bundle["agent_policy"] == "execution"
         # Step 2：fallback 全开 → conversation=True → 调用 _prepare
         assert captured["conversation"] == ("s-1", 42)
         assert bundle["conversation_context"] == "CTX_FROM_ENGINE"
@@ -223,6 +226,60 @@ class TestContextRuntimeFiveStepOrchestration:
 
         assert recall_called["hit"] is False  # decision.semantic+query 全 False → 不调 recall
         assert bundle["recall_items"] == []
+
+    @pytest.mark.asyncio
+    async def test_requirement_profile_isolates_conversation_and_query_memory(self):
+        """REQUIREMENT 档的上下文隔离（plan 2026-11-04-requirement-slot-contract Phase 3）。
+
+        - 会话上下文只取**用户原话**（`prepare_user_utterances_context`），不取
+          L2 摘要/L2.5 脉络（模型散文会把上一轮的口径猜测逐轮固化）；
+        - 召回里**丢掉 query memory**（上一轮 SQL 参考帧会原样带回旧口径表达式）；
+        - 业务定义（semantic）仍保留——它才是「口径是什么意思」的正当来源。
+        """
+        captured: dict = {"user_only": None, "recall_calls": 0}
+
+        async def fake_user_ctx(session_id, user_id):
+            captured["user_only"] = (session_id, user_id)
+            return "USER: 2024年各区域销售额"
+
+        async def fake_full_ctx(session_id, user_id):  # 不该被 REQUIREMENT 调到
+            captured["full_ctx"] = True
+            return "L2 摘要 + assistant 散文"
+
+        async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
+                                         top_k_preferences=3):
+            captured["recall_calls"] += 1
+            if top_k_queries:  # query view
+                return [{
+                    "raw_text": "上次 SQL: SUM(fact_payments.payment_amount) ...",
+                    "kind": "query", "source": "memory_query", "score": 0.9, "ref_id": 7,
+                }]
+            return [{
+                "raw_text": "「销售额」= 订单金额，未扣退款",
+                "kind": "semantic", "source": "memory_semantic", "score": 0.8, "ref_id": 9,
+            }]
+
+        with patch(
+            "app.context.runtime.prepare_user_utterances_context", new=fake_user_ctx,
+        ), patch(
+            "app.context.runtime.prepare_conversation_context", new=fake_full_ctx,
+        ), patch(
+            "app.infra.memory.memory_manager.MemoryManager.recall_structured",
+            new=fake_recall_structured,
+        ):
+            runtime = ContextRuntime(policy=LegacyFallbackPolicy())
+            bundle = await runtime.build(
+                session_id="s-iso", user_id=7, query="再按品类看", agent="requirement_analyze",
+            )
+
+        assert bundle["agent_policy"] == "requirement"
+        assert captured["user_only"] == ("s-iso", 7)
+        assert "full_ctx" not in captured, "REQUIREMENT 不许走 L2 摘要路径"
+        assert bundle["conversation_context"] == "USER: 2024年各区域销售额"
+        # query memory（旧 SQL）被丢弃，业务定义保留
+        assert [it["kind"] for it in bundle["recall_items"]] == ["semantic"]
+        assert "fact_payments.payment_amount" not in bundle["assembled_context"]
+        assert "未扣退款" in bundle["assembled_context"]
 
     @pytest.mark.asyncio
     async def test_build_empty_recall_yields_empty_items(self):

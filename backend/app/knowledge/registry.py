@@ -99,23 +99,38 @@ def all_metrics() -> tuple[MetricDef, ...]:
 
 
 def metrics_mentioned_in(text: str) -> list[MetricDef]:
-    """从一段自由文本里找出提到的指标（名字或同义词）。
+    """从一段自由文本里找出提到的指标（名字或同义词），**最长命中优先**。
 
     用途：需求卡的 `target_metrics` 常常是语义名（`sales_trend` / `anomalies`），
     解析不到注册表；但用户确认过的口径假设里会写清「→ 已选：支付金额」这类话。
     这里做确定性词面匹配，把能认出来的指标捞出来，避免退回「整张注册表」。
+
+    2026-11-04（slot-contract Phase 3）：改最长命中优先——子串匹配下「净销售额」
+    会同时命中「销售额」，口径白名单被更泛的词带偏（`metric_hints` 会把错误的
+    表达式渲染进 SQL prompt）。
     """
     haystack = _normalize(text)
     if not haystack:
         return []
+    hits: list[tuple[int, MetricDef]] = []
+    for metric in _metrics():
+        best = 0
+        for name in (metric.name, *metric.synonyms):
+            needle = _normalize(name)
+            if needle and needle in haystack:
+                best = max(best, len(needle))
+        if best:
+            hits.append((best, metric))
+    if not hits:
+        return []
+    longest = max(length for length, _ in hits)
     found: list[MetricDef] = []
     seen: set[str] = set()
-    for metric in _metrics():
-        names = [metric.name, *metric.synonyms]
-        if any(_normalize(n) and _normalize(n) in haystack for n in names):
-            if metric.name not in seen:
-                seen.add(metric.name)
-                found.append(metric)
+    for length, metric in hits:
+        if length != longest or metric.name in seen:
+            continue
+        seen.add(metric.name)
+        found.append(metric)
     return found
 
 

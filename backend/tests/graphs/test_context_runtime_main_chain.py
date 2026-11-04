@@ -38,12 +38,15 @@ async def test_requirement_agent_entry_has_conversation_context(monkeypatch):
     P4c post-review F1 后默认走 SelectiveRecallPolicy; '上月销售' 不含 history_ref
     关键词 → selective 判 conversation=False → 不调 prepare_conversation_context.
     用含 history_ref 关键词的 query 才能验证 conversation path.
+
+    2026-11-04（slot-contract Phase 3）：REQUIREMENT 档改走**用户原话**上下文
+    （`prepare_user_utterances_context`）——不吃 L2 摘要/模型散文。
     """
-    async def fake_prepare(sid, uid):
-        return "<L1>history</L1><L2>summary</L2>"
+    async def fake_prepare_user(sid, uid):
+        return "<USER>history</USER>"
 
     monkeypatch.setattr(
-        "app.context.runtime.prepare_conversation_context", fake_prepare
+        "app.context.runtime.prepare_user_utterances_context", fake_prepare_user
     )
     bundle = await ContextRuntime().build(
         session_id="session-A", user_id=1,

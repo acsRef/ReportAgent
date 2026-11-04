@@ -22,7 +22,10 @@ from app.context.decision import (
 )
 from app.context.policy import AgentContextPolicy, ContextPolicyResolver
 # P4a：conversation 引擎迁入 app.memory（domain 层）；context 经 memory 域调用
-from app.memory.conversation import prepare_conversation_context
+from app.memory.conversation import (
+    prepare_conversation_context,
+    prepare_user_utterances_context,
+)
 # F3：recall 走 domain views（infra.memory.memory_manager 由 view 内部委托），
 # 不再由 ContextRuntime 直接 import。
 from app.memory import query as query_memory, semantic as semantic_memory
@@ -63,9 +66,18 @@ class ContextRuntime:
         # 不再是死字段；False 时跳过——纯闲聊 / 已完整 query 等场景不浪费一次 DB 往返）。
         conversation_context = ""
         if decision.conversation:
-            conversation_context = await prepare_conversation_context(
-                session_id, user_id,
-            )
+            if agent_policy == AgentContextPolicy.REQUIREMENT:
+                # 2026-11-04（plan 2026-11-04-requirement-slot-contract Phase 3）：
+                # 需求解析只吃**用户原话**，不吃 L2 摘要/L2.5 脉络——那些是模型写的
+                # 散文，口径猜测会从那里被逐轮固化（「上一轮按实收口径」→ 这轮继续）。
+                # 指代消解够用；口径的权威来源是上一轮卡的结构化槽位。
+                conversation_context = await prepare_user_utterances_context(
+                    session_id, user_id,
+                )
+            else:
+                conversation_context = await prepare_conversation_context(
+                    session_id, user_id,
+                )
         # Step 4：memory recall（P4b 结构化 + F3 经 domain views）
         recall_items: list[RecallItem] = []
         if decision.semantic:
@@ -88,6 +100,13 @@ class ContextRuntime:
         if agent_policy == AgentContextPolicy.EXECUTION:
             recall_items = [
                 it for it in recall_items if it.get("kind") != "preference"
+            ]
+        # Step 4.6（2026-11-04，Phase 3）：REQUIREMENT 档 drop **query memory**
+        # （上一轮的 SQL 参考帧）。它会把旧口径表达式原样带回需求理解，
+        # 是「追问沿错口径越走越深」的第三条通道。业务定义（semantic）与偏好保留。
+        if agent_policy == AgentContextPolicy.REQUIREMENT:
+            recall_items = [
+                it for it in recall_items if it.get("kind") != "query"
             ]
         # Step 5：assemble (P4c post-review F2: 透传 remaining_token_budget)
         return self._assembler.assemble(
