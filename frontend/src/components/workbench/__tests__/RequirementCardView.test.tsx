@@ -254,4 +254,19 @@ describe('RequirementCardView — 时间粒度 chip', () => {
     )
     expect(screen.getByText('按周')).toBeTruthy()
   })
+
+  it('建议分析方法显示中文标签，不露 group_compare 这种 id', () => {
+    renderCard({
+      card: makeCard({
+        status: 'complete',
+        missing_fields: [],
+        assumptions: [],
+        analysis_methods: ['group_compare', 'anomaly_detection'],
+      }),
+    })
+
+    expect(screen.getByText('对比/排名')).toBeTruthy()
+    expect(screen.getByText('异常检测')).toBeTruthy()
+    expect(screen.queryByText('group_compare')).toBeNull()
+  })
 })

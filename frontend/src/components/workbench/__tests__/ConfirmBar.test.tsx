@@ -45,7 +45,7 @@ describe('ConfirmBar — 槽位问完后的紧凑确认条', () => {
     renderBar(makeCard())
 
     expect(screen.getByText('需求已明确')).toBeTruthy()
-    for (const text of ['2024年', '按周', '净销售额', '华东', '趋势']) {
+    for (const text of ['2024年', '按周', '净销售额', '华东', '趋势分析']) {
       expect(screen.getByText(text)).toBeTruthy()
     }
   })

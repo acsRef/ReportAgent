@@ -1,5 +1,6 @@
 import RadioGroup from '../atelier/RadioGroup'
 import CheckboxGroup from '../atelier/CheckboxGroup'
+import { methodLabel } from './slotQuestion'
 import {
   isDraftReadyForReview,
   type RequirementAssumption,
@@ -160,7 +161,7 @@ export default function RequirementCardView({ card, onChange, onConfirm, onFocus
             <div className="wb-req-label">建议分析方法</div>
             <div className="wb-chips">
               {card.analysis_methods.map((method) => (
-                <span key={method} className="wb-chip method">{method}</span>
+                <span key={method} className="wb-chip method">{methodLabel(method)}</span>
               ))}
             </div>
           </div>

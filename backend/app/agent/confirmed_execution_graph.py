@@ -603,16 +603,20 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
         chart_cfg = None
     else:
         status = "SUCCESS"
-        cols = []
-        for c in columns:
-            name = c.get("name") if isinstance(c, dict) else str(c)
-            cols.append({"key": name, "title": name})
+        # 2026-11-04：列名中文化 + 去掉整列取值完全相同的重复列（模型偶尔把同一表达式
+        # 输出两次且第二次没有中文别名 → 界面上冒出 `week_of_year`/`category` 这种列名）。
+        # key 保持原样（前端按 key 取数），只换 title；图表行键同步改名，轴名才不会露英文。
+        from app.report.labels import build_display_table, localize_chart
+
+        qr_columns = [
+            c.get("name") if isinstance(c, dict) else str(c) for c in columns
+        ]
+        table, label_map = build_display_table(qr_columns, rows)
         # 2026-11-03：去掉「全表恒定」的列（scope 过滤后的 地区=华东 这类）。
         # 这类列不携带信息，却占掉表格一列、还会把图表维度带偏。
-        cols = _drop_constant_columns(cols, rows)
-        table = {"columns": cols, "rows": rows}
+        table["columns"] = _drop_constant_columns(table["columns"], rows)
         insight_text = rs.get("insight") or None
-        chart_cfg = rs.get("chart_config") or None
+        chart_cfg = localize_chart(rs.get("chart_config") or None, label_map)
         # P10 三层 Validator：校验 ReportSpec → QueryResult 映射（结构/数值/禁止
         # 自由生成）。violations → FAILED（宪法 §10 永不伪造成功），走既有 FAILED
         # 全链：persist_error_run + SSE error（用户码 QUERY_FAILED 兜底，前端零改动）。

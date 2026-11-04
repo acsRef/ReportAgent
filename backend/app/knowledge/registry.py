@@ -276,6 +276,27 @@ def time_dimension_terms() -> tuple[str, ...]:
     return ("时间", "日期", "月份", "月", "周", "季度", "年份", "年", "天", "日")
 
 
+def display_label(column: str) -> str | None:
+    """物理列名/别名 → 给用户看的中文标签（认不出返回 None）。
+
+    2026-11-04（plan 2026-11-04-requirement-slot-contract 收尾）：报告表格与图表的
+    表头此前**直通 SQL 别名**，模型偶尔漏写中文别名（实测
+    `SELECT dim_date.week_of_year AS 周, dim_date.week_of_year AS week_of_year`）时
+    界面上就会冒出 `week_of_year` / `category` 这种物理列名。
+
+    这里只做**确定性映射**（数据全部来自 metrics.yaml + schema_hints.yaml）：
+    1. 指标列 → 业务口径名（payment_amount → 实收金额）；
+    2. 维度列 / 时间桶 → 中文维度名（region → 区域；week_of_year → 周）。
+    """
+    name = str(column or "").strip()
+    if not name:
+        return None
+    label = label_for_metric_column(name)
+    if label:
+        return label
+    return label_for_dimension(name)
+
+
 def clear_cache() -> None:
     """测试用：改完 YAML 需要重新加载时调用。"""
     _metrics.cache_clear()

@@ -92,9 +92,16 @@ const GRANULARITY_TEXT: Record<string, string> = {
 }
 
 const METHOD_TEXT: Record<string, string> = {
-  trend_analysis: '趋势',
+  trend_analysis: '趋势分析',
   group_compare: '对比/排名',
   anomaly_detection: '异常检测',
+  chart_advisor: '图表建议',
+  insight_analyst: '数值摘要',
+}
+
+/** 分析角度/工具 id → 中文标签（卡片与确认条共用，避免界面出现 group_compare 这种 id）。 */
+export function methodLabel(method: string): string {
+  return METHOD_TEXT[method] ?? method
 }
 
 export function confirmChips(card: RequirementCard | null): ConfirmChip[] {
@@ -113,7 +120,7 @@ export function confirmChips(card: RequirementCard | null): ConfirmChip[] {
   }
   if (card.analysis_methods?.length) {
     const methods = card.analysis_methods
-      .map((method: string) => METHOD_TEXT[method] ?? method)
+      .map((method: string) => methodLabel(method))
       .join(' · ')
     chips.push({ key: 'analysis_methods', text: methods })
   }
