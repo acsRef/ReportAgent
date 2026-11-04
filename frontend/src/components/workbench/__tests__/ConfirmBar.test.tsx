@@ -37,11 +37,13 @@ function renderBar(
 ) {
   const onConfirm = vi.fn()
   const onToggleDetails = vi.fn()
+  const onSupplement = vi.fn()
   render(
     <ConfirmBar
       card={card}
       changeNote={extra.changeNote ?? null}
       onConfirm={onConfirm}
+      onSupplement={onSupplement}
       onToggleDetails={onToggleDetails}
       expanded={extra.expanded ?? false}
       busy={extra.busy ?? false}
@@ -49,7 +51,7 @@ function renderBar(
       details={extra.details}
     />,
   )
-  return { onConfirm, onToggleDetails }
+  return { onConfirm, onToggleDetails, onSupplement }
 }
 
 describe('ConfirmBar — 一条助手消息做确认（2026-11-04 返工）', () => {
@@ -92,6 +94,23 @@ describe('ConfirmBar — 一条助手消息做确认（2026-11-04 返工）', ()
     renderBar(makeCard(), { details: <div data-testid="brief">核心指标</div> })
 
     expect(screen.queryByTestId('brief')).toBeNull()
+  })
+
+  // 2026-11-04 用户质问：「难道我就只能确认并生成报告吗 没有补充吗？」
+  it('确认条必须给出「补充或修改」这个可见的第二动作', () => {
+    const { onSupplement } = renderBar(makeCard())
+
+    fireEvent.click(screen.getByText('补充或修改'))
+
+    expect(onSupplement).toHaveBeenCalledTimes(1)
+  })
+
+  it('busy 时「补充或修改」也禁用（PATCH/确认进行中不该再开新补轮）', () => {
+    const { onSupplement } = renderBar(makeCard(), { busy: true })
+
+    fireEvent.click(screen.getByText('补充或修改'))
+
+    expect(onSupplement).not.toHaveBeenCalled()
   })
 
   it('补充轮的变更说明直接画进这句话里（不再是另一块提示条）', () => {

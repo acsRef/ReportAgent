@@ -774,6 +774,7 @@ export default function WorkbenchPage() {
                 await handlePatchAndConfirm(requirement)
               }}
               onToggleDetails={() => setDetailsOpen((open) => !open)}
+              onSupplement={() => composerRef.current?.focus()}
               details={
                 <RequirementCardView
                   variant="inline"

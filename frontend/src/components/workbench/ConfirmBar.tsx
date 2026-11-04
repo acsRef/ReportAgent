@@ -7,6 +7,14 @@ interface Props {
   /** 补充轮带来的变化说明。 */
   changeNote?: string | null
   onConfirm: () => void
+  /**
+   * 「补充或修改」：把焦点交回输入框，用户用自己的话改（走 supplement 重解析）。
+   *
+   * 2026-11-04 用户质问：「难道我就只能确认并生成报告吗 没有补充吗？」——
+   * 之前确认条只摆了一个主按钮 + 一个「需求详情」，看上去像「要么签要么看」，
+   * 而「直接说一句补充」这条**真实存在**的路子完全不可见（只能靠猜输入框）。
+   */
+  onSupplement?: () => void
   /** 展开 / 收起内联详情（同一个开关，文案随之变化）。 */
   onToggleDetails: () => void
   /** 详情是否已展开。 */
@@ -34,6 +42,7 @@ export default function ConfirmBar({
   card,
   changeNote = null,
   onConfirm,
+  onSupplement,
   onToggleDetails,
   expanded = false,
   busy = false,
@@ -68,6 +77,18 @@ export default function ConfirmBar({
           >
             确认并生成报告
           </button>
+          {/* 第二个动作必须是「还能改」，否则这一屏读起来像只能签字 */}
+          {onSupplement && (
+            <button
+              type="button"
+              className="wb-ask-secondary"
+              onClick={onSupplement}
+              disabled={busy}
+              title="直接在下面输入，例如「按日看」「再加上华南」"
+            >
+              补充或修改
+            </button>
+          )}
           <button
             type="button"
             className="wb-ask-link"

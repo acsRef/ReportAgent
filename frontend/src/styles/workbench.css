@@ -1332,8 +1332,26 @@
   color: var(--teal-deep);
   font-size: 12px;
 }
-.wb-ask-foot { display: flex; align-items: center; gap: var(--sp-m); margin-top: var(--sp-xs); }
+.wb-ask-foot { display: flex; align-items: center; gap: var(--sp-m); margin-top: var(--sp-xs); flex-wrap: wrap; }
 .wb-ask-confirm { align-self: flex-start; }
+/* 「补充或修改」：看得见的第二动作（此前只有主按钮 + 详情链接，读起来像只能签字） */
+.wb-ask-secondary {
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink-2);
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.wb-ask-secondary:hover:not(:disabled) {
+  border-color: var(--teal);
+  color: var(--teal-deep);
+  background: var(--teal-pale);
+}
+.wb-ask-secondary:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.wb-ask-secondary:disabled { opacity: 0.55; cursor: default; }
 .wb-ask-link {
   border: none;
   background: transparent;
