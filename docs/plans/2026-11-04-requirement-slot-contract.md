@@ -245,7 +245,7 @@
 | 层 | 命令 | 结果 |
 |---|---|---|
 | 后端离线 | `pytest backend/tests/{graphs,api,contracts,smoke} -q` | **924 passed** |
-| 交互 e2e | `REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s` | 15 例，见下 |
+| 交互 e2e | `REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s` | **15/15 收敛 · 1 passed / 751s**：`priority_question_sr=1.0`、`follow_up_sr=1.0`、`turns_used_avg=0.53`、`must_not_ask_violations=0` |
 | 真链路探针 | `python .e2elogs/probe_slots.py` | 7 问法 + 多轮：口径确定性落位 / 歧义带数字 / 追问沿用 / 改写覆盖 |
 | 前端 | `npm run test:run` / `npx tsc -b` / `npm run lint` | **364 passed** / 0 error / 0 error |
 | 浏览器 | `node .e2elogs/probe_slots_ui.mjs` | 一次一问 ✔ 三候选带数值 ✔ 下一问 ✔ 确认条 ✔ 展开详情 ✔ |
