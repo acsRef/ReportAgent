@@ -397,6 +397,8 @@ def _apply_deterministic_intent(
         # 「那个月的**数据详细图**」= 明细；只说「最高的月份」则是该期汇总。
         card.detail_level = "detail" if _DETAIL_PATTERNS.search(query) else None
         if not card.time_range:
+            # 和 trend/compare/anomaly 一致：用户没说时间就按「今年」理解（并写在卡上，
+            # 用户随时能改）。选期查询本身也支持不带时间范围（覆盖全部数据）。
             card.time_range = "今年"
         if not card.target_metrics:
             card.target_metrics = ["销售额"]
@@ -1099,9 +1101,6 @@ def parse_requirement(
     # 卡片展示层规范化：物理列名 → 中文，维度去重（2026-11-03）
     card.target_metrics = [_display_metric(m) for m in card.target_metrics]
     card.dimensions = _display_dimensions(card.dimensions)
-    # 最高期用的口径跟卡体保持一致（中文名：chip 与 prompt 都读它）
-    if card.top_period is not None and card.target_metrics:
-        card.top_period.metric = str(card.target_metrics[0])
     # 补充轮常见说法「只看华东」：模型经常漏抽，这里确定性补上
     explicit_scope = _extract_scope_from_query(user_query)
     if explicit_scope:
@@ -1119,6 +1118,11 @@ def parse_requirement(
     if prior_card is not None and prior_card.target_metrics:
         prior_metric = str(prior_card.target_metrics[0])
     slot = _apply_slot_resolutions(card, user_query, prior_metric=prior_metric)
+
+    # 最高期用的口径跟卡体最终一致（口径可能刚被槽位落位/默认改写，
+    # 所以必须放在槽位处理之后——否则 chip 会显示模型原始词 sales）。
+    if card.top_period is not None and card.target_metrics:
+        card.top_period.metric = str(card.target_metrics[0])
 
     unresolved = [a for a in card.assumptions if a.accepted is None]
     if card.missing_fields or unresolved:
@@ -1139,6 +1143,7 @@ def _apply_slot_resolutions(
     supplement 轮用户没提口径时沿用上一轮（`inherited`），**不再重复问**。
     """
     from app.agent.requirement_slots import (
+        match_metric_terms,
         resolve_metric_slot,
         slot_order as build_slot_order,
         slot_states as build_slot_states,
@@ -1156,8 +1161,30 @@ def _apply_slot_resolutions(
         # 这里口径被确定性改写后要再清一遍，避免用户被问一个已经答过的字段）。
         card.missing_fields = [mf for mf in card.missing_fields if mf.key != "metric"]
     elif slot.state == "ambiguous":
+        # 2026-11-04（用户：「不一定总是要给选项啊，意图清晰的为什么要给选项」）：
+        # 用户**这一轮压根没提口径**（「最多月份的那个月的明细」），这不是歧义，是缺省——
+        # 按注册表默认口径直接前进，把「按了什么口径」写在卡片上让用户随时改，
+        # 而不是拦下来问一道选择题。只有用户确实说了个一词多义的说法（「金额」）才问。
         candidates = _metric_candidate_options(slot)
-        if candidates:
+        named_terms = match_metric_terms(user_query)
+        default_metric = _default_registry_metric()
+        if not named_terms and default_metric is not None and candidates:
+            card.target_metrics = [default_metric.name]
+            note = default_metric.note or default_metric.unit or ""
+            card.assumptions.append(
+                RequirementAssumption(
+                    key=f"metric_default:{default_metric.name}",
+                    text=(
+                        f"默认按「{default_metric.name}」口径"
+                        + (f"（{note}）" if note else "")
+                        + "；要换口径直接说，例如「净销售额」"
+                    ),
+                    accepted=True,
+                    alternatives=[o for o in candidates if o.label != default_metric.name][:2],
+                )
+            )
+            card.missing_fields = [mf for mf in card.missing_fields if mf.key != "metric"]
+        elif candidates:
             question = "用哪个口径？" if len(candidates) > 1 else "指标口径"
             card.missing_fields = [
                 mf for mf in card.missing_fields if mf.key != "metric"
@@ -1192,6 +1219,11 @@ def _metric_candidate_options(slot) -> list:
             )
         )
     return options
+
+
+def _default_registry_metric():
+    """注册表里标了 `default: true` 的指标（缺省口径）。"""
+    return next((m for m in knowledge.all_metrics() if m.default), None)
 
 
 def _drop_satisfied_missing_fields(card: RequirementCard) -> None:

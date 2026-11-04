@@ -273,8 +273,6 @@ def build_top_period_sql(
     口径表达式 / 时间桶列 / JOIN 链路全部来自 `metrics.yaml` + `schema_hints.yaml`。
     """
     bounds = resolve_period_bounds(time_range, today)
-    if bounds is None:
-        return None
     base = _base_fact(metric.expr, metric.joins)
     if not base:
         return None
@@ -294,10 +292,14 @@ def build_top_period_sql(
         f"LEFT JOIN {dim_table} ON {dim_table}.{date_column} = {base}.{fk_column}",
         *metric.joins,
     ]
-    where = [
-        f"{dim_table}.{date_column} >= '{bounds[0].isoformat()}'",
-        f"{dim_table}.{date_column} < '{bounds[1].isoformat()}'",
-    ]
+    where: list[str] = []
+    # 用户没说时间范围时**不加年份过滤**（覆盖全部数据），而不是默认「今年」——
+    # 演示库数据是 2024，默认「今年」=2026 会直接查出空结果（2026-11-04 实测）。
+    if bounds is not None:
+        where.extend([
+            f"{dim_table}.{date_column} >= '{bounds[0].isoformat()}'",
+            f"{dim_table}.{date_column} < '{bounds[1].isoformat()}'",
+        ])
     regions = [s for s in (scope or []) if s and s != "ALL"]
     if regions:
         chains = _parse_fk_chains()
@@ -313,11 +315,12 @@ def build_top_period_sql(
 
     order = _TOP_PERIOD_ORDER.get(direction, "DESC")
     year_column = knowledge.time_bucket_column("year") or f"{dim_table}.year"
+    where_sql = ("\nWHERE " + " AND ".join(where)) if where else ""
     sql = (
         f"SELECT {year_column} AS years, {bucket} AS period, {metric.expr} AS value\n"
         f"FROM {base}\n"
         + "\n".join(joins)
-        + "\nWHERE " + " AND ".join(where)
+        + where_sql
         + f"\nGROUP BY {year_column}, {bucket}"
         + f"\nORDER BY value {order}\nLIMIT 1"
     )

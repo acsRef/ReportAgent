@@ -158,7 +158,13 @@ export function confirmChips(card: RequirementCard | null): ConfirmChip[] {
   const topPeriod = topPeriodText(card)
   if (topPeriod) chips.push({ key: 'top_period', text: topPeriod })
   if (card.target_metrics?.length) {
-    chips.push({ key: 'metric', text: card.target_metrics.join('、') })
+    // 2026-11-04：用户这一轮没提口径时不再拦下来问，而是按注册表默认口径前进——
+    // 那就在 chip 上标出来（「销售额（默认口径）」），让用户一眼看到按了什么、随时能改。
+    const defaulted = (card.assumptions ?? []).some((item) =>
+      String(item.key ?? '').startsWith('metric_default:'),
+    )
+    const metrics = card.target_metrics.join('、')
+    chips.push({ key: 'metric', text: defaulted ? `${metrics}（默认口径）` : metrics })
   }
   if (card.scope?.length) {
     const scope = card.scope.includes('ALL') ? '全部区域' : card.scope.join('、')
