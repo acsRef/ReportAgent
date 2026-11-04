@@ -56,15 +56,32 @@ def test_model_guess_differs_from_default_is_ambiguous() -> None:
 
     assert slot.state == "ambiguous"
     names = [c.name for c in slot.candidates]
-    assert names == ["实收金额", "销售额"]     # 模型猜 + 注册表 default
+    assert names[:2] == ["实收金额", "销售额"]     # 模型猜 + 注册表 default
+    assert len(names) <= 3
     assert all(c.hint for c in slot.candidates), "候选必须带差异说明"
 
 
-def test_model_guess_equals_default_is_filled() -> None:
+def test_model_guess_equals_default_still_asks() -> None:
+    """用户没点名口径 → 即使模型猜的正是默认值也要问（口径最容易答错）。
+
+    候选来自数据：模型猜的 + 注册表 default + **同单位的第一个其它指标**，
+    所以这里会补出「净销售额」——正是口径差异最大的那个对手。
+    """
     slot = resolve_metric_slot("2024年各区域表现", ["销售额"])
 
-    assert slot.state == "filled"
-    assert slot.value == "销售额"
+    assert slot.state == "ambiguous"
+    names = [c.name for c in slot.candidates]
+    assert names[:2] == ["销售额", "净销售额"]
+    assert len(names) == 3 and "实收金额" in names, "同单位备选封顶 3 个（识别题不是多选题）"
+
+
+def test_same_unit_alternate_is_data_driven() -> None:
+    """换一个单位（件）时补的是同单位指标，不会硬塞「销售额」。"""
+    slot = resolve_metric_slot("看看卖了多少件", ["销量"])
+
+    assert slot.state == "ambiguous"
+    names = [c.name for c in slot.candidates]
+    assert "销量" in names
 
 
 def test_no_metric_anywhere_is_missing(monkeypatch) -> None:
@@ -167,20 +184,35 @@ def test_parse_requirement_asks_when_metric_is_ambiguous(monkeypatch) -> None:
     field = metric_fields[0]
     assert field.state == "ambiguous"
     values = [o.value for o in field.options]
-    assert values == ["metric:实收金额", "metric:销售额"], "value 必须稳定为 metric:<name>"
+    assert values[:2] == ["metric:实收金额", "metric:销售额"], "value 必须稳定为 metric:<name>"
+    assert len(values) <= 3
     assert all(o.hint for o in field.options), "选项必须带差异说明（Phase 2 再补数值）"
     assert card.status == "missing"
     assert card.slot_states["metric"] == "ambiguous"
     assert card.slot_order[0] == "metric"
 
 
-def test_parse_requirement_no_metric_clarification_when_model_agrees(monkeypatch) -> None:
+def test_parse_requirement_no_metric_clarification_when_user_named_it(monkeypatch) -> None:
+    _patch_parse(monkeypatch, _payload(["销售额"]))
+
+    card = rp.parse_requirement(user_query="2024年各区域销售额", schema_context=None)
+
+    assert card.target_metrics == ["销售额"]
+    assert not [mf for mf in card.missing_fields if mf.key == "metric"]
+
+
+def test_parse_requirement_asks_when_user_named_no_metric(monkeypatch) -> None:
+    """「表现」这类没点名口径的问法必须问（即使用模型猜的正好是默认口径）。"""
     _patch_parse(monkeypatch, _payload(["销售额"]))
 
     card = rp.parse_requirement(user_query="2024年各区域表现", schema_context=None)
 
-    assert card.target_metrics == ["销售额"]
-    assert not [mf for mf in card.missing_fields if mf.key == "metric"]
+    metric_fields = [mf for mf in card.missing_fields if mf.key == "metric"]
+    assert metric_fields, "没点名口径必须澄清"
+    assert [o.value for o in metric_fields[0].options] == [
+        "metric:销售额", "metric:净销售额", "metric:实收金额",
+    ]
+    assert card.slot_states["metric"] == "ambiguous"
 
 
 def test_parse_requirement_slots_survive_deterministic_intent(monkeypatch) -> None:

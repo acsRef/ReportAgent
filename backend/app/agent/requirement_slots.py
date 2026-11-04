@@ -119,9 +119,20 @@ def _default_metric() -> MetricDef | None:
 
 
 def resolve_metric_slot(
-    user_query: str, model_metrics: list[str] | None,
+    user_query: str,
+    model_metrics: list[str] | None,
+    inherited: str | None = None,
 ) -> MetricSlot:
-    """口径槽位的三态解析（用户词 > 注册表 default > 模型猜）。"""
+    """口径槽位的三态解析（用户词 > 上一轮已确认 > 注册表 default > 模型猜）。
+
+    用户没点名口径时**一律问**（缺省值也一样）：口径是这个产品里最容易答错的
+    槽位，注册表里同单位的指标往往就差在退款/支付语义上——不问就答等于替用户
+    选。为了让「问」有价值，候选至少要凑到 2 个：
+    模型猜的 ∪ 注册表 default ∪ **同单位的第一个其它指标**（数据驱动，不写死名字）。
+
+    `inherited`：supplement 轮上一轮卡里的口径。**已确认的槽位不再问**——这正是
+    「每轮只从已确认槽位出发」的落点；只有用户原话明确改写时才覆盖。
+    """
     explicit = match_metric_terms(user_query)
     if len(explicit) == 1:
         metric = explicit[0]
@@ -140,29 +151,52 @@ def resolve_metric_slot(
             source="explicit",
         )
 
-    # 用户没说清 → 模型猜的 + 注册表默认值，去重后决定是「填」还是「问」。
+    if inherited:
+        inherited_metric = knowledge.resolve_metric(inherited)
+        if inherited_metric is not None:
+            return MetricSlot(
+                state="filled",
+                value=inherited_metric.name,
+                candidates=(_candidate(inherited_metric, "inherited"),),
+                source="inherited",
+            )
+
+    # 用户没说清 → 模型猜的 + 注册表默认值 + 同单位备选（去重保序）。
     candidates: list[MetricCandidate] = []
     seen: set[str] = set()
+
+    def _push(metric: MetricDef, source: SlotSource) -> None:
+        if metric.name in seen:
+            return
+        seen.add(metric.name)
+        candidates.append(_candidate(metric, source))
+
     for term in model_metrics or []:
         metric = knowledge.resolve_metric(term)
-        if metric is None or metric.name in seen:
-            continue
-        seen.add(metric.name)
-        candidates.append(_candidate(metric, "model"))
+        if metric is not None:
+            _push(metric, "model")
     default = _default_metric()
-    if default is not None and default.name not in seen:
-        candidates.append(_candidate(default, "registry_default"))
+    if default is not None:
+        _push(default, "registry_default")
+    # 同单位里再挑 1-2 个（口径差异最常发生在同单位指标之间：销售额 / 净销售额 /
+    # 实收金额），封顶 3 个——澄清是识别题，不该变成多选题。
+    units = {c.unit for c in candidates if c.unit}
+    alternates = 0
+    for metric in knowledge.all_metrics():
+        if alternates >= 2 or len(candidates) >= 3:
+            break
+        if metric.name in seen or metric.unit not in units:
+            continue
+        _push(metric, "registry_default")
+        alternates += 1
 
+    if len(candidates) >= 2:
+        return MetricSlot(state="ambiguous", candidates=tuple(candidates[:3]))
     if len(candidates) == 1:
         chosen = candidates[0]
         return MetricSlot(
-            state="filled",
-            value=chosen.name,
-            candidates=(chosen,),
-            source=chosen.source,
+            state="filled", value=chosen.name, candidates=(chosen,), source=chosen.source,
         )
-    if len(candidates) >= 2:
-        return MetricSlot(state="ambiguous", candidates=tuple(candidates))
     return MetricSlot(state="missing")
 
 
