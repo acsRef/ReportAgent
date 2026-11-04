@@ -97,6 +97,22 @@ User → Security Guard → Context Runtime
 
 > 现状：Requirement/Report 边界在位；Execution 动态决策环 P8。
 
+### 4.1 口径预览例外（2026-11-04，限定且不可泛化）
+
+需求层要「带数据的澄清」（例如「销售额按不同口径差 1900 万，用哪个」），这需要**一个数**，
+但上表禁止 Requirement 生成/执行 SQL。二者的分界：
+
+| 允许 | 禁止 |
+|---|---|
+| 由 **Execution 域**的确定性服务（`backend/app/services/metric_preview_service.py`）执行**目录式**只读查询：SQL 由 `app/knowledge/metrics.yaml` 的 `expr`/`joins` + 已知过滤条件拼装，**无 LLM、无自由列名、无 GROUP BY**，只取一个总量 | Requirement Agent 自己写 SQL / 自选列名 / 生成可复用业务 SQL / 把预览结果当成答案落库或进 Report 链路 |
+
+实现约束（不满足即视为违反本节）：
+- 预览只服务**澄清**：结果仅用于填充澄清选项的数值提示（`RequirementOption.hint`），不产出数据表；
+- **fail-open**：时间不可解析 / 报错 / 超时 / null → 退回纯文字选项，绝不展示 0 元假数；
+- 走 `tools/sql_tools.execute_sql`（`ragent_readonly` + 安全闸 + EXPLAIN + statement timeout），
+  不新增数据库访问路径；
+- 任何「让需求层直接跑业务 SQL」的扩展都必须重新评审本节，不得引用本节作为先例。
+
 ## 5. State Contract
 
 State 五块拆分与字段所有权：RequestState / RequirementState / ExecutionState / ReportState / RuntimeState。字段定义、immutable 规则、单一写者、生命周期见 [state-contract.md](docs/architecture/state-contract.md)。
