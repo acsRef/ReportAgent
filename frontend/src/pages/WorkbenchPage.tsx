@@ -39,6 +39,9 @@ import { useAuthStore } from '../stores/authStore'
 import type { TimelineEntry } from '../types/report'
 import type { RequirementCard as RC } from '../types/requirement'
 import RequirementCardView from '../components/workbench/RequirementCardView'
+import QuestionBar from '../components/workbench/QuestionBar'
+import ConfirmBar from '../components/workbench/ConfirmBar'
+import { pickQuestionField } from '../components/workbench/slotQuestion'
 import ReportPaper from '../components/workbench/ReportPaper'
 import ConversationTimeline from '../components/workbench/ConversationTimeline'
 import type { TimelineTurn } from '../components/workbench/ConversationTimeline'
@@ -114,6 +117,10 @@ export default function WorkbenchPage() {
   const [turnBaseVersion, setTurnBaseVersion] = useState<number | null>(null)
   // 补充轮：告诉用户「卡片的哪些字段被改了」，避免看起来像凭空多出一张新卡。
   const [changeNote, setChangeNote] = useState<string | null>(null)
+  // 2026-11-04（Phase 5）：需求卡降级为「详情」视图；默认只显示「一次一问」或确认条。
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  // 选项提交（PATCH）进行中——防止连点造成两次 PATCH。
+  const [answering, setAnswering] = useState(false)
   const prevCardRef = useRef<RC | null>(null)
   const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
@@ -121,6 +128,16 @@ export default function WorkbenchPage() {
   const cardLocked =
     phase === 'generating' || phase === 'adjusting' || phase === 'report_ready' ||
     requirement?.status === 'locked'
+  // 当前该问的槽位（顺序由后端 `slot_order` 决定：口径 > 时间范围 > 粒度 > 范围 > 视角）
+  const questionField = cardLocked ? null : pickQuestionField(requirement)
+  const assumptionsPending = (requirement?.assumptions ?? []).some(
+    (assumption) => assumption.accepted === null,
+  )
+  // 还有没表态的假设时不能出确认条——否则用户会「确认」一张自己没看过的假设。
+  const showConfirmBar = Boolean(requirement) && !cardLocked && !questionField && !assumptionsPending
+  const showCard = Boolean(requirement) && (
+    cardLocked || detailsOpen || (questionField === null && assumptionsPending)
+  )
 
   // ── 卡片更新提示（2026-11-03）────────────────────────────────────────────
   // 用户补充需求时，卡片内容会被重算——不解释的话看起来像「又冒出一张新卡」。
@@ -433,6 +450,32 @@ export default function WorkbenchPage() {
     })
   }
 
+  /**
+   * 回答一个澄清槽位（2026-11-04，Phase 5）：选完立刻 PATCH，由**服务端**算新卡，
+   * 于是下一个问题来自真实的槽位状态（而不是前端猜「还差什么」）。
+   *
+   * 为什么不只 dispatch 本地状态：`patch_requirement` 才会把 `metric:` / `intent:`
+   * 前缀确定性翻译成卡体字段并重算 status——本地改 selected_value 只是表单态。
+   */
+  async function handleAnswerQuestion(key: string, value: string | string[]) {
+    if (!requirement || !activeSessionId || answering) return
+    const next: RC = {
+      ...requirement,
+      missing_fields: requirement.missing_fields.map((field) =>
+        field.key === key ? { ...field, selected_value: value } : field,
+      ),
+    }
+    setAnswering(true)
+    try {
+      const res = await patchRequirement(activeSessionId, next)
+      dispatch({ type: 'requirement/received', requirement: res.requirement })
+    } catch (err) {
+      toast.error(`保存选择失败：${String(err).slice(0, 140)}`)
+    } finally {
+      setAnswering(false)
+    }
+  }
+
   async function handlePatchAndConfirm(card: RC) {
     if (!activeSessionId) {
       toast.error('会话丢失，请重新开始')
@@ -607,7 +650,33 @@ export default function WorkbenchPage() {
           )}
           {lastQuestion && phase !== 'idle' && <UserBubble text={lastQuestion} />}
 
-          {requirement && (
+          {/* 2026-11-04（plan requirement-slot-contract Phase 5）：需求澄清改成
+              「一次只问一个槽位」+ 紧凑确认条；整卡降级为「展开详情」。
+              后端仍然下发整卡（`requirement` 事件不变），这里只改呈现与节奏。 */}
+          {questionField && !cardLocked && (
+            <QuestionBar
+              field={questionField}
+              onPick={(key, value) => {
+                void handleAnswerQuestion(key, value)
+              }}
+              onSupplement={() => composerRef.current?.focus()}
+              disabled={answering}
+            />
+          )}
+
+          {showConfirmBar && requirement && (
+            <ConfirmBar
+              card={requirement}
+              changeNote={changeNote}
+              busy={patching || confirming}
+              onConfirm={async () => {
+                await handlePatchAndConfirm(requirement)
+              }}
+              onExpand={() => setDetailsOpen(true)}
+            />
+          )}
+
+          {requirement && showCard && (
             <RequirementCardView
               card={requirement}
               // 2026-11-02：确认并生成报告后卡片进入只读——需求已锁定，改需求要走

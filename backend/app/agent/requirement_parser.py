@@ -981,7 +981,10 @@ def parse_requirement(
     # 槽位三态 + 口径确定性落位（2026-11-04，plan 2026-11-04-requirement-slot-contract）。
     # 顺序很重要：必须先 `_drop_satisfied_missing_fields` 再补「口径歧义」，
     # 否则澄清项会被「卡体已有 target_metrics」判成已满足而丢掉。
-    slot = _apply_slot_resolutions(card, user_query)
+    prior_metric = None
+    if prior_card is not None and prior_card.target_metrics:
+        prior_metric = str(prior_card.target_metrics[0])
+    slot = _apply_slot_resolutions(card, user_query, prior_metric=prior_metric)
 
     unresolved = [a for a in card.assumptions if a.accepted is None]
     if card.missing_fields or unresolved:
@@ -991,12 +994,15 @@ def parse_requirement(
     return card
 
 
-def _apply_slot_resolutions(card: RequirementCard, user_query: str):
+def _apply_slot_resolutions(
+    card: RequirementCard, user_query: str, *, prior_metric: str | None = None,
+):
     """把槽位三态写进卡片：口径确定性落位 + 歧义时补带候选的澄清项。
 
-    口径优先级：**用户原话命中注册表 > 注册表 default > 模型猜**。
+    口径优先级：**用户原话命中注册表 > 上一轮已确认 > 注册表 default > 模型猜**。
     实测「2024年各区域销售额」模型会给 `实收金额`——注册表里 `销售额` 是
     `default: true`，用户也明确说了「销售额」，不该让模型改。
+    supplement 轮用户没提口径时沿用上一轮（`inherited`），**不再重复问**。
     """
     from app.agent.requirement_slots import (
         resolve_metric_slot,
@@ -1004,7 +1010,9 @@ def _apply_slot_resolutions(card: RequirementCard, user_query: str):
         slot_states as build_slot_states,
     )
 
-    slot = resolve_metric_slot(user_query, list(card.target_metrics or []))
+    slot = resolve_metric_slot(
+        user_query, list(card.target_metrics or []), inherited=prior_metric,
+    )
 
     if slot.state == "filled" and slot.value:
         # 用户/注册表拍板的口径覆盖模型输出（显示层中文名由 _display_metric 之后统一）

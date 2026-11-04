@@ -1,0 +1,156 @@
+# 需求槽位交互夹具（plan 2026-11-04-requirement-slot-contract Phase 4）
+#
+# 设计参照 BIRD-INTERACT 的任务构造：每条 case = 「用户真实想要什么（ground_truth）」
+# + 「哪些槽位必须被问到 / 不许被问」+ 「追问脚本」。用户模拟器
+# （evaluation/user_sim.py::GroundTruthUser）只按 ground_truth 回答，
+# 于是「问对没问对」「几轮收敛」才有意义。
+#
+# 字段：
+#   turns[].query        用户这一轮说的话（口语，不抄 prompt few-shot）
+#   turns[].mode         new | supplement
+#   ground_truth.metric        注册表规范名（metrics.yaml 的 name）
+#   ground_truth.granularity   day|week|month|quarter|year（不校验可留空）
+#   priority_questions.must_ask      必须出现澄清的槽位
+#   priority_questions.must_not_ask  明确了的槽位不许再问
+#   patience             允许的作答轮数上限（超出即判未收敛）
+#
+# 断言口径：最终 SQL 必须包含 ground_truth.metric 的注册表表达式（按空白归一后子串匹配）。
+
+version: 1
+
+cases:
+  # ── 显式口径：用户说了就必须锁定，不许问、不许被模型改 ──────────────────
+  - id: explicit-sales
+    turns:
+      - query: "2024年各区域销售额"
+        mode: new
+        ground_truth: { metric: 销售额 }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 1
+
+  - id: explicit-net-sales-synonym-free
+    turns:
+      - query: "2024年净销售额多少"
+        mode: new
+        # 注册表表达式用 refund 子查询，模型常写等价的 JOIN 形式——两种都对，
+        # 所以夹具按**语义 token** 判收敛（减掉退款这一动作必须出现）。
+        ground_truth: { metric: 净销售额, sql_must: ["- COALESCE"] }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 1
+
+  - id: explicit-received-synonym
+    turns:
+      - query: "2024年各区域到账金额"
+        mode: new
+        ground_truth: { metric: 实收金额 }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 1
+
+  - id: explicit-order-count
+    turns:
+      - query: "2024年各区域订单数"
+        mode: new
+        ground_truth: { metric: 订单数 }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 1
+
+  - id: explicit-refund-rate
+    turns:
+      - query: "2024年退款率"
+        mode: new
+        ground_truth: { metric: 退款率 }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 1
+
+  # ── 模糊口径：没点名 → 必须先问，再按 GT 收敛（用户其实要「净销售额」）──
+  - id: vague-becomes-net
+    turns:
+      - query: "2024年各区域表现怎么样"
+        mode: new
+        ground_truth: { metric: 净销售额, sql_must: ["- COALESCE"] }
+    priority_questions: { must_ask: [metric] }
+    patience: 2
+
+  - id: vague-becomes-received
+    turns:
+      - query: "2024年各区域情况如何"
+        mode: new
+        ground_truth: { metric: 实收金额, sql_must: ["payment_amount", "SUCCESS"] }
+    priority_questions: { must_ask: [metric] }
+    patience: 2
+
+  - id: vague-becomes-order-count
+    turns:
+      - query: "2024年各区域的数据"
+        mode: new
+        ground_truth: { metric: 订单数, sql_must: ["COUNT(DISTINCT"] }
+    priority_questions: { must_ask: [metric] }
+    patience: 2
+
+  # ── 粒度：显式说粒度不许被覆盖；异常类默认按周 ─────────────────────────
+  - id: explicit-month-granularity
+    turns:
+      - query: "2024年销售额有没有异常，按月的"
+        mode: new
+        ground_truth: { metric: 销售额, granularity: month }
+    priority_questions: { must_ask: [], must_not_ask: [granularity] }
+    patience: 1
+
+  - id: anomaly-defaults-to-week
+    turns:
+      - query: "2024年华东销售趋势和异常"
+        mode: new
+        ground_truth: { metric: 销售额, granularity: week }
+    priority_questions: { must_ask: [], must_not_ask: [granularity] }
+    patience: 1
+
+  # ── 多轮：追问沿用已确认口径；用户改写口径必须覆盖 ──────────────────────
+  - id: followup-keeps-metric
+    turns:
+      - query: "2024年各区域销售额"
+        mode: new
+        ground_truth: { metric: 销售额 }
+      - query: "再按品类看"
+        mode: supplement
+        ground_truth: { metric: 销售额 }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 1
+
+  - id: followup-switches-metric
+    turns:
+      - query: "2024年各区域销售额"
+        mode: new
+        ground_truth: { metric: 销售额 }
+      - query: "换成实收口径"
+        mode: supplement
+        ground_truth: { metric: 实收金额, sql_must: ["payment_amount", "SUCCESS"] }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 2
+
+  - id: followup-switches-metric-arm
+    turns:
+      - query: "2024年各区域销售额"
+        mode: new
+        ground_truth: { metric: 销售额 }
+      - query: "不对，我要看净销售额"
+        mode: supplement
+        ground_truth: { metric: 净销售额, sql_must: ["- COALESCE"] }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 2
+
+  # ── 口语/省略：允许先澄清，最终仍需收敛 ────────────────────────────────
+  - id: oral-short
+    turns:
+      - query: "2024年销量咋样"
+        mode: new
+        ground_truth: { metric: 销量 }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 2
+
+  - id: oral-scope-only
+    turns:
+      - query: "华北2024年销售额"
+        mode: new
+        ground_truth: { metric: 销售额 }
+    priority_questions: { must_ask: [], must_not_ask: [metric] }
+    patience: 2

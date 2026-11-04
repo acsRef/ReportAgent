@@ -1028,3 +1028,103 @@
   .wb-requirement-card { margin-left: 0; }
   .wb-parsing-card, .wb-progress-card { margin-left: 0; }
 }
+
+/* ---------- 需求澄清「一次一问」+ 紧凑确认条（2026-11-04） ---------- */
+/* plan 2026-11-04-requirement-slot-contract Phase 5：整卡把 5 组 chip 一次摊开，
+   像填表不像对话；这里只问当前最该问的槽位，槽位问完给一行确认摘要。 */
+.wb-question-bar,
+.wb-confirm-bar {
+  max-width: 860px;
+  margin: 0 0 18px 41px;
+  padding: var(--sp-l) var(--sp-xl);
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-left: 4px solid var(--amber);
+  border-radius: var(--r-l);
+  box-shadow: var(--shadow-soft);
+}
+.wb-confirm-bar {
+  border-left-color: var(--teal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-l);
+  flex-wrap: wrap;
+}
+.wb-question-head { display: flex; flex-direction: column; gap: var(--sp-xs); }
+.wb-question-kicker {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--amber);
+  font-weight: 600;
+}
+.wb-question-label { font-size: 15px; color: var(--ink); font-weight: 600; }
+.wb-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-s);
+  margin-top: var(--sp-m);
+}
+.wb-question-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-m);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.wb-question-option:hover:not(:disabled) {
+  border-color: var(--teal);
+  background: var(--teal-pale);
+}
+.wb-question-option:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.wb-question-option:disabled { opacity: 0.55; cursor: default; }
+.wb-question-option-label { font-weight: 600; }
+.wb-question-option-hint { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wb-question-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-m);
+  margin-top: var(--sp-m);
+}
+.wb-question-supplement {
+  border: none;
+  background: transparent;
+  color: var(--teal-deep);
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+}
+.wb-question-note { font-size: 11px; color: var(--muted); }
+
+.wb-confirm-main { display: flex; flex-direction: column; gap: var(--sp-s); min-width: 0; }
+.wb-confirm-kicker {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--teal);
+  font-weight: 600;
+}
+.wb-confirm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wb-confirm-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--teal-soft);
+  color: var(--teal-deep);
+  font-size: 12px;
+}
+.wb-confirm-empty { font-size: 13px; color: var(--muted); }
+.wb-confirm-change { font-size: 11px; color: var(--muted); }
+.wb-confirm-actions { display: flex; align-items: center; gap: var(--sp-s); }
+
+@media (max-width: 880px) {
+  .wb-question-bar, .wb-confirm-bar { margin-left: 0; }
+}
