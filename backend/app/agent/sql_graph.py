@@ -648,6 +648,8 @@ def _detail_contract_violation(sql: str) -> str | None:
     `SUM(order_amount)` 且没有 GROUP BY → 结果是 1 行汇总，用户要的是逐条。
     光写 prompt 治不住采样，所以这里在 validate 之后加一道确定性拦截——
     违规就交给既有 repair 环（带 repair_ctx 重生成），而不是把 1 行当成功返回。
+
+    2026-11-04 追加：还必须带日期/维度列（否则表格只剩一列、图表没法作图）。
     """
     text = sql or ""
     if _DETAIL_AGGREGATE_RE.search(text):
@@ -659,7 +661,38 @@ def _detail_contract_violation(sql: str) -> str | None:
         return (
             "明细模式禁止 GROUP BY：请直接 SELECT 原始列，按时间倒序，末尾加 LIMIT 200"
         )
+    # 2026-11-04：明细还必须带日期/维度列。实测「帮我分析一下销量」即使给了照抄投影，
+    # 模型仍会只 `SELECT quantity` → 表格只有一列、图表画成一排噪声柱。
+    if not _has_dimension_column(text):
+        return (
+            "明细模式必须包含日期或维度列（如 dim_date.full_date AS 日期、"
+            "dim_store.region AS 区域、dim_product.category AS 品类）："
+            "只 SELECT 指标列会让表格只剩一列、图表无法作图"
+        )
     return None
+
+
+def _has_dimension_column(sql: str) -> bool:
+    """SQL 里是否出现任何「可读维度列」（日期 / 区域 / 品类 / 品牌…）。
+
+    列名从知识库来（`schema_hints.yaml`），`table.column` 与裸列名都认。
+    """
+    text = (sql or "").lower()
+    if not text:
+        return False
+    candidates: list[str] = []
+    day_column = knowledge.time_bucket_column("day")
+    if day_column:
+        candidates.append(day_column)
+    for item in (knowledge._schema_hints().get("dimension_terms") or []):  # noqa: SLF001
+        column = str(item.get("column") or "")
+        if column:
+            candidates.append(column)
+    for column in candidates:
+        bare = column.split(".")[-1].lower()
+        if column.lower() in text or (bare and bare in text):
+            return True
+    return False
 
 
 @traced_node("sql_validate")

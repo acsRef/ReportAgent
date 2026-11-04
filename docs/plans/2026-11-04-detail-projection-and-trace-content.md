@@ -60,12 +60,24 @@
 
 ## Verification（验证）
 
-- `pytest backend/tests/{api,graphs,contracts,smoke} -q` → 全绿
-- `npm run test:run` / `npx tsc -b` / `npm run lint`
-- 真链路：`2024年各区域表现` 的 trace 帧应带结论（实测）：
-  `识别意图 | 意图=report（…）`、`解析需求 | 时间 2024年｜口径 销售额｜待确认 1 项`、
-  `口径预览 | 销售额 2.63 亿元、净销售额 2.51 亿元、实收金额 2.47 亿元`；
-  明细类问法（`帮我分析一下销量` → 选明细）表格必须出现 日期/区域/品类 + 销量，且不出噪声柱状图。
+- `pytest backend/tests/{api,graphs,contracts,smoke} -q` → **953 passed**
+- `npm run test:run` / `npx tsc -b` / `npm run lint` → **395 passed** / 0 error / 0 error
+- 真链路 `python .e2elogs/probe_detail_and_trace.py`（`帮我分析一下销量` → 选明细）：
+  - 过程帧 6 步**全部带结论**（`空结论帧: []`）：
+    `安全检查 | 通过（LOW，风险分 0）`、
+    `识别意图 | 意图=report（用户请求分析销量，属于业务指标分析）`、
+    `解析需求 | 时间未限｜口径 销量｜待确认 1 项（你想看哪一种视角？）`、
+    `口径预览 | 口径已确定（销量），无需预览`、`保存需求卡 | 已保存 #4350 · 需要补充（1 项待定）`；
+  - 明细 SQL：`SELECT dim_date.full_date AS 日期, dim_store.region AS 区域,
+    dim_product.category AS 品类, fact_orders.quantity AS 销量 …` → 表格列 **4 列**（修复前 1 列）；
+  - 图表：`type=bar` 且带真实维度（不再是 x=y 的噪声柱）。
+
+### 落地时的偏差（重要）
+
+明细投影**只写进 prompt 不够**：第一次真链路复验时模型又把投影丢了（SQL 只剩 `SELECT quantity`）。
+所以按本仓库一贯做法补了**确定性校验**——`sql_graph._detail_contract_violation` 增加
+「明细必须包含日期/维度列」（列名来自知识库，`table.column` 与裸列名都认），
+违规按 validation 失败走既有 repair 环；再不行就 FAILED，而不是交出一张单列表格。
 
 ## Explicitly NOT doing（不做事项）
 

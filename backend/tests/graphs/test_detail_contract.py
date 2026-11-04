@@ -94,3 +94,24 @@ def test_validate_detail_ok_passes(monkeypatch) -> None:
     out = _validate(state)
 
     assert out["validation_result"]["valid"] is True
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT fact_orders.quantity AS 销量 FROM fact_orders LIMIT 200",
+        "SELECT order_amount FROM fact_orders ORDER BY order_date DESC LIMIT 200",
+    ],
+)
+def test_detail_without_dimension_column_is_violation(sql: str) -> None:
+    """明细只有指标列 → 违规（2026-11-04 实测：表格只剩一列、图表画成噪声柱）。"""
+    assert "维度列" in (_detail_contract_violation(sql) or "")
+
+
+def test_detail_with_dimension_column_passes() -> None:
+    sql = (
+        "SELECT dim_date.full_date AS 日期, dim_store.region AS 区域, "
+        "fact_orders.quantity AS 销量 FROM fact_orders "
+        "LEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date "
+        "ORDER BY 日期 DESC LIMIT 200"
+    )
+    assert _detail_contract_violation(sql) is None

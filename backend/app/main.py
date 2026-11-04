@@ -718,11 +718,12 @@ async def _run_requirement_graph(
                     ),
                     MAX_TASK_DURATION,
                 )
+            # 图跑完：把最后一个节点的 running 收成 success（end 事件归因不了，
+            # 见 progress.ProgressTraceHandler 的说明）。**必须在 reset sink 之前**，
+            # 否则最后一步的结论（保存需求卡）读不到。
+            handler.close_all()
         finally:
             progress_detail.reset(detail_token)
-        # 图跑完：把最后一个节点的 running 收成 success（end 事件归因不了，
-        # 见 progress.ProgressTraceHandler 的说明）
-        handler.close_all()
         completed = True
 
         # 安全闸：HIGH → 拒绝（不建卡、不落库；与改造前逐字段一致）。

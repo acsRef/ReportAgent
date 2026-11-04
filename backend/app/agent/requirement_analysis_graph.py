@@ -218,12 +218,18 @@ async def _data_agent(state: RequirementAnalysisState) -> dict:
     })
     schema = ds.get("schema_context")
     tables = getattr(schema, "tables", None) or []
-    _progress_detail(
-        "准备分析数据",
-        f"检索到 {len(tables)} 张表：" + "、".join(
-            str(getattr(t, "name", "") or "") for t in tables[:5]
-        ) if tables else "未检索到可用表结构（走本地兜底）",
-    )
+    if tables:
+        _progress_detail(
+            "准备分析数据",
+            f"检索到 {len(tables)} 张表：" + "、".join(
+                str(getattr(t, "name", "") or "") for t in tables[:5]
+            ),
+        )
+    else:
+        _progress_detail(
+            "准备分析数据",
+            "schema 未连通（MCP 不可达或无需检索）→ 用本地 schema 兜底",
+        )
     return {
         "schema_context": ds.get("schema_context"),
         "execution_status": "RUNNING",
@@ -397,6 +403,12 @@ async def _requirement_preview(state: RequirementAnalysisState) -> dict:
         return {}
     metric_field = next((mf for mf in card.missing_fields if mf.key == "metric"), None)
     if metric_field is None or len(metric_field.options) < 2:
+        # 口径没有歧义（用户点名或已继承）→ 说明为什么没预览，避免面板出现空白步骤
+        _progress_detail(
+            "口径预览",
+            "口径已确定（" + "、".join(card.target_metrics) + "），无需预览"
+            if card.target_metrics else "口径没有多个候选，无需预览",
+        )
         return {}
 
     from app.knowledge import registry as knowledge
