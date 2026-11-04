@@ -56,6 +56,7 @@ pytest backend/tests/api -q
 | 11 | 澄清/确认改**一条普通对话消息**（思考一行 + 提问/确认，同一个气泡），卡片退出主流程 | `d24ffdd` |
 | 12 | 历史轮次条「未生成报告」去噪 + 版本按时间归属（`historyTurns.ts`，plan `2026-11-04-history-turn-pairing.md`） | `6c00893` |
 | 13 | 「需求详情」就地展开（`RequirementCardView variant="inline"`）：修掉展开后的空白气泡与浮空「收起详情」，确认按钮原地不动 | `ac9f1d5` |
+| 14 | 确认条补可见的「补充或修改」第二动作（supplement 通道后端已支持、界面从没露出） | `8ce551b` |
 
 ### 2026-11-03 做完的事
 
