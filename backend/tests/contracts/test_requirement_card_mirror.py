@@ -52,14 +52,19 @@ TS_REQUIREMENT_CARD_FIELDS = (
     "assumptions",
     "confidence",
     "confirmed_at",
+    # 2026-11-04（plan 2026-11-04-requirement-slot-contract）：槽位三态与提问顺序
+    "slot_states",
+    "slot_order",
 )
 
 # 与 app/models/requirement.py::RequirementGranularity 一字不差
 TS_REQUIREMENT_GRANULARITIES = ("day", "week", "month", "quarter", "year")
 
-TS_REQUIREMENT_MISSING_FIELD_FIELDS = ("key", "label", "kind", "options", "selected_value")
+TS_REQUIREMENT_MISSING_FIELD_FIELDS = (
+    "key", "label", "kind", "options", "selected_value", "state",
+)
 TS_REQUIREMENT_ASSUMPTION_FIELDS = ("key", "text", "accepted", "alternatives")
-TS_REQUIREMENT_OPTION_FIELDS = ("label", "value")
+TS_REQUIREMENT_OPTION_FIELDS = ("label", "value", "hint")
 
 
 # --- Tests -----------------------------------------------------------------

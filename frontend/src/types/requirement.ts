@@ -14,6 +14,10 @@ export type SelectedValue = string | string[]
 export interface RequirementOption {
   label: string
   value: string
+  /** 2026-11-04：选项的补充说明（口径预览数值 / 注册表差异说明，如
+   * `2.61 亿 · 订单金额未扣退款`）。label 保持干净、value 保持稳定，
+   * 数值只放这里——旧后端不返回该字段也照常渲染。 */
+  hint?: string | null
 }
 
 export interface RequirementMissingField {
@@ -26,6 +30,9 @@ export interface RequirementMissingField {
    * `missing_fields` and applies the value to the card's structured
    * fields (time_range / scope / target_metrics / ...) on PATCH. */
   selected_value: SelectedValue | null
+  /** 2026-11-04：槽位三态之二的区分——`ambiguous` 表示「有多个合理口径」，
+   * 呈现层优先提问并带数值提示；`missing` 是用户压根没提。 */
+  state?: 'missing' | 'ambiguous' | null
 }
 
 export interface RequirementAssumption {
@@ -59,6 +66,11 @@ export interface RequirementCard {
   assumptions: RequirementAssumption[]
   confidence: number
   confirmed_at: string | null
+  /** 2026-11-04：槽位三态（filled / missing / ambiguous）。旧会话没有该字段 →
+   * 可选；前端「一次只问一个问题」只依赖它 + `slot_order`，不自行推导。 */
+  slot_states?: Record<string, 'filled' | 'missing' | 'ambiguous'>
+  /** 未填槽位的提问顺序（后端确定性排序：口径 > 时间范围 > 粒度 > 范围 > 视角）。 */
+  slot_order?: string[]
 }
 
 export function isRequirementReadyForConfirmation(

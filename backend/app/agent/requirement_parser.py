@@ -24,6 +24,7 @@ from app.models.requirement import (
     RequirementFieldKey,
     RequirementFieldKind,
     RequirementMissingField,
+    RequirementOption,
     RequirementStatus,
 )
 from app.agent import requirement_options as opts
@@ -976,12 +977,79 @@ def parse_requirement(
     # （2026-10-28 实测：「granularity: 月」且 missing_fields 含 granularity）。
     # 卡体已经有答案的维度一律不再追问，否则用户会被要求回答一个已经答过的字段。
     _drop_satisfied_missing_fields(card)
+
+    # 槽位三态 + 口径确定性落位（2026-11-04，plan 2026-11-04-requirement-slot-contract）。
+    # 顺序很重要：必须先 `_drop_satisfied_missing_fields` 再补「口径歧义」，
+    # 否则澄清项会被「卡体已有 target_metrics」判成已满足而丢掉。
+    slot = _apply_slot_resolutions(card, user_query)
+
     unresolved = [a for a in card.assumptions if a.accepted is None]
     if card.missing_fields or unresolved:
         card.status = "missing"
     else:
         card.status = "complete"
     return card
+
+
+def _apply_slot_resolutions(card: RequirementCard, user_query: str):
+    """把槽位三态写进卡片：口径确定性落位 + 歧义时补带候选的澄清项。
+
+    口径优先级：**用户原话命中注册表 > 注册表 default > 模型猜**。
+    实测「2024年各区域销售额」模型会给 `实收金额`——注册表里 `销售额` 是
+    `default: true`，用户也明确说了「销售额」，不该让模型改。
+    """
+    from app.agent.requirement_slots import (
+        resolve_metric_slot,
+        slot_order as build_slot_order,
+        slot_states as build_slot_states,
+    )
+
+    slot = resolve_metric_slot(user_query, list(card.target_metrics or []))
+
+    if slot.state == "filled" and slot.value:
+        # 用户/注册表拍板的口径覆盖模型输出（显示层中文名由 _display_metric 之后统一）
+        card.target_metrics = [slot.value]
+        # 口径已确定 → 连带清掉「指标」澄清项。模型经常既给了口径又把它列进
+        # missing_fields（`_drop_satisfied_missing_fields` 在槽位落位前跑过一次，
+        # 这里口径被确定性改写后要再清一遍，避免用户被问一个已经答过的字段）。
+        card.missing_fields = [mf for mf in card.missing_fields if mf.key != "metric"]
+    elif slot.state == "ambiguous":
+        candidates = _metric_candidate_options(slot)
+        if candidates:
+            question = "用哪个口径？" if len(candidates) > 1 else "指标口径"
+            card.missing_fields = [
+                mf for mf in card.missing_fields if mf.key != "metric"
+            ]
+            card.missing_fields.insert(
+                0,
+                RequirementMissingField(
+                    key="metric",
+                    label=question,
+                    kind="single",
+                    options=candidates,
+                    state="ambiguous",
+                ),
+            )
+
+    states = build_slot_states(card, metric_slot=slot)
+    card.slot_states = {k: str(v) for k, v in states.items()}
+    card.slot_order = build_slot_order(states)
+    return slot
+
+
+def _metric_candidate_options(slot) -> list:
+    """口径候选 → 澄清选项（label 干净、value 稳定为 `metric:<name>`、差异说明进 hint）。"""
+    options: list = []
+    for candidate in slot.candidates[:3]:
+        hint = candidate.hint or candidate.unit or None
+        options.append(
+            RequirementOption(
+                label=candidate.name,
+                value=f"metric:{candidate.name}",
+                hint=hint or None,
+            )
+        )
+    return options
 
 
 def _drop_satisfied_missing_fields(card: RequirementCard) -> None:

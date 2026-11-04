@@ -32,6 +32,11 @@ SelectedValue = str | list[str]
 class RequirementOption(BaseModel):
     label: str
     value: str
+    # 2026-11-04（plan 2026-11-04-requirement-slot-contract）：选项的补充说明。
+    # 主要承载「口径预览」的数值与差异（`2.61 亿 · 订单金额未扣退款`），也可以是
+    # 注册表 note。**契约要点**：label 保持干净、value 保持稳定（前端据此回填
+    # selected_value），数值只进 hint——旧前端忽略它也不影响选择逻辑。
+    hint: str | None = None
 
 
 class RequirementMissingField(BaseModel):
@@ -47,6 +52,9 @@ class RequirementMissingField(BaseModel):
     # etc.) and removes this MissingField from the persisted card
     # when filled.
     selected_value: SelectedValue | None = None
+    # 2026-11-04：该槽位是「缺失」(missing) 还是「有歧义」(ambiguous)。
+    # 歧义项在呈现层优先提问，并带口径预览的数值。
+    state: str | None = None
 
 
 class RequirementAssumption(BaseModel):
@@ -73,6 +81,11 @@ class RequirementCard(BaseModel):
     assumptions: list[RequirementAssumption] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     confirmed_at: datetime | None = None
+    # 2026-11-04（plan 2026-11-04-requirement-slot-contract）：槽位三态与提问顺序。
+    # 默认空 dict/list，旧卡（无该字段）与新前端（不认识就忽略）都兼容；
+    # 前端「一次只问一个问题」只依赖这两个字段，不额外推导。
+    slot_states: dict[str, str] = Field(default_factory=dict)
+    slot_order: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_status_consistency(self) -> RequirementCard:

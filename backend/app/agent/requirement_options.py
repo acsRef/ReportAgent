@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from app.knowledge import registry as knowledge
 from app.models.requirement import (
     RequirementAssumption,
     RequirementFieldKey,
@@ -56,16 +57,20 @@ def scope_options() -> list[RequirementOption]:
 # --- Metric options --------------------------------------------------------
 
 def metric_options() -> list[RequirementOption]:
-    """Metric options. Keep this list aligned with the
-    `chart_advisor` / `trend_analysis` tool arguments.
+    """口径候选**从注册表派生**（2026-11-04）。
+
+    历史：这里曾是一张手写静态表（销售额/销售量/订单数/退款率/客户数），与
+    `app/knowledge/metrics.yaml` 脱节——「客户数」注册表里根本没有，注册表里
+    的 `净销售额/实收金额/退款金额` 又不在表里，模型照这张表澄清等于让人选错。
+    现在唯一事实源是 YAML：新增口径只改数据，选项自动跟上。
     """
-    return [
-        RequirementOption(label="销售额", value="销售额"),
-        RequirementOption(label="销售量", value="销售量"),
-        RequirementOption(label="订单数", value="订单数"),
-        RequirementOption(label="退款率", value="退款率"),
-        RequirementOption(label="客户数", value="客户数"),
-    ]
+    options: list[RequirementOption] = []
+    for metric in knowledge.all_metrics():
+        hint = metric.note or (metric.unit and f"单位：{metric.unit}") or None
+        options.append(
+            RequirementOption(label=metric.name, value=f"metric:{metric.name}", hint=hint)
+        )
+    return options
 
 
 # --- Granularity / comparison options -------------------------------------

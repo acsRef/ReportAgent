@@ -112,7 +112,12 @@ def test_supplement_prior_card_merge_matrix(
 
 
 def test_supplement_new_metric_not_overridden_by_prior(monkeypatch):
-    """presence 覆盖：本轮明确换指标 → 覆盖 prior 的 metric（不继承旧的）。"""
+    """presence 覆盖：本轮明确换指标 → 覆盖 prior 的 metric（不继承旧的）。
+
+    2026-11-04（requirement-slot-contract）：口径按注册表**规范化**——「退货率」是
+    `退款率` 的同义词，卡片落的是注册表规范名 `退款率`（下游 SQL 注册表按这个名字
+    取表达式）。所以这里断言规范名，而不是用户的原始措辞。
+    """
     card = _parse(
         monkeypatch,
         "改成看退货率",
@@ -122,5 +127,5 @@ def test_supplement_new_metric_not_overridden_by_prior(monkeypatch):
             "confidence": 0.9, "missing_fields": [], "assumptions": [],
         },
     )
-    assert card.target_metrics == ["退货率"], "本轮明确指标应覆盖 prior 销售额"
+    assert card.target_metrics == ["退款率"], "本轮明确指标应覆盖 prior 销售额（并规范化）"
     assert card.time_range == "2024年", "未改写的时间仍继承"

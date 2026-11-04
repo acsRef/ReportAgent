@@ -108,7 +108,12 @@ def test_faq_entries_all_on_retail_tables() -> None:
 
 
 def test_requirement_option_vocabulary_aligned() -> None:
-    """需求卡可选口径必须能被现役库回答（否则用户选了也查不出来）。"""
+    """需求卡可选口径必须能被现役库回答（否则用户选了也查不出来）。
+
+    2026-11-04：口径选项改为**从 `metrics.yaml` 派生**，value 统一为
+    `metric:<名字>`（PATCH 侧按前缀确定性翻译）。这里按 label 比对业务口径，
+    并额外钉住前缀契约。
+    """
     from app.agent.requirement_options import metric_options, scope_options
 
     all_regions = {"华东", "华北", "华南", "华中", "西南", "西北", "ALL"}
@@ -117,6 +122,14 @@ def test_requirement_option_vocabulary_aligned() -> None:
     assert regions <= all_regions, f"出现未定义区域: {regions - all_regions}"
     assert "ALL" in regions, "必须保留「全部区域」选项"
 
-    metrics = {o.value for o in metric_options()}
+    options = metric_options()
+    metrics = {o.label for o in options}
     assert "毛利率" not in metrics and "退货率" not in metrics  # 新 schema 无毛利/退货域
     assert "退款率" in metrics
+    # 前缀契约：前端回填的是 `metric:<名字>`，PATCH 侧按前缀翻译成 target_metrics。
+    assert all(o.value == f"metric:{o.label}" for o in options)
+    # 唯一事实源是注册表：每个选项都必须能在 metrics.yaml 里解析到表达式。
+    from app.knowledge import registry as knowledge
+
+    for option in options:
+        assert knowledge.resolve_metric(option.label) is not None, option.label

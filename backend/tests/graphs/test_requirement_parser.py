@@ -50,10 +50,11 @@ def test_vague_query_yields_missing_with_all_dimensions(monkeypatch) -> None:
     assert card.status == "missing"
     keys = {mf.key for mf in card.missing_fields}
     # 2026-11-03：分析角度也必须是显式追问（用户没说看哪种视角）。
-    assert keys == {"analysis_intent", "time_range", "scope", "metric", "granularity", "comparison"}
-    # Options come from the server-side controlled list, not the LLM.
-    metric_mf = next(mf for mf in card.missing_fields if mf.key == "metric")
-    assert any(opt.value == "销售额" for opt in metric_mf.options)
+    # 2026-11-04（requirement-slot-contract）：口径不再问——「销量」是注册表里的指标名，
+    # 由 `requirement_slots.resolve_metric_slot` 确定性落位；其余维度照旧逐项追问。
+    assert keys == {"analysis_intent", "time_range", "scope", "granularity", "comparison"}
+    assert card.target_metrics == ["销量"]
+    assert card.slot_states["metric"] == "filled"
     assert card.confidence < 0.5
 
 
