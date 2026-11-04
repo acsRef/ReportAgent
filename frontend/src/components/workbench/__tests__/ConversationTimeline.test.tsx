@@ -105,7 +105,9 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
     expect(screen.getByTestId('report-1')).toBeTruthy()
   })
 
-  it('没有版本的轮次显示「未生成报告」，失败版本标红', () => {
+  // 2026-11-04（plan history-turn-pairing）：没有报告的轮次不再画「未生成报告」边框条
+  // ——没有可展开内容，那条小条只会压在当轮助手消息上方（用户截图即此）。
+  it('没有版本的轮次只留提问气泡、不画空报告条；失败版本仍标红', () => {
     render(
       <ConversationTimeline
         sessionId="sid-1"
@@ -115,7 +117,9 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
         ]}
       />,
     )
-    expect(screen.getByText('未生成报告')).toBeTruthy()
+    expect(screen.getByText('你好')).toBeTruthy()
+    expect(screen.queryByText('未生成报告')).toBeNull()
+    expect(document.querySelectorAll('.wb-history-report')).toHaveLength(1)
     expect(screen.getByText('执行失败')).toBeTruthy()
   })
 

@@ -46,6 +46,7 @@ import { pickNextQuestion, ASSUMPTION_KEY_PREFIX, requirementUiMode } from '../c
 import ReportPaper from '../components/workbench/ReportPaper'
 import ConversationTimeline from '../components/workbench/ConversationTimeline'
 import type { TimelineTurn } from '../components/workbench/ConversationTimeline'
+import { buildHistoryTurns, liveQuestionOf } from '../components/workbench/historyTurns'
 import '../styles/global.css'
 import '../styles/workbench.css'
 
@@ -243,22 +244,17 @@ export default function WorkbenchPage() {
   const [focusMode, setFocusMode] = useState(false)
   const [lastQuestion, setLastQuestion] = useState<string | null>(null)
 
-  // 历史 = 除最后一轮以外的所有轮次；问题与版本按下标配对（v1↔第 1 轮）。
-  const historyTurns: TimelineTurn[] = useMemo(() => {
-    const questions = messages.filter(
-      (m) => m.role === 'user' && (m.content ?? '').trim().length > 0,
-    )
-    const liveQuestion = lastQuestion?.trim()
-    const historical =
-      liveQuestion && questions.at(-1)?.content?.trim() === liveQuestion
-        ? questions.slice(0, -1)
-        : questions
-    return historical.map((msg, index) => ({
-      key: `turn-${msg.id}`,
-      question: msg.content ?? '',
-      version: reportVersions.find((v) => v.version === index + 1) ?? null,
-    }))
-  }, [messages, lastQuestion, reportVersions])
+  // 历史 = 除当轮以外的所有轮次。当轮问题用 `liveQuestionOf` 兜底（会话恢复窗口期
+  // `lastQuestion` 还是 null），当轮气泡与历史切分共用同一个值——否则那一轮会以
+  // 「无版本历史轮次」出现在时间线里（用户看到的「未生成报告」小条）。
+  const liveQuestion = useMemo(
+    () => liveQuestionOf(messages, lastQuestion, phase),
+    [messages, lastQuestion, phase],
+  )
+  const historyTurns: TimelineTurn[] = useMemo(
+    () => buildHistoryTurns(messages, reportVersions, liveQuestion),
+    [messages, reportVersions, liveQuestion],
+  )
 
   const composerRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -745,7 +741,7 @@ export default function WorkbenchPage() {
               expandLatest
             />
           )}
-          {lastQuestion && phase !== 'idle' && <UserBubble text={lastQuestion} />}
+          {liveQuestion && phase !== 'idle' && <UserBubble text={liveQuestion} />}
 
           {/* 2026-11-04：对话顺序 = 用户说 → 一条助手消息（思考一行 + 提问/确认）。
               用户明确要求「应该是一整个的、不要卡片、太占地方」——所以 trace 和

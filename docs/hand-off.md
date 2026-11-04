@@ -49,6 +49,12 @@ pytest backend/tests/api -q
 | 4 | 没点名口径**一律问**（模型猜等于默认时也问）+ 候选含同单位备选 + supplement 沿用已确认口径 | `3382d3c` |
 | 5 | **多轮隔离**：REQUIREMENT 档只吃用户原话、drop query memory；`metrics_mentioned_in` 最长命中 | `a14be5d` |
 | 6 | BIRD 式交互回归（15 条 GT 夹具 + `GroundTruthUser` + PRQ/FU/turns）+ 前端「一次一问」QuestionBar / ConfirmBar | `aed44a9` |
+| 7 | 中文化列名 + 去重列（表格/图表同源）；卡内方法名可读 | `a1ac06d` |
+| 8 | 对话形态收口：上一轮报告默认展开、确认/提问条只在 `awaiting_*` 出现 | `72dc2b6` |
+| 9 | **执行过程面板**（Doubao 式，不做 CoT）：需求图也发 trace 帧，异常/停止/切会话/离开都有落点 | `6e8fae5` |
+| 10 | 明细类列加确定性投影；`type=table` 不再强画图；每步 trace 带结论 | `a7435bc` `421793d` |
+| 11 | 澄清/确认改**一条普通对话消息**（思考一行 + 提问/确认，同一个气泡），卡片退出主流程 | `d24ffdd` |
+| 12 | 历史轮次条「未生成报告」去噪 + 版本按时间归属（`historyTurns.ts`，plan `2026-11-04-history-turn-pairing.md`） | 本次 |
 
 ### 2026-11-03 做完的事
 

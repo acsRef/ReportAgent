@@ -71,29 +71,29 @@ export default function ConversationTimeline({
         return (
           <div className="wb-history-turn" key={turn.key}>
             <UserBubble text={turn.question} />
-            <div className="wb-history-report">
-              {version ? (
-                <>
-                  <span className="wb-history-version">v{version.version}</span>
-                  <span className="wb-history-title">{version.title || '报告'}</span>
-                  <span className={`wb-history-status is-${version.status}`}>
-                    {STATUS_LABEL[version.status] ?? version.status}
-                  </span>
-                  <button
-                    type="button"
-                    className="wb-quiet-btn"
-                    onClick={() => toggle(turn.key)}
-                  >
-                    {isOpen ? '收起报告' : `查看 v${version.version} 报告`}
-                  </button>
-                  {isOpen && isLatest && expandLatest && (
-                    <span className="wb-history-note">上一轮结果，默认展开</span>
-                  )}
-                </>
-              ) : (
-                <span className="wb-history-status">未生成报告</span>
-              )}
-            </div>
+            {/* 2026-11-04（plan history-turn-pairing）：没有报告的轮次只留提问气泡。
+                此前这里渲染一条「未生成报告」的边框小条——没有可展开的内容，纯粹
+                是噪声，而且它长在时间线里，视觉上直接粘在下一条助手消息上方。
+                status=error 的版本仍然正常渲染并标红。 */}
+            {version && (
+              <div className="wb-history-report">
+                <span className="wb-history-version">v{version.version}</span>
+                <span className="wb-history-title">{version.title || '报告'}</span>
+                <span className={`wb-history-status is-${version.status}`}>
+                  {STATUS_LABEL[version.status] ?? version.status}
+                </span>
+                <button
+                  type="button"
+                  className="wb-quiet-btn"
+                  onClick={() => toggle(turn.key)}
+                >
+                  {isOpen ? '收起报告' : `查看 v${version.version} 报告`}
+                </button>
+                {isOpen && isLatest && expandLatest && (
+                  <span className="wb-history-note">上一轮结果，默认展开</span>
+                )}
+              </div>
+            )}
             {isOpen && version && (
               <ReportPaper
                 key={`${sessionId}-${version.version}`}
