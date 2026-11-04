@@ -1128,3 +1128,9 @@
 @media (max-width: 880px) {
   .wb-question-bar, .wb-confirm-bar { margin-left: 0; }
 }
+
+.wb-history-note {
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: var(--sp-s);
+}

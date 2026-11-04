@@ -41,7 +41,7 @@ import type { RequirementCard as RC } from '../types/requirement'
 import RequirementCardView from '../components/workbench/RequirementCardView'
 import QuestionBar from '../components/workbench/QuestionBar'
 import ConfirmBar from '../components/workbench/ConfirmBar'
-import { pickNextQuestion, ASSUMPTION_KEY_PREFIX } from '../components/workbench/slotQuestion'
+import { pickNextQuestion, ASSUMPTION_KEY_PREFIX, requirementUiMode } from '../components/workbench/slotQuestion'
 import ReportPaper from '../components/workbench/ReportPaper'
 import ConversationTimeline from '../components/workbench/ConversationTimeline'
 import type { TimelineTurn } from '../components/workbench/ConversationTimeline'
@@ -125,15 +125,20 @@ export default function WorkbenchPage() {
   const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
   // 需求已确认并开始执行（或已出报告）→ 卡片只读。改需求走下方输入框（adjust）。
+  // 2026-11-04（plan chat-like-conversation-flow）：`report_ready` 不再算锁定——
+  // 它是**上一轮**的终态；重发追问到达的新草稿是待确认的可编辑卡，
+  // 若沿用上一轮的 report_ready 就会渲染成只读大卡（只剩一句「已锁定」，
+  // 连「确认并生成报告」都没有）。锁定只认卡片自身 `status === 'locked'` + 执行中相位。
   const cardLocked =
-    phase === 'generating' || phase === 'adjusting' || phase === 'report_ready' ||
-    requirement?.status === 'locked'
-  // 当前该问的槽位（顺序由后端 `slot_order` 决定：口径 > 时间范围 > 粒度 > 范围 > 视角）。
-  // 槽位都填完后，未表态的**假设**也走同一条「一次一问」通道，否则用户会被整卡拦住。
-  const questionField = cardLocked ? null : pickNextQuestion(requirement)
-  // 还有没表态的假设时不能出确认条——否则用户会「确认」一张自己没看过的假设。
-  const showConfirmBar = Boolean(requirement) && !cardLocked && !questionField
-  const showCard = Boolean(requirement) && (cardLocked || detailsOpen)
+    requirement?.status === 'locked' || phase === 'generating' || phase === 'adjusting'
+  // ── 需求澄清的呈现时机（2026-11-04，plan chat-like-conversation-flow）────────
+  // 判定集中在 `requirementUiMode`：只有 awaiting_* 相位才出提问条/确认条；
+  // parsing 时上一轮的条必须消失（否则误点 → 409 SESSION_BUSY），report_ready 也不出条。
+  const requirementMode = requirementUiMode(phase, requirement, cardLocked, detailsOpen)
+  const questionField = requirementMode === 'question' ? pickNextQuestion(requirement) : null
+  const showConfirmBar = requirementMode === 'confirm'
+  // 整卡只在两种情况下出现：执行中（只读）或用户主动「展开详情」
+  const showCard = requirementMode === 'card'
 
   // ── 卡片更新提示（2026-11-03）────────────────────────────────────────────
   // 用户补充需求时，卡片内容会被重算——不解释的话看起来像「又冒出一张新卡」。
@@ -668,7 +673,12 @@ export default function WorkbenchPage() {
           <div className="wb-scroll" ref={scrollRef}>
             <div className="wb-content-inner">
           {activeSessionId && historyTurns.length > 0 && (
-            <ConversationTimeline sessionId={activeSessionId} turns={historyTurns} />
+            <ConversationTimeline
+              sessionId={activeSessionId}
+              turns={historyTurns}
+              // 2026-11-04：最近一轮保持展开——刚看到的报告不会因为发下一句就消失
+              expandLatest
+            />
           )}
           {lastQuestion && phase !== 'idle' && <UserBubble text={lastQuestion} />}
 

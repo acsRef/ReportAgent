@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { confirmChips, hasPendingQuestion, pickQuestionField } from '../slotQuestion'
+import {
+  confirmChips,
+  hasPendingQuestion,
+  pickQuestionField,
+  pickNextQuestion,
+  requirementUiMode,
+} from '../slotQuestion'
 import type { RequirementCard, RequirementMissingField } from '../../../types/requirement'
 
 function field(
@@ -117,5 +123,56 @@ describe('confirmChips — 紧凑确认条的摘要', () => {
   it('空卡 → 空摘要', () => {
     expect(confirmChips(card())).toEqual([])
     expect(confirmChips(null)).toEqual([])
+  })
+})
+
+describe('requirementUiMode — 需求区该显示什么（含 409 回归钉子）', () => {
+  const openCard = card({ status: 'missing', missing_fields: [field('metric')] })
+  const doneCard = card({ status: 'complete', missing_fields: [], time_range: '2024年' })
+
+  it('awaiting_* + 有槽位待问 → question', () => {
+    expect(requirementUiMode('awaiting_confirm', openCard, false, false)).toBe('question')
+    expect(requirementUiMode('awaiting_missing', openCard, false, false)).toBe('question')
+  })
+
+  it('awaiting_* + 槽位都填完 → 一行确认条', () => {
+    expect(requirementUiMode('awaiting_confirm', doneCard, false, false)).toBe('confirm')
+  })
+
+  it('展开详情 → card', () => {
+    expect(requirementUiMode('awaiting_confirm', doneCard, false, true)).toBe('card')
+  })
+
+  // 回归钉子（2026-11-04 实测撞 409）：新一轮还在 parsing 时，上一轮的确认条必须消失
+  it('parsing 相位一律 none（不许留上一轮的确认条 → 409 SESSION_BUSY）', () => {
+    expect(requirementUiMode('parsing', doneCard, false, false)).toBe('none')
+    expect(requirementUiMode('parsing', openCard, false, false)).toBe('none')
+  })
+
+  it('report_ready / error / idle 也不出条（报告就是回答）', () => {
+    for (const phase of ['report_ready', 'error', 'idle']) {
+      expect(requirementUiMode(phase, doneCard, false, false)).toBe('none')
+    }
+  })
+
+  it('执行中（cardLocked）→ 只读整卡', () => {
+    expect(requirementUiMode('generating', doneCard, true, false)).toBe('card')
+    expect(requirementUiMode('adjusting', openCard, true, false)).toBe('card')
+  })
+
+  it('没有卡 → none', () => {
+    expect(requirementUiMode('awaiting_confirm', null, false, false)).toBe('none')
+  })
+
+  it('pickNextQuestion 优先槽位、其次假设', () => {
+    const withAssumption = card({
+      status: 'complete',
+      missing_fields: [],
+      assumptions: [{ key: 'a1', text: '按订单金额口径', accepted: null, alternatives: [] }],
+    })
+
+    expect(pickNextQuestion(openCard)?.key).toBe('metric')
+    expect(pickNextQuestion(withAssumption)?.key).toBe('assumption:a1')
+    expect(pickNextQuestion(doneCard)).toBeNull()
   })
 })

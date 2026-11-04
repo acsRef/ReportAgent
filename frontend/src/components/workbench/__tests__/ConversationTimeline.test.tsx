@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import ConversationTimeline from '../ConversationTimeline'
 import type { ReportVersion } from '../../../types/analysis'
 
-// ReportPaper 自己按版本拉数据——这里只验证「点开才挂载」
+// ReportPaper 自己按版本拉数据——这里只验证挂载/收起行为
 vi.mock('../ReportPaper', () => ({
   default: ({ version }: { version: number }) => (
     <div data-testid={`report-${version}`}>报告内容 v{version}</div>
@@ -38,11 +38,10 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
     expect(screen.getByText('增加华东对比')).toBeTruthy()
     expect(screen.getByText('v1')).toBeTruthy()
     expect(screen.getByText('v2')).toBeTruthy()
-    // 默认收起：不挂 ReportPaper
-    expect(screen.queryByTestId('report-1')).toBeNull()
   })
 
-  it('点「展开报告」才挂载对应版本，且互斥展开', () => {
+  // 2026-11-04（plan chat-like-conversation-flow）：刚看到的报告不能因为发下一句就消失
+  it('最后一轮默认展开，更早的轮次仍收起', () => {
     render(
       <ConversationTimeline
         sessionId="sid-1"
@@ -52,12 +51,58 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
         ]}
       />,
     )
-    fireEvent.click(screen.getAllByText('展开报告')[0])
-    expect(screen.getByTestId('report-1')).toBeTruthy()
 
-    fireEvent.click(screen.getAllByText('展开报告')[0])
     expect(screen.getByTestId('report-2')).toBeTruthy()
     expect(screen.queryByTestId('report-1')).toBeNull()
+  })
+
+  it('expandLatest=false 时全部收起（渲染预算兜底）', () => {
+    render(
+      <ConversationTimeline
+        sessionId="sid-1"
+        turns={[
+          { key: 't1', question: 'q1', version: makeVersion(1) },
+          { key: 't2', question: 'q2', version: makeVersion(2) },
+        ]}
+        expandLatest={false}
+      />,
+    )
+
+    expect(screen.queryByTestId('report-1')).toBeNull()
+    expect(screen.queryByTestId('report-2')).toBeNull()
+  })
+
+  it('默认展开的最后一轮也能手动收起', () => {
+    render(
+      <ConversationTimeline
+        sessionId="sid-1"
+        turns={[
+          { key: 't1', question: 'q1', version: makeVersion(1) },
+          { key: 't2', question: 'q2', version: makeVersion(2) },
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('report-2')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('收起报告'))
+
+    expect(screen.queryByTestId('report-2')).toBeNull()
+    expect(screen.getByText('查看 v2 报告')).toBeTruthy()
+  })
+
+  it('点「查看 vN 报告」展开更早的轮次', () => {
+    render(
+      <ConversationTimeline
+        sessionId="sid-1"
+        turns={[
+          { key: 't1', question: 'q1', version: makeVersion(1) },
+          { key: 't2', question: 'q2', version: makeVersion(2) },
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByText('查看 v1 报告'))
+
+    expect(screen.getByTestId('report-1')).toBeTruthy()
   })
 
   it('没有版本的轮次显示「未生成报告」，失败版本标红', () => {

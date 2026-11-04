@@ -13,6 +13,14 @@ export interface TimelineTurn {
 interface Props {
   sessionId: string
   turns: TimelineTurn[]
+  /**
+   * 最后一轮历史默认展开（2026-11-04，plan chat-like-conversation-flow）。
+   *
+   * 此前所有历史轮次默认收起：用户刚看到报告，再发一句追问，报告立刻被折成
+   * 一行「v1 … 展开报告」——像内容凭空消失。现在**最近一轮保持展开**，更早的
+   * 仍可折叠，渲染预算仍受控（最多多挂 1 个 ReportPaper）。
+   */
+  expandLatest?: boolean
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -26,19 +34,40 @@ const STATUS_LABEL: Record<string, string> = {
  *
  * 2026-11-02：工作台画布此前只渲染「最后一次提问 + 一张卡 + 一个版本」，
  * 新提问会把旧问答顶掉，用户看到的是"以前的对话和报告都不见了"。这里把
- * 除当前轮以外的轮次按顺序铺成时间线，报告默认收起、点开才挂 ReportPaper
- * （每个 ReportPaper 自己按版本拉数，一屏挂十个会炸）。
+ * 除当前轮以外的轮次按顺序铺成时间线（每个 ReportPaper 自己按版本拉数，
+ * 一屏挂十个会炸，所以只有最近一轮默认展开）。
  */
-export default function ConversationTimeline({ sessionId, turns }: Props) {
+export default function ConversationTimeline({
+  sessionId,
+  turns,
+  expandLatest = true,
+}: Props) {
   const [openKey, setOpenKey] = useState<string | null>(null)
+  // 用户显式收起过的轮次（默认展开的最后一轮也要能收起）
+  const [closedKey, setClosedKey] = useState<string | null>(null)
 
   if (turns.length === 0) return null
+
+  const latestKey = turns[turns.length - 1]?.key ?? null
+
+  function isOpenFor(key: string): boolean {
+    if (openKey === key) return true
+    if (closedKey === key) return false
+    return expandLatest && key === latestKey
+  }
+
+  function toggle(key: string) {
+    const open = isOpenFor(key)
+    setOpenKey(open ? null : key)
+    setClosedKey(open ? key : null)
+  }
 
   return (
     <section className="wb-history" aria-label="历史分析轮次">
       {turns.map((turn) => {
         const version = turn.version
-        const isOpen = openKey === turn.key
+        const isOpen = isOpenFor(turn.key)
+        const isLatest = turn.key === latestKey
         return (
           <div className="wb-history-turn" key={turn.key}>
             <UserBubble text={turn.question} />
@@ -53,10 +82,13 @@ export default function ConversationTimeline({ sessionId, turns }: Props) {
                   <button
                     type="button"
                     className="wb-quiet-btn"
-                    onClick={() => setOpenKey(isOpen ? null : turn.key)}
+                    onClick={() => toggle(turn.key)}
                   >
-                    {isOpen ? '收起报告' : '展开报告'}
+                    {isOpen ? '收起报告' : `查看 v${version.version} 报告`}
                   </button>
+                  {isOpen && isLatest && expandLatest && (
+                    <span className="wb-history-note">上一轮结果，默认展开</span>
+                  )}
                 </>
               ) : (
                 <span className="wb-history-status">未生成报告</span>

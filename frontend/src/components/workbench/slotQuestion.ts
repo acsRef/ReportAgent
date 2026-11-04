@@ -77,6 +77,31 @@ export function pickNextQuestion(card: RequirementCard | null): RequirementMissi
   return pickQuestionField(card) ?? pickPendingAssumption(card)
 }
 
+/** 需求区当前该显示什么（单一判定来源，便于单测）。 */
+export type RequirementUiMode = 'question' | 'confirm' | 'card' | 'none'
+
+/**
+ * 需求区形态判定（2026-11-04，plan chat-like-conversation-flow）。
+ *
+ * 只有 `awaiting_confirm` / `awaiting_missing`（当前草稿在等你答）才出提问条或确认条；
+ * `parsing`（新一轮还在解析）一律 `none`——**上一轮的确认条若留在屏幕上会被误点**，
+ * 后端会以 409 SESSION_BUSY 拒绝（实测撞过）。`report_ready` / `error` 也不出条：
+ * 这轮已经结束，报告就是回答。
+ */
+export function requirementUiMode(
+  phase: RequirementCard['status'] | string,
+  card: RequirementCard | null,
+  cardLocked: boolean,
+  detailsOpen: boolean,
+): RequirementUiMode {
+  if (!card) return 'none'
+  if (cardLocked) return 'card'
+  const awaiting = phase === 'awaiting_confirm' || phase === 'awaiting_missing'
+  if (!awaiting) return 'none'
+  if (pickNextQuestion(card)) return 'question'
+  return detailsOpen ? 'card' : 'confirm'
+}
+
 /** 已经确定下来的槽位摘要（确认条用）：时间 / 粒度 / 口径 / 范围 / 角度。 */
 export interface ConfirmChip {
   key: string
