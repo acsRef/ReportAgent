@@ -313,6 +313,10 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
             "label": getattr(top_resolved, "label", "") if top_resolved else "",
             "period_column": getattr(top_resolved, "period_column", "") if top_resolved else "",
             "period_value": getattr(top_resolved, "period_value", "") if top_resolved else "",
+            # 「最多和最小」：两期各自的过滤值（契约要逐条校验都在 SQL 里）
+            "period_values": [
+                str(entry.period) for entry in (getattr(top_resolved, "entries", ()) or ())
+            ] if top_resolved else [],
             "filters": list(getattr(top_resolved, "filters", ()) or ()) if top_resolved else [],
         }
     confirmed_requirement = _format_confirmed_requirement(card, top_resolved=top_resolved)
@@ -573,6 +577,23 @@ def _top_period_hint(card, top_resolved=None) -> str | None:
         if is_detail
         else "只返回该期的汇总/对比结果，不要再按期分组"
     )
+
+    # 「最多和最小」两个方向一起要（2026-11-05）：输出**两行**，每期一行
+    if direction == "both" and top_resolved is not None and getattr(top_resolved, "ok", False):
+        entries = list(getattr(top_resolved, "entries", ()) or ())
+        if len(entries) == 2:
+            period_column = knowledge.time_bucket_column(unit) or unit
+            labels = "、".join(f"{e.label}（{e.direction}）" for e in entries)
+            values = ", ".join(e.period for e in entries)
+            metric_name = str(getattr(top, "metric", "") or "")
+            return (
+                f"【选期结果（确定性，系统已算出）】{metric_name}的两个极端{unit_label}：{labels}\n"
+                f"筛选条件（确定性，必须逐字使用）：{period_column} IN ({values})"
+                f"（若跨年，年份条件取各自那一年）\n"
+                f"—— 结果必须**恰好两行**：每个极端{unit_label}一行（列：{unit_label} + {metric_name}），"
+                f"按 {period_column} 分组；\n"
+                f"—— **不要**只给一行，也**不要**给全部{unit_label}。"
+            )
 
     if top_resolved is not None and getattr(top_resolved, "ok", False):
         label = getattr(top_resolved, "label", "") or f"{word}的{unit_label}"

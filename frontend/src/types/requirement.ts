@@ -65,7 +65,8 @@ export type RequirementDetailLevel = 'aggregate' | 'detail'
  * 镜像后端 `RequirementTopPeriod`：direction=取极值方向，unit=按哪一期取。
  */
 export interface RequirementTopPeriod {
-  direction: 'max' | 'min'
+  /** both = 两个方向一起要（「销售额最多和最小」） */
+  direction: 'max' | 'min' | 'both'
   unit: RequirementGranularity
   metric?: string | null
 }

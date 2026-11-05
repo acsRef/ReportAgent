@@ -498,22 +498,47 @@ _TOP_PERIOD_MAX_WORDS = (
 _TOP_PERIOD_MIN_WORDS = (
     "最少", "最低", "最小", "最差", "最惨", "淡季", "最冷", "最不好", "卖得最差",
 )
+# 「最高和最低」这种**两个方向一起要**的说法（2026-11-05：用户「销售额最多和最小」
+# 此前整句落空——只认一个方向，且要求单位紧跟极值词，于是意图被丢掉，退化成
+# 「2024年华东销售额按周 + 逐条明细 + 异常检测」这种四不像）
+_TOP_PERIOD_BOTH_WORDS = ("和", "与", "还有", "以及", "分别", "各自", "同时")
+# 出现这些词 → 是「按维度比大小」，不是「取时间上的极值期」
+_TOP_PERIOD_DIMENSION_WORDS = (
+    "品类", "产品", "品牌", "类别", "区域", "地区", "省份", "城市", "门店", "客户", "渠道",
+)
 # 极值词之后最多隔多少个非标点字符再找单位（「最多的那个月」= 4 个字符）
 _TOP_PERIOD_WINDOW = 8
 
 
 def _top_period_from_query(user_query: str) -> dict | None:
-    """从原话识别「按哪一期取最高/最低」：{'direction': max|min, 'unit': month|...}。
+    """从原话识别「按哪一期取最高/最低」：{'direction': max|min|both, 'unit': month|...}。
 
-    两种语序都认（用户怎么说话就怎么认）：
+    三种语序都认（用户怎么说话就怎么认）：
     - 「销售额**最高的**那个**月**」/「把**最差**的那个**月**的明细给我看看」；
-    - 「哪**个月**最差」/「哪**天**卖得最好」。
+    - 「哪**个月**最差」/「哪**天**卖得最好」；
+    - 「销售额**最多和最小**的具体情况」→ `both`（两个方向一起要）。
 
-    不认「最高的销售额」（只有极值、没提期——那是要一个数，不是选期）。
+    不认「最高的销售额」（只有极值、没提期——那是要一个数，不是选期）；
+    也不认「哪个**品类**卖得最多」（那是按维度比大小，不是选时间期）。
     """
     text = str(user_query or "")
     if not text:
         return None
+    # 维度词在场 → 这是「按维度比大小」，交给 compare 类意图
+    if any(word in text for word in _TOP_PERIOD_DIMENSION_WORDS):
+        return None
+
+    has_max = any(word in text for word in _TOP_PERIOD_MAX_WORDS)
+    has_min = any(word in text for word in _TOP_PERIOD_MIN_WORDS)
+    both = has_max and has_min and any(word in text for word in _TOP_PERIOD_BOTH_WORDS)
+    if both:
+        # 两个方向一起要：单位没说就按月（销售额的极值期，口语默认就是月）
+        unit = None
+        for candidate in _TOP_PERIOD_UNITS:
+            if candidate in text:
+                unit = _TOP_PERIOD_UNITS[candidate]
+                break
+        return {"direction": "both", "unit": unit or "month"}
 
     candidates: list[tuple[int, str, str]] = []   # (位置, 方向, 单位)
 
@@ -1028,11 +1053,10 @@ def parse_requirement(
     explicit_granularity = _granularity_from_query(user_query)
     if explicit_granularity:
         granularity = explicit_granularity
-    # 明细 / 汇总：**用户原话优先**，其次是模型自己给的值（2026-11-04：prompt 里已让模型
-    # 输出 detail_level；之前只认代码词表，模型看懂了也会被丢掉）。
-    detail_level = _normalize_detail_level(user_query) or _normalize_detail_level_value(
-        parsed.get("detail_level")
-    )
+    # 明细 / 汇总：**只看用户原话**（2026-11-05 修正）。
+    # 之前允许模型自己给 detail_level，结果「具体情况是什么」被模型当成「要看逐条明细」——
+    # 用户看到的是「逐条明细」，这属于把模型的猜测当成用户的要求。明细只能由用户说。
+    detail_level = _normalize_detail_level(user_query)
 
     # status: complete requires NO missing fields AND all assumptions
     # explicitly accepted. If the LLM left assumptions unresolved

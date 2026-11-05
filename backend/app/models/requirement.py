@@ -69,7 +69,8 @@ class RequirementAssumption(BaseModel):
 # 之前卡片没有任何字段承载它，SQL 只能做全区间聚合（实测 v2 变成 GROUP BY year,region
 # 的一行汇总，用户要的「最高那周/那月」根本没出现）。
 class RequirementTopPeriod(BaseModel):
-    direction: Literal["max", "min"]
+    # both = 两个方向一起要（「销售额最多和最小」），2026-11-05 新增
+    direction: Literal["max", "min", "both"]
     # 按哪一期取极值（月 / 周 / 日 / 季 / 年）
     unit: RequirementGranularity
     # 用哪个指标取极值（None = 注册表默认口径）

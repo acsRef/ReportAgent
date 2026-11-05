@@ -210,3 +210,39 @@ A  ▸ 思考了 6 步 · 8.2s
 已知未覆盖：用户说「哪个月的销售额最低**和最高**」这种**一期取两个**的诉求，
 当前 `top_period` 只能承载一个方向（实测这一轮退化成「2024 年华东销售额按月」），
 需要新增「多期选择」才能表达——记在 plan 的 Explicitly NOT doing。
+
+### 追加（同日，「销售额最多和最小的具体情况是什么」）
+
+**这一轮卡片实际长这样（库里 draft）**，三处错都来自「继承 + 猜」：
+
+```json
+{"granularity":"week","detail_level":"detail","top_period":null,
+ "analysis_methods":["anomaly_detection"],"summary":"分析销售额最多和最小的具体情况"}
+```
+
+| 症状 | 根因 |
+|---|---|
+| 「最多和最小」整句落空（`top_period=null`） | 选期识别要求极值词**紧跟单位**，且只支持**一个方向**：「最多和最小」既没有紧跟的单位、又是两个方向 |
+| 粒度变成「按周」 | 从上一轮（趋势，按周）继承了 `granularity` |
+| 变成「逐条明细」 | 模型把「具体情况」当成了明细；上一版允许模型填 `detail_level`，于是被采纳 |
+| 带着「异常检测」 | 从上一轮继承了 `analysis_methods` |
+
+**修法（都是确定性规则）**
+
+1. `_top_period_from_query` 支持 **both**：同一句里同时出现极值两端（最多/最高 + 最少/最低）
+   → `direction="both"`，单位没说默认 `month`；出现「品类/区域/门店…」这类维度词时不认（那是按维度比大小）。
+2. 选期路径**确定性地把粒度写成选期单位**（月），不再沿用上一轮的「按周」。
+3. `detail_level` **只认用户原话**（明细/逐条/详细数据…）；模型自己给的 detail 不再采纳。
+4. 选期路径清空 `analysis_methods`（异常检测属于上一轮）。
+5. `resolve_top_period` 支持 both（分别算最高/最低两期），提示词要求输出**恰好两行**；
+   SQL 契约逐条校验两期过滤值都在。
+6. 前端 `topPeriodText` / 类型支持 `both`（「销售额最高的月和最低的月」）。
+
+**真链路结果**（同一条流程：先 2024 华东趋势出 v1，再问「销售额最多和最小的具体情况是什么」）：
+
+```
+card2  gran=month  detail=None  top={"direction":"both","unit":"month","metric":"销售额"}  methods=[]
+SQL    ... WHERE dim_date.year = 2024 AND dim_date.month IN (11, 2) AND dim_store.region = '华东'
+       GROUP BY dim_date.month
+结果   2 行：[{"月份": 2, "销售额": "5444341.66"}, {"月份": 11, "销售额": "9437879.30"}]
+```

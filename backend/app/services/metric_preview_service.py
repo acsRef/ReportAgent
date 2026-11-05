@@ -252,7 +252,19 @@ class TopPeriodResult:
     period_column: str = ""
     period_value: str = ""
     value: Decimal | None = None
+    # 两个方向一起要时（direction=both）：每一期各一条
+    entries: tuple[TopPeriodEntry, ...] = ()
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class TopPeriodEntry:
+    direction: str          # max / min
+    label: str
+    filters: tuple[str, ...]
+    year: str = ""
+    period: str = ""
+    value: Decimal | None = None
 
 
 _TOP_PERIOD_ORDER = {"max": "DESC", "min": "ASC"}
@@ -368,9 +380,36 @@ async def resolve_top_period(
     为什么要自己算而不是让 LLM 写两段式 SQL：实测模型会写成
     `SELECT ... ; SELECT ...` 两条语句（sqlglot 直接判语法错），或者干脆退回全区间汇总。
     选期是**确定性事实**，算一次比赌采样可靠。
+
+    `direction="both"`（「最多和最小」）：最高、最低各算一次，`entries` 里各一条。
     """
     if metric is None:
         return TopPeriodResult(ok=False, reason="no_metric")
+    if direction == "both":
+        entries: list[TopPeriodEntry] = []
+        for one in ("max", "min"):
+            single = await resolve_top_period(
+                metric, unit=unit, direction=one, time_range=time_range,
+                scope=scope, timeout=timeout, today=today,
+            )
+            if not single.ok:
+                return TopPeriodResult(ok=False, unit=unit, reason=single.reason or "both_failed")
+            entries.append(TopPeriodEntry(
+                direction=one,
+                label=single.label,
+                filters=single.filters,
+                period=single.period_value,
+                value=single.value,
+            ))
+        return TopPeriodResult(
+            ok=True,
+            unit=unit,
+            label="、".join(entry.label for entry in entries),
+            filters=tuple(f for entry in entries for f in entry.filters),
+            period_column=knowledge.time_bucket_column(unit) or "",
+            period_value=",".join(entry.period for entry in entries),
+            entries=tuple(entries),
+        )
     built = build_top_period_sql(
         metric, unit=unit, direction=direction, time_range=time_range,
         scope=scope, today=today,

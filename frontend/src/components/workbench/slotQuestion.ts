@@ -173,9 +173,14 @@ export function topPeriodText(card: RequirementCard | null): string | null {
   const top = card?.top_period
   if (!top) return null
   const unit = GRANULARITY_TEXT[top.unit] ?? top.unit
-  const word = top.direction === 'min' ? '最低' : '最高'
+  const bare = unit.replace(/^按/, '')
   const metric = (top.metric ?? '').trim()
-  return metric ? `${metric}${word}的${unit.replace(/^按/, '')}` : `${word}的${unit}`
+  if (top.direction === 'both') {
+    // 「销售额最多和最小」→ 销售额最高的月和最低的月
+    return metric ? `${metric}最高的${bare}和最低的${bare}` : `最高和最低的${bare}`
+  }
+  const word = top.direction === 'min' ? '最低' : '最高'
+  return metric ? `${metric}${word}的${bare}` : `${word}的${unit}`
 }
 
 export function confirmChips(card: RequirementCard | null): ConfirmChip[] {

@@ -725,18 +725,26 @@ def _top_period_contract_violation(sql: str, top_period: dict | None = None) -> 
     spec = top_period or {}
     if spec.get("resolved"):
         column = str(spec.get("period_column") or "")
-        value = str(spec.get("period_value") or "")
         label = str(spec.get("label") or "")
+        # 两个方向一起要（「最多和最小」）：两期的过滤值都必须出现
+        values = [str(v) for v in (spec.get("period_values") or []) if str(v)]
+        if not values:
+            raw = str(spec.get("period_value") or "")
+            values = [part.strip() for part in raw.split(",") if part.strip()]
         bare = column.split(".")[-1].lower()
         if not bare or bare not in text.lower():
             return (
                 f"缺少「只取 {label or '选定那一期'}」的过滤条件："
-                f"必须加上 {column} 的过滤（选定期 = {value}），不许把全区间再汇总一遍"
+                f"必须加上 {column} 的过滤，不许把全区间再汇总一遍"
             )
-        if value and not re.search(rf"(?<![\d.]){re.escape(value)}(?![\d.])", text):
+        missing = [
+            value for value in values
+            if not re.search(rf"(?<![\d.]){re.escape(value)}(?![\d.])", text)
+        ]
+        if missing:
             return (
                 f"缺少「只取 {label or '选定那一期'}」的过滤条件："
-                f"必须加上 {column} = {value}，不许把全区间再汇总一遍"
+                f"必须包含 {column} = {'、'.join(missing)}，不许把全区间再汇总一遍"
             )
         return None
     if not _TOP_PERIOD_LIMIT_RE.search(text):
