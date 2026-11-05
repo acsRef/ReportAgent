@@ -8,19 +8,31 @@ interface Props {
   /** P11：live 当前步骤文案（trace 驱动），覆盖默认 detail 行。 */
   liveDetail?: string
   onStop?: () => void
+  /**
+   * 只出内容（2026-11-05 修订 A4）：执行进度是那**一条**助手消息的一部分，
+   * 不再单独占一张卡片（用户：「生成了一份还是两份？」）。
+   */
+  bare?: boolean
 }
 
-/** generating/adjusting progress card — prototype .progress-card. */
-export default function ProgressCard({ adjusting, stageIndex, failed, liveDetail, onStop }: Props) {
+/** generating/adjusting progress — 默认是卡片形态，`bare` 时融进助手消息。 */
+export default function ProgressCard({
+  adjusting,
+  stageIndex,
+  failed,
+  liveDetail,
+  onStop,
+  bare = false,
+}: Props) {
   const stages = adjusting ? ADJUST_STAGES : CONFIRM_STAGES
   const percent = stageIndex >= stages.length ? 100 : progressPercent(stageIndex)
   const activeLabel = stages[Math.min(stageIndex, stages.length - 1)]
 
-  return (
-    <div className={`wb-progress-card wb-reveal${failed ? ' failed' : ''}`}>
+  const content = (
+    <>
       <div className="wb-progress-top">
         <span className="wb-progress-title">
-          {failed ? '执行分析时发生错误' : adjusting ? '正在生成新报告版本' : 'Agent 正在执行分析'}
+          {failed ? '执行分析时发生错误' : adjusting ? '正在生成新报告版本' : '正在查询数据并生成报告'}
         </span>
         <span className="wb-progress-pct">{failed ? 'FAILED' : `${percent}%`}</span>
       </div>
@@ -59,6 +71,12 @@ export default function ProgressCard({ adjusting, stageIndex, failed, liveDetail
           </button>
         </div>
       )}
-    </div>
+    </>
+  )
+
+  if (bare) return <div className="wb-turn-body wb-turn-progress">{content}</div>
+
+  return (
+    <div className={`wb-progress-card wb-reveal${failed ? ' failed' : ''}`}>{content}</div>
   )
 }

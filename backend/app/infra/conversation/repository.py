@@ -28,10 +28,13 @@ async def get_messages(session_id: str, user_id: int) -> list[dict]:
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
+            # 2026-11-05：排序补 `id`——同一事务里多行 `created_at` 相同（`NOW()` 是
+            # 事务开始时间），只按时间排会让「问 + 答」的先后不确定，前端按 id 合并
+            # 对话账本时可能把两句的顺序抖开。
             "SELECT id, role, content, message_type, metadata, created_at "
             "FROM app.conversations "
             "WHERE session_id = $1 AND user_id = $2 "
-            "ORDER BY created_at",
+            "ORDER BY created_at, id",
             session_id, user_id,
         )
         return [

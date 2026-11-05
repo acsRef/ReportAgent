@@ -106,6 +106,10 @@ export async function postConfirmStream(
             break
           case 'report':
             sawReport = true
+            if (typeof evt.report.version === 'number') {
+              // 2026-11-05（修订 A）：版本挂到**这一轮助手消息**上，时间线不必再猜
+              ctx.dispatch({ type: 'chat/version', version: evt.report.version })
+            }
             await ctx.onReport(
               typeof evt.report.version === 'number'
                 ? evt.report.version
@@ -116,14 +120,22 @@ export async function postConfirmStream(
           case 'error':
             ctx.toast.error(evt.error.message ?? '执行失败')
             ctx.dispatch({ type: 'analysis/failed', error: evt.error })
+            // 这一轮的助手消息定性失败，过程收尾（面板不再永远停在 ◐）
+            ctx.dispatch({ type: 'chat/status', status: 'error' })
+            ctx.dispatch({ type: 'timeline/closed', reason: 'error' })
             // FAILED 版本已落库（persist → error 顺序）——页面钩子刷新并选中
             // 最新版本，ReportPaper error band 才能渲染。
             await ctx.onFailed?.()
             break
           case 'trace':
+            // 执行过程也进这一轮助手消息（2026-11-05 修订 A：过程并进同一条回复，
+            // 此前 confirm 流的帧只喂进度卡，过程列表在确认后是空的）。
+            ctx.dispatch({ type: 'timeline/received', entry: evt.entry })
             ctx.onTrace?.(evt.entry)
             break
           case 'done':
+            ctx.dispatch({ type: 'timeline/closed', reason: 'done' })
+            ctx.dispatch({ type: 'chat/status', status: 'done' })
             ctx.dispatch({ type: 'phase/received', phase: evt.finalPhase })
             break
           default:

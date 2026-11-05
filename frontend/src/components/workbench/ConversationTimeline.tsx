@@ -1,20 +1,17 @@
 import { useState } from 'react'
 import ReportPaper from './ReportPaper'
 import { AgentBubble, UserBubble } from './MessageBubbles'
-import type { ReportVersion } from '../../types/analysis'
-
-export interface TimelineTurn {
-  key: string
-  question: string
-  /** 该轮助手回复的文本（2026-11-05：一轮 = 问 + 答，缺了它历史就断）。 */
-  answer?: string | null
-  /** 该轮产出的报告版本（chitchat / 失败轮可能没有）。 */
-  version: ReportVersion | null
-}
+import TracePanel from './TracePanel'
+import type { ChatTurn } from './historyTurns'
 
 interface Props {
   sessionId: string
-  turns: TimelineTurn[]
+  /**
+   * 历史轮次（`ChatTurn[]`）——2026-11-05（plan conversation-transcript-messages
+   * 修订 A）：数据源与当轮统一成同一个类型，从对话账本 `buildChatTurns` 派生，
+   * 每轮 = 问 + 答（含过程）+ 版本条，不再是「只有问题 + 版本」。
+   */
+  turns: ChatTurn[]
   /**
    * 最后一轮历史默认展开（2026-11-04，plan chat-like-conversation-flow）。
    *
@@ -37,7 +34,7 @@ const STATUS_LABEL: Record<string, string> = {
  * 2026-11-02：工作台画布此前只渲染「最后一次提问 + 一张卡 + 一个版本」，
  * 新提问会把旧问答顶掉，用户看到的是"以前的对话和报告都不见了"。这里把
  * 除当前轮以外的轮次按顺序铺成时间线（每个 ReportPaper 自己按版本拉数，
- * 一屏挂十个会炸，所以只有最近一轮默认展开）。
+ * 一屏挂十个会炸，所以默认都收起、点开才挂）。
  */
 export default function ConversationTimeline({
   sessionId,
@@ -70,12 +67,23 @@ export default function ConversationTimeline({
         const version = turn.version
         const isOpen = isOpenFor(turn.key)
         const isLatest = turn.key === latestKey
+        const hasProcess = turn.trace.length > 0 || Boolean(turn.traceNote)
         return (
           <div className="wb-history-turn" key={turn.key}>
             <UserBubble text={turn.question} />
             {/* 2026-11-05（plan conversation-transcript-messages）：一轮 = 问 + 答。
-                助手说过的话必须留在对话里，否则发下一句时上一轮回复像凭空消失。 */}
-            {turn.answer && <AgentBubble markdown={turn.answer} />}
+                助手说过的话与它当时的思考过程留在对话里（同一条气泡），否则发下一句时
+                上一轮回复像凭空消失。 */}
+            {(turn.answer || hasProcess) && (
+              <AgentBubble
+                markdown={turn.answer ?? ''}
+                trace={
+                  hasProcess ? (
+                    <TracePanel entries={turn.trace} note={turn.traceNote} running={false} />
+                  ) : null
+                }
+              />
+            )}
             {/* 2026-11-04（plan history-turn-pairing）：没有报告的轮次只留提问气泡。
                 此前这里渲染一条「未生成报告」的边框小条——没有可展开的内容，纯粹
                 是噪声，而且它长在时间线里，视觉上直接粘在下一条助手消息上方。

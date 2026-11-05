@@ -433,22 +433,26 @@
 /* 历史轮次时间线（2026-11-02）：轮次纵向排列，报告默认收起、点开才挂载 */
 .wb-history { display: flex; flex-direction: column; gap: var(--sp-4); margin-bottom: var(--sp-5); }
 .wb-history-turn { display: flex; flex-direction: column; gap: var(--sp-2); }
+/* 2026-11-05（修订 A4）：版本指针从「一条白底边框条」降级成**助手气泡下面的一行字**——
+   用户要求「一条消息就是一条消息，不要每条助手消息套一层白卡」。它仍然是一行可点的
+   入口（v1 · 标题 · 已完成 · 查看 v1 报告），与助手气泡左对齐，不再横跨整行抢视线。 */
 .wb-history-report {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--paper-dim, #e8e8e8);
-  border-left: 2px solid var(--teal, #0d7a6b);
-  border-radius: 6px;
-  background: var(--paper, #fff);
+  margin-left: 41px;
+  margin-bottom: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
   font-size: 11px;
 }
 .wb-history-version { font-weight: 600; color: var(--teal-deep, #0a5c50); }
-.wb-history-title { color: var(--ink, #1f2329); }
+.wb-history-title { color: var(--ink-2, #3d4552); }
 .wb-history-status { color: var(--muted, #6b7280); font-size: 10px; }
 .wb-history-status.is-error { color: var(--red, #c0392b); }
-.wb-history-report .wb-quiet-btn { margin-left: auto; }
+.wb-history-report .wb-quiet-btn { margin-left: var(--sp-2); }
 
 /* ---------- parsing card + thinking dots ---------- */
 .wb-parsing-card, .wb-progress-card {
@@ -1380,6 +1384,25 @@
   cursor: pointer;
 }
 .wb-ask-note { font-size: 11px; color: var(--muted); }
+
+/* ---------- 当轮助手消息的 body（2026-11-05，修订 A4） ---------- */
+/* 一条助手消息里依次是：思考摘要 → 状态文案 → 结构化 body（追问/确认/进度/错误）。
+   这些 body 以前各有自己的边框卡片，现在只出内容，外壳由气泡提供。 */
+.wb-turn-body { display: flex; flex-direction: column; gap: var(--sp-s); }
+.wb-turn-text > :first-child { margin-top: 0; }
+.wb-turn-text > :last-child { margin-bottom: 0; }
+.wb-turn-body .wb-progress-top { margin-bottom: 6px; }
+.wb-turn-body .wb-progress-track { margin: 0; }
+.wb-turn-body .wb-stage-list { margin-top: var(--sp-s); }
+.wb-turn-body .wb-progress-detail { margin-top: 6px; }
+.wb-turn-body .wb-parse-steps { margin-top: var(--sp-s); }
+.wb-turn-body .wb-progress-actions,
+.wb-turn-body .wb-ask-foot { margin-top: var(--sp-xs); }
+/* 「需求详情」按需展开（在确认那条消息内部，不另起一张大卡） */
+.wb-ask-details {
+  padding: var(--sp-s) 0;
+  border-top: 1px dashed var(--line);
+}
 
 /* ---------- 「思考」= 助手消息里的一行摘要（2026-11-04 返工） ---------- */
 /* 用户要求：一整个、不要卡片、太占地方。这里没有边框/缩进，只有一行可展开摘要。 */

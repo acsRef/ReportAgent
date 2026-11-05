@@ -32,8 +32,14 @@ export class WorkbenchPage {
   }
 
   // ── 需求确认 ──
+  /**
+   * 2026-11-05（plan conversation-transcript-messages 修订 A）：需求区不再是整卡，
+   * 「需求就绪」的稳定信号是那条助手消息上的 `aria-label`（澄清提问或确认条）。
+   */
   async expectRequirementCard(): Promise<void> {
-    await expect(this.page.locator('.wb-requirement-card')).toBeVisible()
+    await expect(
+      this.page.locator('[aria-label="需求确认"], [aria-label="需求澄清"]').first(),
+    ).toBeVisible({ timeout: 90_000 })
   }
 
   async clickPrimary(actionLabel: string | null = null): Promise<void> {
@@ -49,8 +55,9 @@ export class WorkbenchPage {
   }
 
   // ── 执行阶段可见性 ──
+  /** 进度现在长在助手消息里（`.wb-turn-progress`），不再是独立进度卡。 */
   async expectBusy(): Promise<void> {
-    await expect(this.page.locator('.wb-progress-card').first()).toBeVisible({ timeout: 15_000 })
+    await expect(this.page.locator('.wb-turn-progress').first()).toBeVisible({ timeout: 15_000 })
   }
 
   // ── 报告 ──

@@ -104,7 +104,7 @@ describe('handleSSEEvent（sessionEvents 版）', () => {
     const msgApi = { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() }
     handleSSEEvent(
       { type: 'report', report: { version: 2, title: 'r2', answer: { text: 'x' } } },
-      { msgApi: msgApi as any, sessionId: 's1', setSending: vi.fn(), setCasualReply: vi.fn() },
+      { msgApi: msgApi as any, sessionId: 's1', setSending: vi.fn() },
     )
     expect(msgApi.success).toHaveBeenCalledWith('报告 v2 已生成')
     await waitFor(() => expect(useAnalysisStore.getState().selectedReportVersion).toBe(2))
@@ -119,7 +119,7 @@ describe('handleSSEEvent（sessionEvents 版）', () => {
     const msgApi = { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() }
     handleSSEEvent(
       { type: 'error', error: { code: 'SQL_EXECUTION_ERROR', message: '查询执行失败', recoverable: false, failed_action: 'confirm' } },
-      { msgApi: msgApi as any, sessionId: 's1', setSending: vi.fn(), setCasualReply: vi.fn() },
+      { msgApi: msgApi as any, sessionId: 's1', setSending: vi.fn() },
     )
     expect(msgApi.error).toHaveBeenCalled()
     expect(fetchSessionMock).toHaveBeenCalled()

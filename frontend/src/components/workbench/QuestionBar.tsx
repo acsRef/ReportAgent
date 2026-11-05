@@ -11,6 +11,11 @@ interface Props {
   disabled?: boolean
   /** 思考过程（与提问同属**一条**助手消息，不单独占一块）。 */
   trace?: ReactNode
+  /**
+   * 只出内容（2026-11-05 修订 A4）——外壳（头像 + 气泡）由 `AssistantTurn` 提供，
+   * 也就是「一轮只有一条助手消息」。默认形态保持不变（历史/单测直接用）。
+   */
+  bare?: boolean
 }
 
 /**
@@ -26,43 +31,58 @@ export default function QuestionBar({
   onSupplement,
   disabled = false,
   trace = null,
+  bare = false,
 }: Props) {
   const multiple = field.kind === 'multiple'
   const lead =
     field.state === 'ambiguous' ? '先确认一下口径：' : '还需要你补充一点：'
+
+  const content = (
+    <>
+      <p className="wb-ask-text">
+        {lead}
+        {field.label}
+      </p>
+      <div className="wb-ask-options">
+        {field.options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className="wb-ask-option"
+            onClick={() => {
+              if (!disabled) onPick(field.key, option.value)
+            }}
+            disabled={disabled}
+            title={option.value}
+          >
+            <span className="wb-ask-option-label">{option.label}</span>
+            {option.hint && <span className="wb-ask-option-hint">{option.hint}</span>}
+          </button>
+        ))}
+      </div>
+      <div className="wb-ask-foot">
+        <button type="button" className="wb-ask-link" onClick={onSupplement}>
+          都不是，我补充说明
+        </button>
+        {multiple && <span className="wb-ask-note">可多选</span>}
+      </div>
+    </>
+  )
+
+  if (bare) {
+    return (
+      <div className="wb-turn-body" role="group" aria-label="需求澄清">
+        {content}
+      </div>
+    )
+  }
 
   return (
     <div className="wb-message wb-reveal" role="group" aria-label="需求澄清">
       <div className="wb-msg-avatar agent">A</div>
       <div className="wb-bubble wb-ask-bubble">
         {trace}
-        <p className="wb-ask-text">
-          {lead}
-          {field.label}
-        </p>
-        <div className="wb-ask-options">
-          {field.options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className="wb-ask-option"
-              onClick={() => {
-                if (!disabled) onPick(field.key, option.value)
-              }}
-              disabled={disabled}
-              title={option.value}
-            >
-              <span className="wb-ask-option-label">{option.label}</span>
-              {option.hint && <span className="wb-ask-option-hint">{option.hint}</span>}
-            </button>
-          ))}
-        </div>
-        <div className="wb-ask-foot">
-          <button type="button" className="wb-ask-link" onClick={onSupplement}>
-            都不是，我补充说明
-          </button>
-          {multiple && <span className="wb-ask-note">可多选</span>}
-        </div>
+        {content}
       </div>
     </div>
   )

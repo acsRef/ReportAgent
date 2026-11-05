@@ -28,6 +28,6 @@ test.describe('11-chitchat-bubble — 闲聊意图走 keyword 路径，AgentBubb
     )
     // 闲聊不发需求卡 / 不发 error
     await expect(page.locator('.wb-requirement-card')).toHaveCount(0)
-    await expect(page.locator('.wb-progress-card.failed')).toHaveCount(0)
+    await expect(page.locator('.wb-turn-error')).toHaveCount(0)
   })
 })

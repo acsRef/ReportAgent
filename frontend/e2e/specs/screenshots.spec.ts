@@ -38,7 +38,7 @@ async function shotReport(page: import('@playwright/test').Page, name: string): 
     .waitForFunction(
       () => {
         const text = document.body.textContent ?? ''
-        return !text.includes('正在处理中') && !document.querySelector('.wb-progress-card')
+        return !text.includes('正在处理中') && !document.querySelector('.wb-turn-progress')
       },
       undefined,
       { timeout: 60_000 },
@@ -200,7 +200,7 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
     await wb.confirmRequirement()
 
     // 处理中状态（进度卡）——repair 过程的「进行时」证据
-    await expect(page.locator('.wb-progress-card').first()).toBeVisible({ timeout: 120_000 })
+    await expect(page.locator('.wb-turn-progress').first()).toBeVisible({ timeout: 120_000 })
     await shot(page, 'S5-in-progress.png')
 
     await expectReportLong(page)

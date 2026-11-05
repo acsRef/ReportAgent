@@ -20,6 +20,11 @@ interface Props {
   sql?: string | null
   onRetry: () => void
   retrying?: boolean
+  /**
+   * 只出内容（2026-11-05 修订 A4）：失败也是那**一条**助手消息的结尾，
+   * 不再单独占一张红色卡片。
+   */
+  bare?: boolean
 }
 
 const KIND_TITLE: Record<NonNullable<Props['kind']>, string> = {
@@ -41,10 +46,10 @@ const KIND_TITLE: Record<NonNullable<Props['kind']>, string> = {
  *  detail row; if `sql` is present, a collapsible disclosure lets the
  *  user copy just the SQL.
  */
-export default function ErrorCard({ message, kind, sql, onRetry, retrying }: Props) {
+export default function ErrorCard({ message, kind, sql, onRetry, retrying, bare = false }: Props) {
   const title = kind ? KIND_TITLE[kind] : '执行分析时发生错误'
-  return (
-    <div className="wb-progress-card failed wb-reveal">
+  const content = (
+    <>
       <div className="wb-progress-top">
         <span className="wb-progress-title">{title}</span>
         <span className="wb-progress-pct">FAILED</span>
@@ -61,6 +66,10 @@ export default function ErrorCard({ message, kind, sql, onRetry, retrying }: Pro
           重试当前任务
         </button>
       </div>
-    </div>
+    </>
   )
+
+  if (bare) return <div className="wb-turn-body wb-turn-error">{content}</div>
+
+  return <div className="wb-progress-card failed wb-reveal">{content}</div>
 }

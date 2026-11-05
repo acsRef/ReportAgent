@@ -1,48 +1,33 @@
 /**
- * 历史轮次切分与版本归属（plan 2026-11-04-history-turn-pairing）。
+ * 轮次切分与版本归属（plan 2026-11-04-history-turn-pairing，2026-11-05 修订 A 收敛）。
  *
- * 背景：此前 `WorkbenchPage` 里这段逻辑内联在 `useMemo` 中，有两个坑——
- *   ① 当轮判定只靠 `lastQuestion` 的字符串相等。会话从左侧列表点回来时
- *      `lastQuestion` 会有一小段是 `null`，那一轮就被当成「历史轮次」渲染，
- *      于是出现一条没有报告的边框小条压在当轮助手消息上方（用户截图即此）。
- *   ② 版本与轮次按下标硬配对（vN ↔ 第 N 轮）。只要中间有一轮没产出报告
- *      （改了需求但没确认），后面所有轮次整体错位。
+ * 数据源是对话账本 `ChatMessage[]`（stores/chatTranscript）——**唯一**来源：
+ * 一个 user 消息开一轮，其后的 assistant 消息并入该轮（答 + 过程 + 版本）。
+ * 当轮与历史切分也只按账本判定（`currentTurnKey`），不再有 `lastQuestion`
+ * 这种「页面自己记一句」的第二份状态。
  *
- * 这里把两件事都收成纯函数，便于穷举边界；组件只负责渲染。
+ * 版本归属按时间算而不是按下标：中间有一轮没产出报告时（改了需求但没确认），
+ * 按下标硬配对会让后面所有轮次整体错位。
  */
-import type { ConversationMessage, ReportVersion } from '../../types/analysis'
-import type { TimelineTurn } from './ConversationTimeline'
+import type { ChatMessage } from '../../stores/chatTranscript'
+import type { ReportVersion } from '../../types/analysis'
+import type { TimelineEntry } from '../../types/report'
 
-/** 一轮的提问（时间戳已归一成毫秒，解析失败为 null）。 */
-interface TurnQuestion {
+export interface ChatTurn {
+  /** 稳定 key（来自该轮 user 消息的本地 id；合并历史时不变）。 */
   key: string
-  text: string
+  question: string
+  /** 该轮助手回复的文本（一轮 = 问 + 答，缺了它历史就断）。 */
+  answer: string | null
+  /** 该轮的过程步骤（思考摘要 / 执行状态），与答同属一条消息。 */
+  trace: TimelineEntry[]
+  traceNote: string | null
+  /** 该轮助手消息的生命周期状态（本轮还在流 = streaming）。 */
+  status: ChatMessage['status']
+  /** 该轮产出的报告版本（chitchat / 失败轮可能没有）。 */
+  version: ReportVersion | null
+  /** 提问时间（毫秒；解析失败为 null）。 */
   at: number | null
-}
-
-/**
- * 当前轮的问题文本。
- *
- * - `lastQuestion` 有值：它就是用户刚发的那句（发送时立刻写入，最权威）；
- * - 为空且不在 `idle`：**退回最后一个用户提问**——会话快照恢复/切回会话时
- *   `lastQuestion` 还没回填，但屏幕上要展示的正是那个提问；不兜底的话这一轮
- *   会以「无版本历史轮次」出现在时间线里，并留下一条空的「未生成报告」。
- */
-export function liveQuestionOf(
-  messages: ConversationMessage[],
-  lastQuestion: string | null,
-  phase: string,
-): string | null {
-  const explicit = (lastQuestion ?? '').trim()
-  if (explicit) return explicit
-  if (phase === 'idle') return null
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    if (msg.role !== 'user') continue
-    const text = (msg.content ?? '').trim()
-    if (text) return text
-  }
-  return null
 }
 
 /** 解析后端 `isoformat()`（可能不带时区）——两侧同源，比较才可靠。 */
@@ -52,37 +37,95 @@ function parseAt(iso: string | undefined | null): number | null {
   return Number.isFinite(at) ? at : null
 }
 
-function toQuestions(messages: ConversationMessage[]): TurnQuestion[] {
-  const questions: TurnQuestion[] = []
-  for (const msg of messages) {
-    if (msg.role !== 'user') continue
-    const text = (msg.content ?? '').trim()
-    if (!text) continue
-    questions.push({ key: `turn-${msg.id}`, text, at: parseAt(msg.created_at) })
+function normalize(text: string | null | undefined): string {
+  return (text ?? '').trim()
+}
+
+/** 同一轮里多条 assistant 消息（目前只会有一条）合并成「一个答」。 */
+function mergeTrace(into: TimelineEntry[], extra: TimelineEntry[]): TimelineEntry[] {
+  const merged = [...into]
+  for (const entry of extra) {
+    const index = merged.findIndex((item) => item.nodeName === entry.nodeName)
+    if (index >= 0) merged[index] = entry
+    else merged.push(entry)
   }
-  return questions
+  return merged
 }
 
 /**
- * 版本归属：每个版本归给「最后一个创建时间早于它」的提问。
+ * 对话账本 → 轮次列表（含当轮）。
  *
- * 时间不可用（缺字段/格式意外）时退回下标配对（vN ↔ 第 N 轮），保证老数据也能显示。
- * 同一个版本号只会落在唯一一轮；两版同轮时保留较新的那版。
+ * 孤立的 assistant 消息（前面没有 user）不进轮次：服务端会话总是以提问开始，
+ * 这种行只可能是指针残留。
  */
-function pairVersions(
-  questions: TurnQuestion[],
+export function buildChatTurns(
+  messages: ChatMessage[],
   versions: ReportVersion[],
-): Map<string, ReportVersion> {
-  const byKey = new Map<string, ReportVersion>()
-  if (questions.length === 0 || versions.length === 0) return byKey
+): ChatTurn[] {
+  const turns: ChatTurn[] = []
+
+  for (const message of messages) {
+    const text = normalize(message.content)
+    if (message.role === 'user') {
+      if (!text) continue
+      turns.push({
+        key: `turn-${message.id}`,
+        question: text,
+        answer: null,
+        trace: [],
+        traceNote: null,
+        status: message.status,
+        version: null,
+        at: parseAt(message.createdAt),
+      })
+      continue
+    }
+
+    const turn = turns[turns.length - 1]
+    if (!turn) continue
+    if (text) turn.answer = turn.answer ? `${turn.answer}\n\n${text}` : text
+    turn.trace = mergeTrace(turn.trace, message.trace)
+    if (message.traceNote) turn.traceNote = message.traceNote
+    turn.status = message.status
+  }
+
+  applyVersions(turns, messages, versions)
+  return turns
+}
+
+/**
+ * 版本归属：先按时间（每个版本归给「最后一个创建时间早于它」的提问），
+ * 时间不可用时退回下标配对（vN ↔ 第 N 轮），保证老数据也能显示。
+ * 该轮助手消息自己带了版本号（SSE `report` 帧）时以它为准——实时轮次
+ * 不需要等时间对齐，也免受客户端时钟偏差影响。
+ */
+function applyVersions(
+  turns: ChatTurn[],
+  messages: ChatMessage[],
+  versions: ReportVersion[],
+): void {
+  const attached = new Map<string, number>()
+  let current = ''
+  for (const message of messages) {
+    if (message.role === 'user') current = `turn-${message.id}`
+    if (message.role === 'assistant' && message.version !== null && current) {
+      attached.set(current, message.version)
+    }
+  }
+
+  if (turns.length === 0 || versions.length === 0) return
+
+  const byVersion = new Map<number, ReportVersion>()
+  for (const version of versions) byVersion.set(version.version, version)
 
   const ordered = [...versions].sort((a, b) => a.version - b.version)
+  const paired = new Map<string, ReportVersion>()
   for (const version of ordered) {
     const versionAt = parseAt(version.created_at)
     let index = -1
     if (versionAt !== null) {
-      for (let i = questions.length - 1; i >= 0; i--) {
-        const at = questions[i].at
+      for (let i = turns.length - 1; i >= 0; i--) {
+        const at = turns[i].at
         if (at !== null && at <= versionAt) {
           index = i
           break
@@ -90,77 +133,34 @@ function pairVersions(
       }
     }
     if (index < 0) {
-      index = Math.min(version.version - 1, questions.length - 1)
+      index = Math.min(version.version - 1, turns.length - 1)
     }
     if (index < 0) continue
-    byKey.set(questions[index].key, version)
+    paired.set(turns[index].key, version)
   }
-  return byKey
+
+  for (const turn of turns) {
+    const own = attached.get(turn.key)
+    turn.version = own != null ? byVersion.get(own) ?? null : paired.get(turn.key) ?? null
+  }
 }
 
 /**
- * 历史轮次 = 除当轮以外的所有提问，按出现顺序配对「助手回复」与「报告版本」。
+ * 当轮 = 最后一个用户提问所在的那一轮（`idle` 时没有当轮，整段都是历史）。
  *
- * 2026-11-05（plan conversation-transcript-messages）：一轮对话 = 问 + 答。
- * 之前只配对版本，历史里没有助手说的话 → 用户发下一句时，上一轮 Agent 的回复
- * 看起来凭空消失。现在把该轮之后的第一条 assistant 文本一起配进去。
- *
- * 版本归属在**全量**提问上算（含当轮），否则当轮拥有的版本会被错误地算到上一轮头上；
- * 算完再把尾部当轮剔除。只有尾部提问会被当成当轮：用户重复问了同一句话时，
- * 更早的那一轮仍要留在历史里（否则上一轮报告凭空消失）。
+ * 用相位而不是「消息是否还在流」判定：确认/追问阶段助手消息已经落库（status=done），
+ * 但这一轮仍然是「正在交谈的那一轮」，提问条/确认条必须留在它里面。
  */
-export function buildHistoryTurns(
-  messages: ConversationMessage[],
-  versions: ReportVersion[],
-  liveQuestion: string | null,
-): TimelineTurn[] {
-  const questions = toQuestions(messages)
-  if (questions.length === 0) return []
-
-  const assistantByKey = pairAssistantText(messages, questions)
-  const byKey = pairVersions(questions, versions)
-  const turns: TimelineTurn[] = questions.map((question) => ({
-    key: question.key,
-    question: question.text,
-    version: byKey.get(question.key) ?? null,
-    answer: assistantByKey.get(question.key) ?? null,
-  }))
-
-  const live = (liveQuestion ?? '').trim()
-  if (live && turns[turns.length - 1].question === live) turns.pop()
-  return turns
-}
-
-/** assistant 文本按时间归给「它之前最近的那个提问」。
- *
- * 优先取 `assistant_text`（需求轮那句「我理解为…」）；没有才用最后一条
- * （例如只有 `报告 vN 已生成：…`）。报告本身由版本条承载，不重复进气泡。
- */
-function pairAssistantText(
-  messages: ConversationMessage[],
-  questions: TurnQuestion[],
-): Map<string, string> {
-  const byKey = new Map<string, string>()
-  const primary = new Set<string>()
-  let current = -1
-  for (const message of messages) {
-    if (message.role === 'user') {
-      const text = (message.content ?? '').trim()
-      if (!text) continue
-      current = questions.findIndex((q) => q.key === `turn-${message.id}`)
-      continue
-    }
-    if (message.role !== 'assistant' || current < 0) continue
-    const text = (message.content ?? '').trim()
-    if (!text) continue
-    const key = questions[current].key
-    const isPrimary = (message.message_type ?? '') === 'assistant_text'
-    if (isPrimary) {
-      byKey.set(key, text)
-      primary.add(key)
-    } else if (!primary.has(key)) {
-      byKey.set(key, text)
-    }
+export function currentTurnKey(
+  messages: ChatMessage[],
+  phase: string,
+): string | null {
+  if (phase === 'idle') return null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.role !== 'user') continue
+    if (!normalize(message.content)) continue
+    return `turn-${message.id}`
   }
-  return byKey
+  return null
 }

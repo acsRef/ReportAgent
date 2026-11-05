@@ -6,7 +6,8 @@ import TopBar from '../components/atelier/TopBar'
 import Dropdown from '../components/atelier/Dropdown'
 import { useToast } from '../components/atelier/useToast'
 import Composer from '../components/workbench/Composer'
-import { UserBubble, AgentBubble } from '../components/workbench/MessageBubbles'
+import AssistantTurn from '../components/workbench/AssistantTurn'
+import { UserBubble } from '../components/workbench/MessageBubbles'
 import WorkbenchEmpty from '../components/workbench/WorkbenchEmpty'
 import ParsingCard from '../components/workbench/ParsingCard'
 import ProgressCard from '../components/workbench/ProgressCard'
@@ -35,18 +36,17 @@ import {
   refreshVersionsAndSelectLatest,
 } from '../stores/sessionEvents'
 import { useAnalysisStore } from '../stores/analysisStore'
+import { liveTrace, liveTraceNote } from '../stores/chatTranscript'
 import { canRetryFailedAction, isBusyPhase, isSettledPhase } from '../stores/analysisReducer'
 import { useAuthStore } from '../stores/authStore'
 import type { TimelineEntry } from '../types/report'
 import type { RequirementCard as RC } from '../types/requirement'
-import RequirementCardView from '../components/workbench/RequirementCardView'
 import QuestionBar from '../components/workbench/QuestionBar'
 import ConfirmBar from '../components/workbench/ConfirmBar'
 import { pickNextQuestion, ASSUMPTION_KEY_PREFIX, requirementUiMode } from '../components/workbench/slotQuestion'
 import ReportPaper from '../components/workbench/ReportPaper'
 import ConversationTimeline from '../components/workbench/ConversationTimeline'
-import type { TimelineTurn } from '../components/workbench/ConversationTimeline'
-import { buildHistoryTurns, liveQuestionOf } from '../components/workbench/historyTurns'
+import { buildChatTurns, currentTurnKey } from '../components/workbench/historyTurns'
 import '../styles/global.css'
 import '../styles/workbench.css'
 
@@ -106,9 +106,10 @@ export default function WorkbenchPage() {
   const reportVersions = useAnalysisStore((s) => s.reportVersions)
   const selectedReportVersion = useAnalysisStore((s) => s.selectedReportVersion)
   const messages = useAnalysisStore((s) => s.messages)
-  // 2026-11-04：执行过程（trace 步骤 + 异常说明）
-  const timeline = useAnalysisStore((s) => s.timeline)
-  const timelineNote = useAnalysisStore((s) => s.timelineNote)
+  // 2026-11-04：执行过程（trace 步骤 + 异常说明）——2026-11-05 修订 A：挂在
+  // 最后一条助手消息上（过程属于那条回复），不再是 store 里的全局 timeline。
+  const timeline = useMemo(() => liveTrace(messages), [messages])
+  const timelineNote = useMemo(() => liveTraceNote(messages), [messages])
   const auth = useAuthStore()
   const toast = useToast()
   const [sessionsLoading, setSessionsLoading] = useState(false)
@@ -120,8 +121,6 @@ export default function WorkbenchPage() {
   // 当前轮开始时的版本号：当前轮的报告只显示「这次新产生的版本」，
   // 否则新提问下面会吊着上一轮的旧报告（2026-11-02 对话时间线）。
   const [turnBaseVersion, setTurnBaseVersion] = useState<number | null>(null)
-  // 补充轮：告诉用户「卡片的哪些字段被改了」，避免看起来像凭空多出一张新卡。
-  const [changeNote, setChangeNote] = useState<string | null>(null)
   /**
    * 2026-11-05（用户：「接着上一份报告改，发出去什么都没发生」→ 后来又说
    * 「你在这里生成卡片、生成这种东西干什么」）：**不自动确认、不自动跑 SQL**，
@@ -130,29 +129,23 @@ export default function WorkbenchPage() {
   const autoConfirmRef = useRef(false)
   // 选项提交（PATCH）进行中——防止连点造成两次 PATCH。
   const [answering, setAnswering] = useState(false)
-  const prevCardRef = useRef<RC | null>(null)
   const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
 
-  // 需求已确认并开始执行（或已出报告）→ 卡片只读。改需求走下方输入框（adjust）。
-  // 2026-11-04（plan chat-like-conversation-flow）：`report_ready` 不再算锁定——
-  // 它是**上一轮**的终态；重发追问到达的新草稿是待确认的可编辑卡，
-  // 若沿用上一轮的 report_ready 就会渲染成只读大卡（只剩一句「已锁定」，
-  // 连「确认并生成报告」都没有）。锁定只认卡片自身 `status === 'locked'` + 执行中相位。
+  // 需求已确认并开始执行（或已出报告）→ 需求区不再出编辑动作。
+  // 2026-11-05 修订 A：执行中（generating/adjusting）不再渲染只读整卡——
+  // 那一轮的信息就是助手消息里的进度，卡片只是噪音。
   const cardLocked =
     requirement?.status === 'locked' || phase === 'generating' || phase === 'adjusting'
   // ── 需求澄清的呈现时机（2026-11-04，plan chat-like-conversation-flow）────────
   // 判定集中在 `requirementUiMode`：只有 awaiting_* 相位才出提问条/确认条；
   // parsing 时上一轮的条必须消失（否则误点 → 409 SESSION_BUSY），report_ready 也不出条。
-  const requirementMode = requirementUiMode(phase, requirement, cardLocked)
-  const questionField = requirementMode === 'question' ? pickNextQuestion(requirement) : null
-  const showConfirmBar = requirementMode === 'confirm'
-  // 有没有「过程」可展示：没有 trace 也不渲染那条消息（否则是个空气泡）。
+  const requirementMode = requirementUiMode(phase, requirement)
+  const questionField =
+    requirementMode === 'question' && !cardLocked ? pickNextQuestion(requirement) : null
+  const showConfirmBar = requirementMode === 'confirm' && !cardLocked
+  // 有没有「过程」可展示：没有 trace 也不渲染那一行（否则是个空气泡）。
   const hasTrace = timeline.length > 0 || Boolean(timelineNote)
-  // 正在等用户答（提问或确认）——这个阶段的状态文案由那条助手消息表达，不再重复
-  const awaitingCard = phase === 'awaiting_confirm' || phase === 'awaiting_missing'
-  // 整卡只在两种情况下出现：执行中（只读）或用户主动「展开详情」
-  const showCard = requirementMode === 'card'
 
   // 2026-11-05（用户：「你在这里生成卡片、生成这种东西干什么」）：
   // **不自动确认、不自动跑 SQL**。上一版为了修「无法继续调整」做成了自动确认，
@@ -165,34 +158,6 @@ export default function WorkbenchPage() {
     const node = document.querySelector('[aria-label="需求确认"]')
     node?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [phase, requirement])
-
-  // ── 卡片更新提示（2026-11-03）────────────────────────────────────────────
-  // 用户补充需求时，卡片内容会被重算——不解释的话看起来像「又冒出一张新卡」。
-  // 这里对比上一张卡，把被改动的字段标出来（如「数据范围 → 华东」）。
-  useEffect(() => {
-    const prev = prevCardRef.current
-    prevCardRef.current = requirement
-    if (!requirement) { setChangeNote(null); return }
-    if (!prev) { setChangeNote(null); return }
-    const fmt = (value: unknown) => {
-      if (Array.isArray(value)) return value.length ? value.join('、') : '未限定'
-      return value ? String(value) : '未指定'
-    }
-    const diffs: string[] = []
-    if (JSON.stringify(prev.scope) !== JSON.stringify(requirement.scope)) {
-      diffs.push(`数据范围 → ${fmt(requirement.scope)}`)
-    }
-    if (prev.time_range !== requirement.time_range) {
-      diffs.push(`时间 → ${fmt(requirement.time_range)}`)
-    }
-    if (JSON.stringify(prev.target_metrics) !== JSON.stringify(requirement.target_metrics)) {
-      diffs.push(`指标 → ${fmt(requirement.target_metrics)}`)
-    }
-    if (JSON.stringify(prev.dimensions) !== JSON.stringify(requirement.dimensions)) {
-      diffs.push(`维度 → ${fmt(requirement.dimensions)}`)
-    }
-    setChangeNote(diffs.length ? diffs.join('；') : null)
-  }, [requirement])
 
   // ── 历史轮次时间线（2026-11-02）────────────────────────────────────────────  // 一轮结束后刷新 messages，让刚结束的这轮进入历史；用 (session, 版本数, phase)
   // 做幂等键，避免同一轮重复请求。
@@ -254,18 +219,20 @@ export default function WorkbenchPage() {
     } as any))
   }
   const [focusMode, setFocusMode] = useState(false)
-  const [lastQuestion, setLastQuestion] = useState<string | null>(null)
 
-  // 历史 = 除当轮以外的所有轮次。当轮问题用 `liveQuestionOf` 兜底（会话恢复窗口期
-  // `lastQuestion` 还是 null），当轮气泡与历史切分共用同一个值——否则那一轮会以
-  // 「无版本历史轮次」出现在时间线里（用户看到的「未生成报告」小条）。
-  const liveQuestion = useMemo(
-    () => liveQuestionOf(messages, lastQuestion, phase),
-    [messages, lastQuestion, phase],
+  // ── 对话账本 → 轮次（唯一数据源，2026-11-05 修订 A）────────────────────────
+  // 历史与当轮都从 `messages` 派生：当轮 = 最后一个提问那一轮（phase=idle 时没有当轮）。
+  // 不再有 `lastQuestion` 这种「页面自己记一句」的第二份状态——发送即 append，
+  // 提问就在账本里，所以发下一句时上一轮不会被当成新的历史轮重新配对。
+  const turns = useMemo(() => buildChatTurns(messages, reportVersions), [messages, reportVersions])
+  const liveKey = useMemo(() => currentTurnKey(messages, phase), [messages, phase])
+  const historyTurns = useMemo(
+    () => (liveKey ? turns.filter((turn) => turn.key !== liveKey) : turns),
+    [turns, liveKey],
   )
-  const historyTurns: TimelineTurn[] = useMemo(
-    () => buildHistoryTurns(messages, reportVersions, liveQuestion),
-    [messages, reportVersions, liveQuestion],
+  const currentTurn = useMemo(
+    () => (liveKey ? turns.find((turn) => turn.key === liveKey) ?? null : null),
+    [turns, liveKey],
   )
 
   const composerRef = useRef<HTMLInputElement>(null)
@@ -301,15 +268,6 @@ export default function WorkbenchPage() {
   const [stageIndex, setStageIndex] = useState(0)
   // P11：progress 由真实 trace 事件驱动——liveDetail 显示当前步骤文案。
   const [liveDetail, setLiveDetail] = useState<string | undefined>(undefined)
-  const [casualReply, setCasualReply] = useState<string | null>(null)
-  // 这一阶段有没有一条「状态文案」要显示（parsing 由解析卡承载，awaiting_* 由提问/确认条承载）。
-  // 2026-11-05：它决定「思考过程」是并进这条气泡，还是自己单独成一条（避免一轮两个助手气泡）。
-  const showsAgentCopy =
-    phase !== 'idle' &&
-    !casualReply &&
-    Boolean(agentCopy(phase)) &&
-    phase !== 'parsing' &&
-    !awaitingCard
   // P11 Review-1 P1-2：confirm/retry 与 adjust(/chat openChat) 三条路径共用 armStream/abortStream，
   // 停止按钮能真断所有活跃 SSE；先前只有 confirm/retry 写入 controller，
   // adjust 走 openChat 的 controller 没保存，「停止」对 adjust 无效。
@@ -411,8 +369,6 @@ export default function WorkbenchPage() {
     abortStream()
     dispatch({ type: 'analysis/reset' })
     setComposer('')
-    setLastQuestion(null)
-    setCasualReply(null)
     setLiveDetail(undefined)
     setTurnBaseVersion(null)
     // P11 Review-1 P2：「新分析」必须显式清 execPolling——同 P1 残留，
@@ -425,24 +381,33 @@ export default function WorkbenchPage() {
     if (!text || sending) return
     setSending(true)
     setComposer('')
-    setLastQuestion(text)
-    setCasualReply(null)
     setStageIndex(1)
     setLiveDetail(undefined)
     setTurnBaseVersion(selectedReportVersion)
     // 2026-11-05：**不自动确认**（用户：「你在这里生成卡片、生成这种东西干什么」）。
     // 这里只记「本轮是接着报告改的」，用于把解析出来的确认条滚进视野。
     autoConfirmRef.current = phase === 'report_ready'
-    // 新一轮开始：清掉上一轮的执行过程（否则面板会把两轮步骤混在一起）
-    dispatch({ type: 'timeline/cleared' })
     const sid = activeSessionId ?? crypto.randomUUID()
     if (!activeSessionId) {
+      // 新会话：先重置（会清空 messages），再追加本轮——顺序不能反。
       dispatch({ type: 'session/selected', sessionId: sid })
     }
+    // 2026-11-05（plan conversation-transcript-messages 修订 A2）：**发送即 append**
+    // ——用户那句 + 空的助手占位一次进账本。此后 SSE 只更新最后一条助手消息，
+    // 界面上这一轮从第一秒起就是对话里的一轮，不再等「一轮结束后整体刷新」。
+    dispatch({
+      type: 'chat/turn-appended',
+      turn: {
+        userId: `u-${crypto.randomUUID()}`,
+        assistantId: `a-${crypto.randomUUID()}`,
+        text,
+        createdAt: new Date().toISOString(),
+      },
+    })
     const mode = chatModeForPhase(phase)
-    // 2026-11-05：发送即拉一次会话消息——后端在 /chat 起手就把这句话落库了，
-    // 早拉一次能保证「上一句」立刻进入历史（见下方 requirement 帧处的说明）。
-    void refreshMessages(sid)
+    // 2026-11-05（修订 A）：**不再**在发送瞬间拉会话消息。此前那句「早拉一次保证上一句
+    // 进入历史」在 append-only 账本里是多余的（本地已经追加了），而且新会话的服务端行
+    // 还没创建 → 每次都打一个 404。历史由 requirement / 终态两次刷新按 id 合并回来。
     // P11 Review-1 P1-2：openChat 返回 AbortController——必须 armStream 注册到
     // 单例，否则 adjust 模式下「停止」按钮实际无效（SSE 继续收事件）。
     const controller = openChat(
@@ -462,14 +427,11 @@ export default function WorkbenchPage() {
           msgApi: toast,
           sessionId: sid,
           setSending,
-          setCasualReply,
           onTrace: handleProgress,
         })
         // 2026-11-05（用户：「我说了啥都记录下来了，为什么不显示」）：
-        // 历史气泡来自 `messages`，而它此前**只在 report_ready / error 时刷新**。
-        // 于是「第一轮还在等确认时发第二句」这种最常见的追问里，第一句在界面上消失
-        // （库里明明有）。这里在需求轮落地（requirement 帧）和终态（report/error/done）
-        // 各拉一次会话消息，保证历史永远和库里一致；尾部当前提问会被 historyTurns 自动剔除。
+        // 需求轮落地（requirement 帧）和终态（report/error/done）各拉一次会话消息，
+        // 把服务端 id 与 assistant_text 认领回本地那条消息（合并去重、不覆盖）。
         if (
           evt.type === 'requirement' ||
           evt.type === 'report' ||
@@ -501,6 +463,7 @@ export default function WorkbenchPage() {
         })
         // 执行过程面板：把进行中的步骤标成「中断」，并给出说明（不是静默转圈）
         dispatch({ type: 'timeline/closed', reason: 'interrupted' })
+        dispatch({ type: 'chat/status', status: 'error' })
         setExecPolling(true)
       },
     )
@@ -518,20 +481,15 @@ export default function WorkbenchPage() {
     // 事件会继续写进新会话的界面（串台）。后台任务照常跑完落库，切回来由快照/轮询补齐。
     abortStream()
     dispatch({ type: 'session/selected', sessionId })
-    setCasualReply(null)
     setTurnBaseVersion(null)
     setLiveDetail(undefined)
-    // live 气泡应显示「最后一次提问」。此前取 first_message（会话第一条），
-    // 重进会话时会显示错的问题——2026-11-02 修正。
-    setLastQuestion(
-      (sessions.find((s) => s.session_id === sessionId) as { last_message?: string } | undefined)
-        ?.last_message || null,
-    )
     // P11 F6：恢复快照（requirement/版本/phase）；busy 会话（generating/adjusting）
     // 恢复后台轮询——停止后重进会话仍能收到「后台跑完」通知。
     // P11 Review-1 P2：始终 setExecPolling(busy)——非 busy 时同步 false，
     // 否则旧会话残留的 execPolling=true 会让 useExecutionPoll 误轮询新会话
     // 并在 phase=report_ready/error 时错误地触发「报告已在后台生成」通知。
+    // 2026-11-05 修订 A：提问/历史全部来自快照里的对话账本（合并进 store），
+    // 不再需要用 `last_message` 猜「当轮是哪句」。
     void loadSessionSnapshot(sessionId, toast).then((busy) => {
       setExecPolling(busy)
       // 2026-11-04：切回来时若该会话仍在后台跑，明确告诉用户在等什么
@@ -542,11 +500,6 @@ export default function WorkbenchPage() {
           note: '（重连）该会话有任务正在后台执行，完成后会自动更新',
         })
       }
-      // 用真实消息里的最后一条提问覆盖 last_message（列表接口的 last_message
-      // 是助手侧文案，不一定是用户问题）。
-      const loaded = useAnalysisStore.getState().messages
-      const lastUser = [...loaded].reverse().find((m) => m.role === 'user' && (m.content ?? '').trim())
-      if (lastUser) setLastQuestion(lastUser.content ?? null)
     })
   }
 
@@ -683,6 +636,62 @@ export default function WorkbenchPage() {
     }
   }
 
+  // ── 当轮助手消息的内容（同一时刻只出一种 body）──────────────────────────────
+  // 2026-11-05（修订 A4）：结构化 body 与状态文案互斥——否则一轮里会同时出现
+  // 「进度条」和「再说一句『正在查询数据』」，正是用户嫌的重复。
+  const executing = phase === 'generating' || phase === 'adjusting'
+  const retryable = canRetryFailedAction({ phase, error })
+  const liveBody = questionField ? (
+    <QuestionBar
+      bare
+      field={questionField}
+      onPick={(key, value) => {
+        void handleAnswerQuestion(key, value)
+      }}
+      onSupplement={() => composerRef.current?.focus()}
+      disabled={answering}
+    />
+  ) : showConfirmBar && requirement ? (
+    <ConfirmBar
+      bare
+      card={requirement}
+      busy={patching || confirming}
+      onConfirm={async () => {
+        await handlePatchAndConfirm(requirement)
+      }}
+      onSupplement={() => composerRef.current?.focus()}
+    />
+  ) : phase === 'parsing' ? (
+    <ParsingCard bare onStop={handleStopParsing} />
+  ) : executing ? (
+    <ProgressCard
+      bare
+      adjusting={phase === 'adjusting'}
+      stageIndex={stageIndex}
+      liveDetail={liveDetail}
+      onStop={handleStop}
+    />
+  ) : phase === 'error' && retryable ? (
+    <ErrorCard
+      bare
+      message={error?.message}
+      kind={error?.kind}
+      sql={error?.sql}
+      onRetry={handleRetry}
+      retrying={confirming}
+    />
+  ) : null
+
+  const liveMarkdown = liveBody
+    ? ''
+    : phase === 'error'
+      ? `${agentCopy('error')}${error?.message ? `\n\n${error.message}` : ''}`
+      : phase === 'report_ready'
+        ? agentCopy('report_ready')
+        : sending
+          ? '正在理解你的问题…'
+          : (currentTurn?.answer ?? '') || agentCopy(phase)
+
   return (
     <div className="workbench-shell">
       <TopBar brand="ReportAgent" subtitle="工作台">
@@ -771,112 +780,38 @@ export default function WorkbenchPage() {
 
           <div className="wb-scroll" ref={scrollRef}>
             <div className="wb-content-inner">
+          {/* 历史轮次：一段连续对话（问 + 答 + 过程 + 版本条），永不整表覆盖 */}
           {activeSessionId && historyTurns.length > 0 && (
             <ConversationTimeline
               sessionId={activeSessionId}
               turns={historyTurns}
-              // 2026-11-05：历史默认**收起**。此前「最近一轮保持展开」是怕上一份报告消失，
-              // 但那会和新版本一起渲染 → 一屏两张报告（用户：「你生成了两份」）。
-              // 现在主区域永远显示当前版本，历史用「查看 vN 报告」按需展开。
+              // 2026-11-05：历史默认**收起**报告（正文与过程仍显示）。此前「最近一轮保持展开」
+              // 是怕上一份报告消失，但那会和新版本一起渲染 → 一屏两张报告。
               expandLatest={false}
             />
           )}
-          {liveQuestion && phase !== 'idle' && <UserBubble text={liveQuestion} />}
 
-          {/* 2026-11-04：对话顺序 = 用户说 → 一条助手消息（思考一行 + 提问/确认）。
-              用户明确要求「应该是一整个的、不要卡片、太占地方」——所以 trace 和
-              提问/确认合并进**同一个气泡**，不再各占一块。 */}
-          {questionField && !cardLocked && (
-            <QuestionBar
-              field={questionField}
-              trace={<TracePanel entries={timeline} note={timelineNote} running={busy || sending} />}
-              onPick={(key, value) => {
-                void handleAnswerQuestion(key, value)
-              }}
-              onSupplement={() => composerRef.current?.focus()}
-              disabled={answering}
-            />
-          )}
-
-          {/* 确认 = 同一条消息形态：一句话 + 参数小结 + 一个按钮。
-              「需求详情」在**这条消息里**就地展开（plan requirement-details-inline）：
-              换页面/另起大卡会让唯一的动作（确认）从视野里消失，还多出一块空白气泡。 */}
-          {/* 确认 = 一句人话（2026-11-05 二次改造，用户：「不要卡片，直接从对话里读意图」）：
-              不再有「已按你的补充更新：维度 → …」的 diff，也不再有参数 chip 和「需求详情」；
-              参数就是这句话本身，按钮只有一个「生成报告」。 */}
-          {showConfirmBar && requirement && (
-            <ConfirmBar
-              card={requirement}
-              busy={patching || confirming}
-              trace={<TracePanel entries={timeline} note={timelineNote} running={busy || confirming} />}
-              onConfirm={async () => {
-                await handlePatchAndConfirm(requirement)
-              }}
-              onSupplement={() => composerRef.current?.focus()}
-            />
-          )}
-
-          {/* 没有提问/确认可出时（解析中 / 生成中 / 已出报告），思考单独成一条消息。
-              没有 trace（首帧还没来）就整块不渲染——否则留下一个空气泡（用户截图里的空白）。
-              2026-11-05：**下面还有 agentCopy 时会并进同一条消息**（见下方 AgentBubble 的 trace 插槽），
-              否则一轮里会冒两个助手气泡（「思考了 6 步」+「报告已生成…」），看着像重复。 */}
-          {!questionField && !showConfirmBar && !cardLocked && hasTrace && !showsAgentCopy && (
-            <div className="wb-message wb-reveal">
-              <div className="wb-msg-avatar agent">A</div>
-              <div className="wb-bubble wb-bit-bubble">
-                <TracePanel entries={timeline} note={timelineNote} running={busy || sending} />
-              </div>
-            </div>
-          )}
-
-          {/* 执行中（只读）才用整卡：这是「这一轮已经在跑了」的状态牌，不是详情视图 */}
-          {requirement && showCard && (
-            <RequirementCardView
-              card={requirement}
-              // 2026-11-02：确认并生成报告后卡片进入只读——需求已锁定，改需求要走
-              // 下方输入框（adjust），不能让用户以为还能就地编辑后重确认。
-              readOnly={cardLocked}
-              changeNote={changeNote}
-              onChange={(next) => dispatch({ type: 'requirement/received', requirement: next })}
-              onConfirm={async () => {
-                await handlePatchAndConfirm(requirement)
-              }}
-              onFocusComposer={() => composerRef.current?.focus()}
-            />
-          )}
-
-          {/* 状态文案只在「没有专属消息」的阶段出现：parsing 已由思考那条消息承载，
-              awaiting_* 由提问/确认消息承载，再说一遍就是重复。
-              2026-11-05：思考过程并进这条气泡（同一个助手消息），不再单独占一条。 */}
-          {casualReply && <AgentBubble markdown={casualReply} />}
-          {showsAgentCopy && (
-            <AgentBubble
-              markdown={agentCopy(phase)}
-              trace={
-                hasTrace ? (
-                  <TracePanel entries={timeline} note={timelineNote} running={busy || sending} />
-                ) : null
-              }
-            />
-          )}
-
-          {phase === 'parsing' && <ParsingCard onStop={handleStopParsing} />}
-          {phase === 'error' && canRetryFailedAction({ phase, error }) && (
-            <ErrorCard
-              message={error?.message}
-              kind={error?.kind}
-              sql={error?.sql}
-              onRetry={handleRetry}
-              retrying={confirming}
-            />
-          )}
-          {(phase === 'generating' || phase === 'adjusting') && (
-            <ProgressCard
-              adjusting={phase === 'adjusting'}
-              stageIndex={stageIndex}
-              liveDetail={liveDetail}
-              onStop={handleStop}
-            />
+          {/* 当轮：用户消息 + **一条**助手消息。2026-11-05（修订 A4）之前，一轮里最多
+              同时有「思考气泡 + 状态气泡 + 进度卡 + 只读大卡」，用户看到的是「生成了一份
+              还是两份」。现在过程、状态、动作、进度、错误全部收进同一个气泡。 */}
+          {currentTurn && (
+            <>
+              <UserBubble text={currentTurn.question} />
+              <AssistantTurn
+                trace={
+                  hasTrace ? (
+                    <TracePanel
+                      entries={timeline}
+                      note={timelineNote}
+                      running={busy || sending || confirming}
+                    />
+                  ) : null
+                }
+                markdown={liveMarkdown}
+              >
+                {liveBody}
+              </AssistantTurn>
+            </>
           )}
 
           {activeSessionId && selectedReportVersion != null &&
@@ -891,7 +826,7 @@ export default function WorkbenchPage() {
             />
           )}
 
-          {!requirement && reportVersions.length === 0 && phase === 'idle' && !casualReply && (
+          {messages.length === 0 && !requirement && reportVersions.length === 0 && phase === 'idle' && (
             <WorkbenchEmpty onPick={(text) => handleSend(text)} />
           )}
             </div>

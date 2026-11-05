@@ -47,14 +47,14 @@ test.describe('12-empty-result — 真实 LLM + 真实 MCP：seed 仅 2024，202
     await wb.startNewSession()
 
     await wb.sendQuery('2025年各区域销售额')
-    await expect(page.locator('.wb-requirement-card')).toBeVisible({ timeout: 90_000 })
+    await wb.expectRequirementCard()
     await fillMissingIfAny(page)
 
     await wb.confirmRequirement()
 
     await wb.expectReport()
     // 没有 error/failed 卡：FULL LLM 不伪成功
-    await expect(page.locator('.wb-progress-card.failed')).toHaveCount(0)
+    await expect(page.locator('.wb-turn-error')).toHaveCount(0)
     await expect(page.locator('.wb-report-paper')).toBeVisible()
   })
 })

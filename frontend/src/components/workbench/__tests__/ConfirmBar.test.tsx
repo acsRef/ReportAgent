@@ -50,8 +50,25 @@ describe('ConfirmBar — 确认就是一句话（2026-11-05 二次改造）', ()
     expect(screen.getByText('生成报告')).toBeTruthy()
     // 旧形态的痕迹都不该出现
     expect(screen.queryByText(/已按你的补充更新/)).toBeNull()
-    expect(screen.queryByText('需求详情')).toBeNull()
     expect(document.querySelectorAll('.wb-ask-chip')).toHaveLength(0)
+    // 2026-11-05 修订 A4：「需求详情」是**按需**视图——默认收起，不占主流程
+    expect(document.querySelector('.wb-ask-details')).toBeNull()
+    expect(screen.queryByText('核心指标')).toBeNull()
+  })
+
+  // 用户要求「一条消息就是一条消息」：详情在**这条气泡里**原地展开，按钮不动。
+  it('点「需求详情」就地展开参数，「收起详情」再关掉', () => {
+    const { onConfirm } = renderBar(makeCard())
+
+    fireEvent.click(screen.getByText('需求详情'))
+    expect(document.querySelector('.wb-ask-details')).toBeTruthy()
+    expect(screen.getByText('核心指标')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('收起详情'))
+    expect(document.querySelector('.wb-ask-details')).toBeNull()
+
+    // 展开/收起不触发确认
+    expect(onConfirm).not.toHaveBeenCalled()
   })
 
   it('「生成报告」触发 onConfirm，「补充或修改」触发 onSupplement', () => {

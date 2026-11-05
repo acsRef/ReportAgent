@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import ConversationTimeline from '../ConversationTimeline'
+import type { ChatTurn } from '../historyTurns'
 import type { ReportVersion } from '../../../types/analysis'
 
 // ReportPaper 自己按版本拉数据——这里只验证挂载/收起行为
@@ -23,14 +24,24 @@ function makeVersion(version: number, status: ReportVersion['status'] = 'done'):
   }
 }
 
+/** 一轮历史（2026-11-05 修订 A：ChatTurn = 问 + 答 + 过程 + 版本）。 */
+function turn(
+  key: string,
+  question: string,
+  version: ReportVersion | null,
+  answer: string | null = null,
+): ChatTurn {
+  return { key, question, answer, trace: [], traceNote: null, status: 'done', version, at: null }
+}
+
 describe('ConversationTimeline — 历史轮次不再消失', () => {
   it('按顺序渲染每一轮的问题与版本条', () => {
     render(
       <ConversationTimeline
         sessionId="sid-1"
         turns={[
-          { key: 't1', question: '2024年各区域销售额', version: makeVersion(1) },
-          { key: 't2', question: '增加华东对比', version: makeVersion(2) },
+          turn('t1', '2024年各区域销售额', makeVersion(1)),
+          turn('t2', '增加华东对比', makeVersion(2)),
         ]}
       />,
     )
@@ -46,8 +57,8 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
       <ConversationTimeline
         sessionId="sid-1"
         turns={[
-          { key: 't1', question: 'q1', version: makeVersion(1) },
-          { key: 't2', question: 'q2', version: makeVersion(2) },
+          turn('t1', 'q1', makeVersion(1)),
+          turn('t2', 'q2', makeVersion(2)),
         ]}
       />,
     )
@@ -61,8 +72,8 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
       <ConversationTimeline
         sessionId="sid-1"
         turns={[
-          { key: 't1', question: 'q1', version: makeVersion(1) },
-          { key: 't2', question: 'q2', version: makeVersion(2) },
+          turn('t1', 'q1', makeVersion(1)),
+          turn('t2', 'q2', makeVersion(2)),
         ]}
         expandLatest={false}
       />,
@@ -77,8 +88,8 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
       <ConversationTimeline
         sessionId="sid-1"
         turns={[
-          { key: 't1', question: 'q1', version: makeVersion(1) },
-          { key: 't2', question: 'q2', version: makeVersion(2) },
+          turn('t1', 'q1', makeVersion(1)),
+          turn('t2', 'q2', makeVersion(2)),
         ]}
       />,
     )
@@ -95,8 +106,8 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
       <ConversationTimeline
         sessionId="sid-1"
         turns={[
-          { key: 't1', question: 'q1', version: makeVersion(1) },
-          { key: 't2', question: 'q2', version: makeVersion(2) },
+          turn('t1', 'q1', makeVersion(1)),
+          turn('t2', 'q2', makeVersion(2)),
         ]}
       />,
     )
@@ -112,8 +123,8 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
       <ConversationTimeline
         sessionId="sid-1"
         turns={[
-          { key: 't1', question: '你好', version: null },
-          { key: 't2', question: '查数据', version: makeVersion(2, 'error') },
+          turn('t1', '你好', null),
+          turn('t2', '查数据', makeVersion(2, 'error')),
         ]}
       />,
     )
@@ -121,6 +132,31 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
     expect(screen.queryByText('未生成报告')).toBeNull()
     expect(document.querySelectorAll('.wb-history-report')).toHaveLength(1)
     expect(screen.getByText('执行失败')).toBeTruthy()
+  })
+
+  // 2026-11-05（plan conversation-transcript-messages 修订 A）：一轮 = 问 + 答 + 过程。
+  // 历史轮次此前只有一个问题气泡 + 版本条，助手说过的话在界面上不存在。
+  it('历史轮次渲染助手那句话与过程摘要（不再只有版本条）', () => {
+    render(
+      <ConversationTimeline
+        sessionId="sid-1"
+        turns={[
+          {
+            key: 't1',
+            question: '2024年各区域销售额',
+            answer: '好，我理解为：2024年的销售额。',
+            trace: [{ id: 'x', nodeName: '解析需求', status: 'success', timestamp: 1 }],
+            traceNote: null,
+            status: 'done',
+            version: null,
+            at: null,
+          },
+        ]}
+      />,
+    )
+    expect(screen.getByText('2024年各区域销售额')).toBeTruthy()
+    expect(screen.getByText('好，我理解为：2024年的销售额。')).toBeTruthy()
+    expect(screen.getByText(/思考了 1 步/)).toBeTruthy()
   })
 
   it('没有历史轮次时不渲染任何东西', () => {

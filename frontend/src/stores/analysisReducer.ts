@@ -7,6 +7,22 @@ import type {
 } from '../types/analysis'
 import type { RequirementCard } from '../types/requirement'
 import type { TimelineEntry } from '../types/report'
+import {
+  appendTurn,
+  closeTrace,
+  mergeServerHistory,
+  withAssistantStatus,
+  withAssistantText,
+  withAssistantVersion,
+  withTraceEntry,
+  withTraceNote,
+  type ChatMessage,
+  type ChatStatus,
+  type SentTurn,
+  type TimelineCloseReason,
+} from './chatTranscript'
+
+export type { ChatMessage, ChatStatus, SentTurn, TimelineCloseReason }
 
 export const SESSIONS_PAGE_SIZE = 30
 
@@ -17,15 +33,15 @@ export interface AnalysisState {
   requirement: RequirementCard | null
   reportVersions: ReportVersion[]
   selectedReportVersion: number | null
-  /** 完整对话消息（快照恢复 + 每轮结束后刷新）——历史轮次时间线的数据源。 */
-  messages: ConversationMessage[]
-  /** 「执行过程」步骤（trace 帧，按节点去重）——2026-11-04 起真正接线。 */
-  timeline: TimelineEntry[]
   /**
-   * 过程面板的异常说明（中断/停止/超时/重连/后台完成）。
-   * 与「步骤」分开存：说明是临时提醒，不该混进步骤列表。
+   * 完整对话账本（append-only）——用户消息 + 助手消息（含过程与版本）。
+   *
+   * 2026-11-05（plan conversation-transcript-messages 修订 A）：语义从
+   * 「服务端历史快照」变成「本地对话账本」：发送即追加，SSE 增量更新最后一条，
+   * 服务端历史按 `serverId` 合并（见 `chatTranscript.mergeServerHistory`）。
+   * 历史轮次与当轮都从它派生，不再有第二份「当轮」状态。
    */
-  timelineNote: string | null
+  messages: ChatMessage[]
   error: AnalysisError | null
   // Pagination (Plan B 步骤 2, 2026-08-09) — session 列表分页状态：
   // sessionsOffset = 已加载条数；hasMoreSessions = 服务端是否还有下一页；
@@ -43,26 +59,24 @@ export type AnalysisAction =
   | { type: 'sessions/page-loading'; loading: boolean }
   | { type: 'sessions/received'; sessions: SessionSummary[] }
   | { type: 'requirement/received'; requirement: RequirementCard }
-  | { type: 'messages/received'; messages: ConversationMessage[] }
+  /** 发送：一次原子追加「用户消息 + 空的助手占位（streaming）」。 */
+  | { type: 'chat/turn-appended'; turn: SentTurn }
+  /** 助手这句话的正文（闲聊回复 / 服务端回填的 assistant_text）。 */
+  | { type: 'chat/text'; text: string }
+  /** 生命周期：streaming → done / error。 */
+  | { type: 'chat/status'; status: ChatStatus }
+  /** 该轮产出的报告版本号（挂到最后一条助手消息上）。 */
+  | { type: 'chat/version'; version: number }
+  /** 合并服务端历史（按 id 去重；不整表覆盖）。 */
+  | { type: 'chat/merged'; messages: ConversationMessage[] }
   | { type: 'report/received'; report: ReportVersion }
   | { type: 'report/selected'; version: number }
   | { type: 'timeline/received'; entry: TimelineEntry }
-  | { type: 'timeline/cleared' }
   | { type: 'timeline/note'; note: string | null }
   /** 一轮结束时的收尾：把还挂在「进行中」的步骤按原因定性。 */
   | { type: 'timeline/closed'; reason: TimelineCloseReason }
   | { type: 'analysis/failed'; error: AnalysisError }
   | { type: 'analysis/reset' }
-
-/** 过程收尾原因：done=正常收尾 / stopped=用户停止 / interrupted=断流 / error=后端报错。 */
-export type TimelineCloseReason = 'done' | 'stopped' | 'interrupted' | 'error'
-
-const CLOSE_NOTE: Record<TimelineCloseReason, string | null> = {
-  done: null,
-  stopped: '已停止显示，任务在后台继续执行，完成后会自动更新',
-  interrupted: '连接中断，任务可能在后台继续；恢复后会自动更新',
-  error: '执行在中途失败，已完成的步骤保留在上方',
-}
 
 export const initialAnalysisState: AnalysisState = {
   phase: 'idle',
@@ -72,8 +86,6 @@ export const initialAnalysisState: AnalysisState = {
   reportVersions: [],
   selectedReportVersion: null,
   messages: [],
-  timeline: [],
-  timelineNote: null,
   error: null,
   sessionsOffset: 0,
   hasMoreSessions: true,
@@ -180,8 +192,22 @@ export function analysisReducer(
     case 'sessions/page-loading':
       return { ...state, sessionsPageLoading: action.loading }
 
-    case 'messages/received':
-      return { ...state, messages: action.messages }
+    case 'chat/turn-appended':
+      // 发送即 append：用户那句 + 空的助手占位，一次动作完成（不允许只加一半）。
+      return { ...state, messages: appendTurn(state.messages, action.turn) }
+
+    case 'chat/text':
+      return { ...state, messages: withAssistantText(state.messages, action.text) }
+
+    case 'chat/status':
+      return { ...state, messages: withAssistantStatus(state.messages, action.status) }
+
+    case 'chat/version':
+      return { ...state, messages: withAssistantVersion(state.messages, action.version) }
+
+    case 'chat/merged':
+      // 按 serverId 去重合并；本地还在流的占位一条都不会被删。
+      return { ...state, messages: mergeServerHistory(state.messages, action.messages) }
 
     case 'requirement/received':
       if (
@@ -218,44 +244,15 @@ export function analysisReducer(
       }
       return { ...state, selectedReportVersion: action.version }
 
-    case 'timeline/received': {
-      // 按 **nodeName** 去重（2026-11-04）：progress 帧是「同一节点 running → success」，
-      // 每帧 id 都不同，按 id 去重会让步骤列表越叠越长。
-      const existingIndex = state.timeline.findIndex(
-        (entry) => entry.nodeName === action.entry.nodeName,
-      )
-      const timeline = [...state.timeline]
-      if (existingIndex >= 0) timeline[existingIndex] = action.entry
-      else timeline.push(action.entry)
-      return { ...state, timeline, timelineNote: null }
-    }
-
-    case 'timeline/cleared':
-      return { ...state, timeline: [], timelineNote: null }
+    case 'timeline/received':
+      // 过程步骤写进**最后一条助手消息**（「过程融进同一条回复」）。
+      return { ...state, messages: withTraceEntry(state.messages, action.entry) }
 
     case 'timeline/note':
-      return { ...state, timelineNote: action.note }
+      return { ...state, messages: withTraceNote(state.messages, action.note) }
 
-    case 'timeline/closed': {
-      // 还挂在「进行中」的步骤按原因定性：
-      //   done → success（这一轮正常跑完，最后一步只是没来得及发 success 帧）
-      //   stopped → pending（用户停止观看，后台还在跑）
-      //   interrupted / error → error（真的断在这里）
-      const status: TimelineEntry['status'] =
-        action.reason === 'done'
-          ? 'success'
-          : action.reason === 'stopped'
-            ? 'pending'
-            : 'error'
-      const timeline = state.timeline.map((entry) =>
-        entry.status === 'running' ? { ...entry, status } : entry,
-      )
-      const note =
-        action.reason === 'done' && timeline.every((e) => e.status !== 'running')
-          ? null
-          : CLOSE_NOTE[action.reason]
-      return { ...state, timeline, timelineNote: note }
-    }
+    case 'timeline/closed':
+      return { ...state, messages: closeTrace(state.messages, action.reason) }
 
     case 'analysis/failed':
       return { ...state, phase: 'error', error: action.error }

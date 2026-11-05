@@ -14,6 +14,7 @@ import type {
 } from '../../types/analysis'
 import type { RequirementCard } from '../../types/requirement'
 import type { TimelineEntry } from '../../types/report'
+import { liveTrace, liveTraceNote } from '../chatTranscript'
 
 function makeRequirement(version = 1, status: 'missing' | 'complete' | 'locked' = 'complete'): RequirementCard {
   return {
@@ -168,21 +169,38 @@ it('sessions/page-received replaces sessions and sets offset/hasMore', () => {
     expect(next.sessionsPageLoading).toBe(true)
   })
 
-  it('messages/received 存下完整对话，供历史时间线使用', () => {
-    const messages = [
-      { id: 1, role: 'user' as const, message_type: 'text', content: '2024年各区域销售额', created_at: '2026-11-02T12:00:00Z' },
-      { id: 2, role: 'assistant' as const, message_type: 'report_version', content: null, created_at: '2026-11-02T12:01:00Z' },
-    ]
-    const next = analysisReducer(initialAnalysisState, { type: 'messages/received', messages })
-    expect(next.messages).toHaveLength(2)
-    expect(next.messages[0].content).toBe('2024年各区域销售额')
+  it('chat/merged 把服务端历史合并进对话账本（按 id 去重）', () => {
+    const serverRow = (id: number, role: 'user' | 'assistant', content: string) => ({
+      id,
+      role,
+      message_type: role === 'user' ? 'text' : 'assistant_text',
+      content,
+      created_at: '2026-11-02T12:00:00Z',
+    })
+    let state = analysisReducer(initialAnalysisState, {
+      type: 'chat/merged',
+      messages: [serverRow(1, 'user', '2024年各区域销售额'), serverRow(2, 'assistant', '好，我理解为：销售额。')],
+    })
+    expect(state.messages).toHaveLength(2)
+    expect(state.messages[0].content).toBe('2024年各区域销售额')
+    expect(state.messages[0].serverId).toBe(1)
+
+    // 再合并同一批 → 不重复追加（id 去重）
+    state = analysisReducer(state, {
+      type: 'chat/merged',
+      messages: [serverRow(1, 'user', '2024年各区域销售额'), serverRow(2, 'assistant', '好，我理解为：销售额。')],
+    })
+    expect(state.messages).toHaveLength(2)
   })
 
-  it('session/selected 与 analysis/reset 都清空历史消息', () => {
+  it('session/selected 与 analysis/reset 都清空对话账本', () => {
     const messages = [
       { id: 1, role: 'user' as const, message_type: 'text', content: 'q', created_at: 'now' },
     ]
-    const withMessages: AnalysisState = { ...initialAnalysisState, messages }
+    let withMessages: AnalysisState = analysisReducer(initialAnalysisState, {
+      type: 'chat/merged',
+      messages,
+    })
     expect(analysisReducer(withMessages, { type: 'session/selected', sessionId: 's-2' }).messages).toEqual([])
     expect(analysisReducer(withMessages, { type: 'analysis/reset' }).messages).toEqual([])
   })
@@ -260,32 +278,69 @@ describe('canRetryFailedAction', () => {
   })
 })
 
-// ── 执行过程（trace）状态（2026-11-04，plan trace-visible-reasoning）─────────
-describe('timeline/received — 执行过程步骤', () => {
+// ── 对话账本与执行过程（2026-11-05，plan conversation-transcript-messages 修订 A）──
+// 过程步骤不再是全局 `timeline`：它挂在**最后一条助手消息**上（过程融进同一条回复）。
+describe('chat/turn-appended — 发送即追加', () => {
+  const sent = (): AnalysisState =>
+    analysisReducer(initialAnalysisState, {
+      type: 'chat/turn-appended',
+      turn: {
+        userId: 'u1',
+        assistantId: 'a1',
+        text: '2024年华东销售趋势',
+        createdAt: '2026-11-05T12:00:00Z',
+      },
+    })
+
+  it('一次动作追加「用户消息 + 空的助手占位（streaming）」', () => {
+    const state = sent()
+    expect(state.messages.map((m) => [m.role, m.status, m.content])).toEqual([
+      ['user', 'done', '2024年华东销售趋势'],
+      ['assistant', 'streaming', ''],
+    ])
+  })
+
+  it('chat/text + chat/status 只改最后一条助手消息', () => {
+    let state = sent()
+    state = analysisReducer(state, { type: 'chat/text', text: '好，我理解为：2024年华东的销售额。' })
+    state = analysisReducer(state, { type: 'chat/status', status: 'done' })
+    expect(state.messages[0].content).toBe('2024年华东销售趋势')
+    expect(state.messages[1].content).toBe('好，我理解为：2024年华东的销售额。')
+    expect(state.messages[1].status).toBe('done')
+  })
+
+  it('chat/version 把报告版本挂到这一轮的助手消息上', () => {
+    let state = sent()
+    state = analysisReducer(state, { type: 'chat/version', version: 3 })
+    expect(state.messages[1].version).toBe(3)
+  })
+})
+
+describe('timeline/received — 过程步骤写进助手消息', () => {
   const entry = (nodeName: string, status: TimelineEntry['status'], timestamp = 1000) => ({
     id: `${nodeName}-${status}`,
     nodeName,
     status,
     timestamp,
   })
+  const sent = (): AnalysisState =>
+    analysisReducer(initialAnalysisState, {
+      type: 'chat/turn-appended',
+      turn: { userId: 'u1', assistantId: 'a1', text: 'q', createdAt: '2026-11-05T12:00:00Z' },
+    })
 
   it('同一节点 running → success 只保留一行（按 nodeName 去重）', () => {
-    let state: AnalysisState = { ...initialAnalysisState }
-    state = analysisReducer(state, {
-      type: 'timeline/received',
-      entry: entry('解析需求', 'running'),
-    })
-    state = analysisReducer(state, {
-      type: 'timeline/received',
-      entry: entry('解析需求', 'success'),
-    })
+    let state = sent()
+    state = analysisReducer(state, { type: 'timeline/received', entry: entry('解析需求', 'running') })
+    state = analysisReducer(state, { type: 'timeline/received', entry: entry('解析需求', 'success') })
 
-    expect(state.timeline).toHaveLength(1)
-    expect(state.timeline[0].status).toBe('success')
+    const trace = liveTrace(state.messages)
+    expect(trace).toHaveLength(1)
+    expect(trace[0].status).toBe('success')
   })
 
-  it('不同节点按到达顺序追加', () => {
-    let state: AnalysisState = { ...initialAnalysisState }
+  it('不同节点按到达顺序追加（不影响用户消息）', () => {
+    let state = sent()
     for (const name of ['安全检查', '识别意图', '解析需求']) {
       state = analysisReducer(state, {
         type: 'timeline/received',
@@ -293,65 +348,56 @@ describe('timeline/received — 执行过程步骤', () => {
       })
     }
 
-    expect(state.timeline.map((e) => e.nodeName)).toEqual(['安全检查', '识别意图', '解析需求'])
+    expect(liveTrace(state.messages).map((e) => e.nodeName)).toEqual([
+      '安全检查',
+      '识别意图',
+      '解析需求',
+    ])
+    expect(state.messages[0].trace).toEqual([])
   })
 
   it('收到步骤会清掉上一次的异常说明', () => {
-    let state: AnalysisState = {
-      ...initialAnalysisState,
-      timelineNote: '连接中断，任务可能在后台继续',
-    }
+    let state = sent()
+    state = analysisReducer(state, { type: 'timeline/note', note: '连接中断，任务可能在后台继续' })
+    state = analysisReducer(state, { type: 'timeline/received', entry: entry('解析需求', 'running') })
+
+    expect(liveTraceNote(state.messages)).toBeNull()
+  })
+
+  it('timeline/closed(stopped) 把进行中步骤标成 pending 并给说明', () => {
+    let state = sent()
+    state = analysisReducer(state, {
+      type: 'timeline/received',
+      entry: entry('撰写报告内容', 'running'),
+    })
+    state = analysisReducer(state, { type: 'timeline/closed', reason: 'stopped' })
+
+    expect(liveTrace(state.messages)[0].status).toBe('pending')
+    expect(liveTraceNote(state.messages)).toContain('已停止显示')
+  })
+
+  it('timeline/closed(interrupted) 标成 error 并说明可能在后台继续', () => {
+    let state = sent()
     state = analysisReducer(state, {
       type: 'timeline/received',
       entry: entry('解析需求', 'running'),
     })
-
-    expect(state.timelineNote).toBeNull()
-  })
-
-  it('timeline/cleared 清空步骤与说明（新一轮开始）', () => {
-    let state: AnalysisState = {
-      ...initialAnalysisState,
-      timeline: [entry('解析需求', 'success')] as TimelineEntry[],
-      timelineNote: 'x',
-    }
-    state = analysisReducer(state, { type: 'timeline/cleared' })
-
-    expect(state.timeline).toEqual([])
-    expect(state.timelineNote).toBeNull()
-  })
-
-  it('timeline/closed(stopped) 把进行中步骤标成 pending 并给说明', () => {
-    let state: AnalysisState = {
-      ...initialAnalysisState,
-      timeline: [entry('撰写报告内容', 'running')] as TimelineEntry[],
-    }
-    state = analysisReducer(state, { type: 'timeline/closed', reason: 'stopped' })
-
-    expect(state.timeline[0].status).toBe('pending')
-    expect(state.timelineNote).toContain('已停止显示')
-  })
-
-  it('timeline/closed(interrupted) 标成 error 并说明可能在后台继续', () => {
-    let state: AnalysisState = {
-      ...initialAnalysisState,
-      timeline: [entry('解析需求', 'running')] as TimelineEntry[],
-    }
     state = analysisReducer(state, { type: 'timeline/closed', reason: 'interrupted' })
 
-    expect(state.timeline[0].status).toBe('error')
-    expect(state.timelineNote).toContain('连接中断')
+    expect(liveTrace(state.messages)[0].status).toBe('error')
+    expect(liveTraceNote(state.messages)).toContain('连接中断')
   })
 
   it('timeline/closed(done) 把进行中步骤收成 success 且不留说明', () => {
-    let state: AnalysisState = {
-      ...initialAnalysisState,
-      timeline: [entry('汇总报告', 'running')] as TimelineEntry[],
-    }
+    let state = sent()
+    state = analysisReducer(state, {
+      type: 'timeline/received',
+      entry: entry('汇总报告', 'running'),
+    })
     state = analysisReducer(state, { type: 'timeline/closed', reason: 'done' })
 
     // 正常收尾的最后一步只是没来得及发 success 帧——不能标成失败
-    expect(state.timeline[0].status).toBe('success')
-    expect(state.timelineNote).toBeNull()
+    expect(liveTrace(state.messages)[0].status).toBe('success')
+    expect(liveTraceNote(state.messages)).toBeNull()
   })
 })
