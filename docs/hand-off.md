@@ -27,6 +27,7 @@ python .e2elogs/probe_transcript.py          # 两轮：问 + 答是否都落库
 node   .e2elogs/probe_reasoning_ui.mjs       # 「已思考（用时 N 秒）」+ 模型原文链路 + 执行步骤（8 项判据）
 node   .e2elogs/probe_trace_persistence.mjs  # 思考链路落库：两行 turn_trace + F5 后仍能展开读原文（12 项判据）
 node   .e2elogs/probe_live_issues.mjs        # 「画饼图」出 pie + schema 步骤文案 + 等待秒数 + 截断标注（5 项判据）
+node   .e2elogs/probe_reasoning_stream.mjs   # 思考链路流式可见：边跑边长 + 「· Ns」+ 首个帧早于终局（8 项判据）
 node   .e2elogs/probe_clean_two_turns.mjs    # 两轮：一份报告 / 一条助手消息 / 历史仍在
 node   .e2elogs/probe_hit_test.mjs           # 全页按钮命中测试（被遮挡元素应为 0）
 node   .e2elogs/probe_reasoning_models.py    # 推理模型直连探针（CoT / 延迟）
@@ -70,6 +71,7 @@ Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
 | 13 | **思考链路重塑**（plan `2026-11-05-reasoning-chain-display.md`）：头部「已思考（用时 N 秒）」+ 展开读模型原文（纯文本 `pre-wrap` / markdown 分别渲染）+ 执行步骤结论；当轮展开、历史收起；删掉步骤内嵌的等宽原文块 | 见 plan 落地记录 |
 | 14 | **思考链路落库**（plan `2026-11-05-trace-persistence.md`）：`app.conversations` 加 `turn_trace` 行（entries + 时长 + 原文），两个 runner 顺手收集落库；前端按行序挂到该轮助手消息；顺带补闲聊 `assistant_text` | 见 plan 落地记录 |
 | 15 | **真机 5 问收口**（plan `2026-11-05-live-session-issues.md`）：思考截断标注 / 超时快速重试 + 等待秒数 / schema 步骤文案拆四种 / 显式图表要求（「画饼图」→ pie，优先于记忆偏好） | 见 plan 落地记录 |
+| 16 | **思考链路实时可见**（plan `2026-11-05-streaming-reasoning.md`）：provider 流式收 `reasoning_content` → 节流 350ms 发既有 `trace` 帧 → 前端链路「边跑边长」+「正在输出…」；预算与总额成对可调（`TURN_MAX_TOKENS`）；图节点走 async 客户端（同步会堵事件循环，帧会挤在一起吐） | 见 plan 落地记录 |
 
 ### 2026-11-04 做完的事
 

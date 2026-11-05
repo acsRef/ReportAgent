@@ -53,6 +53,26 @@ describe('TracePanel — 「已思考（用时 N 秒）」+ 思考链路（2026-
     expect(screen.getByText('已思考（用时 6 秒）')).toBeTruthy()
   })
 
+  // 2026-11-05（plan streaming-reasoning）：链路是边跑边长的，得让用户知道还没说完。
+  it('运行中且有链路内容时，链路区带「正在输出…」尾巴', () => {
+    const streaming: TimelineEntry[] = [
+      { ...entry('理解意图 · 思考', 'running'), reasoning: '我们只需要输出JSON。' },
+    ]
+    render(<TracePanel entries={streaming} running autoOpen />)
+
+    expect(screen.getByText('正在输出…')).toBeTruthy()
+    expect(screen.getByText(/我们只需要输出JSON/)).toBeTruthy()
+  })
+
+  it('跑完就不再有「正在输出…」', () => {
+    const done: TimelineEntry[] = [
+      { ...entry('理解意图 · 思考', 'success'), reasoning: '想完了。' },
+    ]
+    render(<TracePanel entries={done} running={false} autoOpen />)
+
+    expect(screen.queryByText('正在输出…')).toBeNull()
+  })
+
   it('展开后才显示每一步（含状态）', () => {
     render(<TracePanel entries={DONE} running={false} />)
     fireEvent.click(screen.getByText('已思考（用时 6 秒）'))

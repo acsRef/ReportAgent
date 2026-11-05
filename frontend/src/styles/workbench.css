@@ -1436,6 +1436,14 @@
   font-weight: 700;
   letter-spacing: 0.06em;
 }
+/* 流式输出中：链路还在长，给一个「正在输出…」尾巴（2026-11-05 streaming-reasoning） */
+.wb-chain-live {
+  margin-left: 6px;
+  color: var(--teal);
+  font-weight: 500;
+  letter-spacing: 0;
+  animation: wb-pulse 1s ease infinite;
+}
 .wb-chain-block { display: flex; flex-direction: column; gap: 4px; }
 .wb-chain-node { color: var(--teal-deep); font-size: 11px; font-weight: 600; }
 .wb-chain-text,

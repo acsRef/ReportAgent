@@ -329,6 +329,27 @@ describe('助手消息上的过程与版本', () => {
     expect(messages[0].trace).toEqual([])
   })
 
+  it('同一节点续帧保留最早时间戳（流式时「已等待 Ns」才会计数）', () => {
+    let messages = sent()
+    messages = withTraceEntry(messages, {
+      id: 'f1',
+      nodeName: '理解意图 · 思考',
+      status: 'running',
+      reasoning: '想',
+      timestamp: 1000,
+    })
+    messages = withTraceEntry(messages, {
+      id: 'f2',
+      nodeName: '理解意图 · 思考',
+      status: 'running',
+      reasoning: '想了一会儿',
+      timestamp: 5000,
+    })
+    expect(liveTrace(messages)).toHaveLength(1)
+    expect(liveTrace(messages)[0].reasoning).toBe('想了一会儿')
+    expect(liveTrace(messages)[0].timestamp).toBe(1000)
+  })
+
   it('版本挂到最后一条助手消息', () => {
     const messages = withAssistantVersion(sent(), 4)
     expect(liveAssistant(messages)?.version).toBe(4)

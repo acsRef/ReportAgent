@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { TimelineEntry } from '../../types/report'
@@ -76,6 +76,16 @@ export default function TracePanel({
     [entries],
   )
   const chain = useMemo(() => reasoningBlocks(entries), [entries])
+  const chainRef = useRef<HTMLElement>(null)
+
+  // 流式输出时把链路滚到底（用户要「实时看」，不能停在开头）
+  useEffect(() => {
+    if (!running) return
+    const box = chainRef.current?.querySelector(
+      '.wb-chain-text, .wb-chain-markdown',
+    ) as HTMLElement | null
+    if (box) box.scrollTop = box.scrollHeight
+  }, [running, chain])
 
   if (entries.length === 0 && !note) return null
 
@@ -104,8 +114,12 @@ export default function TracePanel({
       {open && (
         <div className="wb-think-body">
           {chain.length > 0 && (
-            <section className="wb-chain" aria-label="思考链路">
-              <div className="wb-chain-label">思考链路</div>
+            <section className="wb-chain" aria-label="思考链路" ref={chainRef}>
+              <div className="wb-chain-label">
+                思考链路
+                {/* 2026-11-05（plan streaming-reasoning）：链路是边跑边长的，给个尾巴说明「还没说完」 */}
+                {running && <span className="wb-chain-live">正在输出…</span>}
+              </div>
               {chain.map((block, index) => (
                 <div className="wb-chain-block" key={`${block.node}-${index}`}>
                   {/* 只有一个来源时不加节点名：否则就是「一个标题 + 一段话」的噪声 */}

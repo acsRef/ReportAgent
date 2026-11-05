@@ -744,6 +744,15 @@ async def _run_requirement_graph(
 
         reasoning_sink: dict[str, str] = {}
         reasoning_token = reasoning_channel.install(reasoning_sink)
+        # 2026-11-05（plan streaming-reasoning）：流式思维链通道——模型边想，前端边看。
+        # sink 的 publish 复用 `_publish_and_collect`（既推送又留给落库）。
+        from app.infra.execution import reasoning_stream
+
+        stream_token = reasoning_stream.install(
+            lambda frame, _task=task, _sink=collected: _publish_and_collect(
+                _task, frame, _sink,
+            ),
+        )
         try:
             with mcp_down.scoped(bool(mcp_down_flag)):
                 result = await run_with_timeout(
@@ -760,6 +769,7 @@ async def _run_requirement_graph(
         finally:
             progress_detail.reset(detail_token)
             reasoning_channel.reset(reasoning_token)
+            reasoning_stream.reset(stream_token)
         completed = True
 
         # 2026-11-05（plan turn-understanding-agent）：**需求解析那一次**直连调用

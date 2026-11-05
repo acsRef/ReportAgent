@@ -536,7 +536,7 @@ async def _turn_understand(state: RequirementAnalysisState) -> dict:
     连接池绑定在主事件循环上——在同步节点里跑 `asyncio.run` 会拿到另一个 loop，
     读写直接失败（2026-11-05 实测：任务 revision 一条都没落库，第二轮继承全丢）。
     """
-    from app.agent.turn_understanding import understand_turn
+    from app.agent.turn_understanding import understand_turn_async
     from app.infra.db.analysis_task_repository import load_latest_task
 
     prior = None
@@ -547,9 +547,14 @@ async def _turn_understand(state: RequirementAnalysisState) -> dict:
 
     digest = _schema_digest(state.get("schema_context"))
     meta: dict = {}
-    plan, reasoning = understand_turn(
+    # 2026-11-05（plan streaming-reasoning）：边跑边把累计思维链发成 trace 帧，
+    # 前端思考块随之增长（sink 由 `_run_requirement_graph` 安装；没装就静默跳过）。
+    # 必须走 async 版：同步 httpx 会把事件循环堵住，帧只能在结束后一起吐出。
+    from app.infra.execution import reasoning_stream
+
+    plan, reasoning = await understand_turn_async(
         state.get("user_query", ""), task=prior, history=None, schema_digest=digest,
-        meta=meta,
+        meta=meta, on_reasoning=reasoning_stream.emit,
     )
     # 2026-11-05（plan live-session-issues D1/D2）：把「这一次到底发生了什么」如实写进
     # 步骤结论——超时后用不思考模式救回来了 / 思维链被思考预算截断了，都不藏。

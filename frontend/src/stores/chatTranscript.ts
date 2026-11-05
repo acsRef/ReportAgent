@@ -144,8 +144,16 @@ export function withTraceEntry(messages: ChatMessage[], entry: TimelineEntry): C
   return patchLiveAssistant(messages, (message) => {
     const index = message.trace.findIndex((item) => item.nodeName === entry.nodeName)
     const trace = [...message.trace]
-    if (index >= 0) trace[index] = entry
-    else trace.push(entry)
+    if (index >= 0) {
+      // 2026-11-05（plan streaming-reasoning）：同一节点的后续帧（含流式续帧）**保留最早的
+      // 时间戳**——否则流式每 350ms 换一次时间戳，「已等待 Ns」永远显示 0s，整轮耗时也被压平。
+      trace[index] = {
+        ...entry,
+        timestamp: Math.min(message.trace[index].timestamp, entry.timestamp),
+      }
+    } else {
+      trace.push(entry)
+    }
     return { ...message, trace, traceNote: null }
   })
 }

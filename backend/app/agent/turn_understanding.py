@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 from app.agent.prompts.turn_plan_prompts import build_turn_plan_prompt
 from app.models.requirement import (
@@ -56,56 +56,11 @@ def fast_retry_timeout() -> float:
         return 45.0
 
 
-def understand_turn(
-    user_query: str,
-    *,
-    task: ActiveAnalysisTask | None = None,
-    history: list[str] | None = None,
-    schema_digest: str = "",
-    model: str | None = None,
-    enable_thinking: bool | None = None,
-    thinking_budget: int | None = None,
-    meta: dict | None = None,
+def _finish_reply(
+    reply,
+    meta: dict | None,
 ) -> tuple[TurnPlan | None, str]:
-    """调强模型产出 (TurnPlan, 思维链)；失败返回 (None, "") 让调用方回落旧解析。
-
-    - `model`：本次调用用的模型（评测时逐个模型对比用）；None → `LLM_TURN_MODEL` → 主模型；
-    - `enable_thinking` / `thinking_budget`：推理模型的思考开关与预算（provider 支持时透传）；
-    - `meta`：出参，记录这次走的是哪条路（`retried_without_thinking` / `reasoning_truncated`
-      / `failed`），供步骤 detail 如实说明——2026-11-05（plan live-session-issues D1/D2）；
-    - 思维链只用于**观测**（trace/调试），不参与任何业务判断。
-
-    失败**不猜**：宁可走旧路径，也不要拿一个半懂的 TurnPlan 去改任务状态。
-    但超时/HTTP 失败且默认开着思考时，会**立刻用不思考模式重试一次**（D2）——
-    多数情况下能拿回计划，比直接回落到通用解析好。
-    """
-    from app.llm.reasoning_client import chat_with_reasoning
-
-    prompt = build_turn_plan_prompt(
-        user_query, task=task, history=history, schema_digest=schema_digest,
-    )
-    chosen_model = model or turn_model()
-    # Turn Understanding 走**直连**（见 app/llm/reasoning_client 的说明）：需要独立超时，
-    # 需要 `reasoning_content`，而且 LangChain 那条路径实测会 60s 超时。
-    reply = chat_with_reasoning(
-        prompt,
-        model=chosen_model,
-        max_tokens=1200,
-        enable_thinking=enable_thinking,
-        thinking_budget=thinking_budget,
-    )
-    if reply is None and enable_thinking is not False:
-        # 超时/HTTP 失败：思考模式太慢时不硬等第二次 90s，直接换「不思考」快速重试。
-        logger.warning("turn understanding fell back to fast retry (thinking disabled)")
-        reply = chat_with_reasoning(
-            prompt,
-            model=chosen_model,
-            max_tokens=1200,
-            enable_thinking=False,
-            timeout=fast_retry_timeout(),
-        )
-        if reply is not None and meta is not None:
-            meta["retried_without_thinking"] = True
+    """把一次模型回复收敛成 (TurnPlan, 思维链)——同步/异步两条路共用。"""
     if reply is None:
         if meta is not None:
             meta["failed"] = True
@@ -127,6 +82,115 @@ def understand_turn(
     except Exception as exc:  # noqa: BLE001 - schema 不合法就用回退路径
         logger.warning("turn plan schema invalid: %s | payload=%s", exc, json.dumps(parsed)[:300])
         return None, reasoning
+
+
+def _delta_forwarder(on_reasoning: Callable[[str], None] | None) -> Callable[[str, str], None] | None:
+    """只转发**思考**增量（回答正文是 JSON，不往界面上怼）。"""
+    if on_reasoning is None:
+        return None
+
+    def _on_delta(kind: str, text: str) -> None:
+        if kind == "reasoning":
+            on_reasoning(text)
+
+    return _on_delta
+
+
+def understand_turn(
+    user_query: str,
+    *,
+    task: ActiveAnalysisTask | None = None,
+    history: list[str] | None = None,
+    schema_digest: str = "",
+    model: str | None = None,
+    enable_thinking: bool | None = None,
+    thinking_budget: int | None = None,
+    meta: dict | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
+) -> tuple[TurnPlan | None, str]:
+    """调强模型产出 (TurnPlan, 思维链)；失败返回 (None, "") 让调用方回落旧解析。
+
+    - `model`：本次调用用的模型（评测时逐个模型对比用）；None → `LLM_TURN_MODEL` → 主模型；
+    - `enable_thinking` / `thinking_budget`：推理模型的思考开关与预算（provider 支持时透传）；
+    - `meta`：出参，记录这次走的是哪条路（`retried_without_thinking` / `reasoning_truncated`
+      / `failed`），供步骤 detail 如实说明——2026-11-05（plan live-session-issues D1/D2）；
+    - `on_reasoning(累计文本)`：流式回调（plan streaming-reasoning）——前端「边跑边看」；
+    - 思维链只用于**观测**（trace/调试），不参与任何业务判断。
+
+    失败**不猜**：宁可走旧路径，也不要拿一个半懂的 TurnPlan 去改任务状态。
+    但超时/HTTP 失败且默认开着思考时，会**立刻用不思考模式重试一次**（D2）——
+    多数情况下能拿回计划，比直接回落到通用解析好。
+
+    **同步版本**（评测/CLI）。async 图节点用 `understand_turn_async`——同步调用会堵住
+    事件循环，流式帧只能在结束后一起吐出（实测踩过）。
+    """
+    from app.llm.reasoning_client import chat_with_reasoning
+
+    prompt = build_turn_plan_prompt(
+        user_query, task=task, history=history, schema_digest=schema_digest,
+    )
+    chosen_model = model or turn_model()
+    on_delta = _delta_forwarder(on_reasoning)
+
+    reply = chat_with_reasoning(
+        prompt,
+        model=chosen_model,
+        enable_thinking=enable_thinking,
+        thinking_budget=thinking_budget,
+        on_delta=on_delta,
+    )
+    if reply is None and enable_thinking is not False:
+        logger.warning("turn understanding fell back to fast retry (thinking disabled)")
+        reply = chat_with_reasoning(
+            prompt,
+            model=chosen_model,
+            enable_thinking=False,
+            timeout=fast_retry_timeout(),
+        )
+        if reply is not None and meta is not None:
+            meta["retried_without_thinking"] = True
+    return _finish_reply(reply, meta)
+
+
+async def understand_turn_async(
+    user_query: str,
+    *,
+    task: ActiveAnalysisTask | None = None,
+    history: list[str] | None = None,
+    schema_digest: str = "",
+    model: str | None = None,
+    enable_thinking: bool | None = None,
+    thinking_budget: int | None = None,
+    meta: dict | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
+) -> tuple[TurnPlan | None, str]:
+    """`understand_turn` 的 async 版（图节点用；语义与回退策略完全一致）。"""
+    from app.llm.reasoning_client import chat_with_reasoning_async
+
+    prompt = build_turn_plan_prompt(
+        user_query, task=task, history=history, schema_digest=schema_digest,
+    )
+    chosen_model = model or turn_model()
+    on_delta = _delta_forwarder(on_reasoning)
+
+    reply = await chat_with_reasoning_async(
+        prompt,
+        model=chosen_model,
+        enable_thinking=enable_thinking,
+        thinking_budget=thinking_budget,
+        on_delta=on_delta,
+    )
+    if reply is None and enable_thinking is not False:
+        logger.warning("turn understanding fell back to fast retry (thinking disabled)")
+        reply = await chat_with_reasoning_async(
+            prompt,
+            model=chosen_model,
+            enable_thinking=False,
+            timeout=fast_retry_timeout(),
+        )
+        if reply is not None and meta is not None:
+            meta["retried_without_thinking"] = True
+    return _finish_reply(reply, meta)
 
 
 def _normalize_plan_dict(parsed: dict) -> dict:
