@@ -899,8 +899,14 @@ export default function WorkbenchPage() {
           phase={phase}
           requirement={requirement}
           onSuggest={(text) => {
-            setComposer(text)
-            composerRef.current?.focus()
+            // 2026-11-05（用户：「右边那些东西也是点不动的」）：原来只把文字塞进底部输入框，
+            // 视觉上什么都没发生。推荐项本身就是「继续分析」的动作——直接发出去。
+            if (busy || sending || patching || confirming) {
+              toast.error('当前任务还没结束，稍等一下再继续')
+              return
+            }
+            toast.success(`继续分析：${text}`)
+            handleSend(text)
           }}
         />
       </div>

@@ -43,7 +43,7 @@ export default function RightRail({ phase, requirement, onSuggest }: Props) {
         {showScope && requirement && (
           <div className="wb-side-section">
             <div className="wb-side-heading">当前需求范围</div>
-            <div className="wb-scope-tags">
+            <div className="wb-scope-tags" title="当前已确定的需求要素（只读，改需求直接在下方输入框说）">
               {requirement.time_range && (
                 <span className="wb-scope-tag">{requirement.time_range}</span>
               )}
@@ -66,6 +66,7 @@ export default function RightRail({ phase, requirement, onSuggest }: Props) {
                   key={suggestion}
                   type="button"
                   className="wb-suggestion"
+                  title={`点一下直接用这句话继续分析：${suggestion}`}
                   onClick={() => onSuggest(suggestion)}
                 >
                   <span>{suggestion}</span>
