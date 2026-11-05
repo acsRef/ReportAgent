@@ -315,6 +315,14 @@ export default function WorkbenchPage() {
   // P11：progress 由真实 trace 事件驱动——liveDetail 显示当前步骤文案。
   const [liveDetail, setLiveDetail] = useState<string | undefined>(undefined)
   const [casualReply, setCasualReply] = useState<string | null>(null)
+  // 这一阶段有没有一条「状态文案」要显示（parsing 由解析卡承载，awaiting_* 由提问/确认条承载）。
+  // 2026-11-05：它决定「思考过程」是并进这条气泡，还是自己单独成一条（避免一轮两个助手气泡）。
+  const showsAgentCopy =
+    phase !== 'idle' &&
+    !casualReply &&
+    Boolean(agentCopy(phase)) &&
+    phase !== 'parsing' &&
+    !awaitingCard
   // P11 Review-1 P1-2：confirm/retry 与 adjust(/chat openChat) 三条路径共用 armStream/abortStream，
   // 停止按钮能真断所有活跃 SSE；先前只有 confirm/retry 写入 controller，
   // adjust 走 openChat 的 controller 没保存，「停止」对 adjust 无效。
@@ -764,8 +772,10 @@ export default function WorkbenchPage() {
             <ConversationTimeline
               sessionId={activeSessionId}
               turns={historyTurns}
-              // 2026-11-04：最近一轮保持展开——刚看到的报告不会因为发下一句就消失
-              expandLatest
+              // 2026-11-05：历史默认**收起**。此前「最近一轮保持展开」是怕上一份报告消失，
+              // 但那会和新版本一起渲染 → 一屏两张报告（用户：「你生成了两份」）。
+              // 现在主区域永远显示当前版本，历史用「查看 vN 报告」按需展开。
+              expandLatest={false}
             />
           )}
           {liveQuestion && phase !== 'idle' && <UserBubble text={liveQuestion} />}
@@ -814,8 +824,10 @@ export default function WorkbenchPage() {
           )}
 
           {/* 没有提问/确认可出时（解析中 / 生成中 / 已出报告），思考单独成一条消息。
-              没有 trace（首帧还没来）就整块不渲染——否则留下一个空气泡（用户截图里的空白）。 */}
-          {!questionField && !showConfirmBar && !cardLocked && hasTrace && (
+              没有 trace（首帧还没来）就整块不渲染——否则留下一个空气泡（用户截图里的空白）。
+              2026-11-05：**下面还有 agentCopy 时会并进同一条消息**（见下方 AgentBubble 的 trace 插槽），
+              否则一轮里会冒两个助手气泡（「思考了 6 步」+「报告已生成…」），看着像重复。 */}
+          {!questionField && !showConfirmBar && !cardLocked && hasTrace && !showsAgentCopy && (
             <div className="wb-message wb-reveal">
               <div className="wb-msg-avatar agent">A</div>
               <div className="wb-bubble wb-bit-bubble">
@@ -841,11 +853,18 @@ export default function WorkbenchPage() {
           )}
 
           {/* 状态文案只在「没有专属消息」的阶段出现：parsing 已由思考那条消息承载，
-              awaiting_* 由提问/确认消息承载，再说一遍就是重复。 */}
+              awaiting_* 由提问/确认消息承载，再说一遍就是重复。
+              2026-11-05：思考过程并进这条气泡（同一个助手消息），不再单独占一条。 */}
           {casualReply && <AgentBubble markdown={casualReply} />}
-          {phase !== 'idle' && !casualReply && agentCopy(phase) &&
-            phase !== 'parsing' && !awaitingCard && (
-            <AgentBubble markdown={agentCopy(phase)} />
+          {showsAgentCopy && (
+            <AgentBubble
+              markdown={agentCopy(phase)}
+              trace={
+                hasTrace ? (
+                  <TracePanel entries={timeline} note={timelineNote} running={busy || sending} />
+                ) : null
+              }
+            />
           )}
 
           {phase === 'parsing' && <ParsingCard onStop={handleStopParsing} />}

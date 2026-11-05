@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -11,12 +12,18 @@ export function UserBubble({ text }: { text: string }) {
   )
 }
 
-/** Agent chat bubble (left-aligned, paper) — copy is markdown. */
-export function AgentBubble({ markdown }: { markdown: string }) {
+/**
+ * Agent chat bubble (left-aligned, paper) — copy is markdown.
+ *
+ * `trace`：2026-11-05 起「思考过程」并进这一条消息（同一气泡内的第一行），
+ * 之前「思考一条 + 状态文案一条」会让一轮里冒出两个助手气泡（用户：「生成了两份」）。
+ */
+export function AgentBubble({ markdown, trace }: { markdown: string; trace?: ReactNode }) {
   return (
     <div className="wb-message wb-reveal">
       <div className="wb-msg-avatar agent">A</div>
-      <div className="wb-bubble">
+      <div className={trace ? 'wb-bubble wb-ask-bubble' : 'wb-bubble'}>
+        {trace}
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
       </div>
     </div>

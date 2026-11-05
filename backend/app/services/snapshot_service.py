@@ -56,13 +56,16 @@ async def get_session_snapshot(
             "title": sess.get("title") or "",
             "phase": sess.get("current_phase") or "idle",
             "msg_count": len(messages),
-            "updated_at": sess.get("created_at"),
+            # 2026-11-05：时区口径同 list_sessions——必须带 `+00:00`，否则前端把它当本地时间
+            # （左侧版本条会显示「8 小时前」）。顺带修正取值：updated_at 应该是会话的
+            # updated_at，之前错用了 created_at。
+            "updated_at": utc_iso(sess.get("updated_at") or sess.get("created_at")),
             "report_versions": [
                 {
                     "version": v["version"],
                     "title": v["title"],
                     "status": v["status"],
-                    "created_at": v["created_at"],
+                    "created_at": utc_iso(v["created_at"]),
                     "favorite": v["favorite"],
                 }
                 for v in versions

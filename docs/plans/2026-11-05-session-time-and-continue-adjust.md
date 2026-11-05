@@ -116,3 +116,35 @@ Playwright 跑完整两轮（`probe_live_multiturn.mjs`）：报告 v1 出来后
 - `probe_hit_test.mjs`：修复前后对比，COVERED 从 1 → 0；
 - `probe_suggestion_click.mjs`：点击右栏推荐 → 发出 `POST /chat`，输入框上方出现新问题气泡；
 - `probe_all_buttons2.mjs`：报告工具栏五个按钮均产生网络请求或界面变化。
+
+## 追加（同日，截图反馈：「第一个问题找不到了 / 报告生成了两份 / 气泡挨太近」）
+
+### 真机复现（`probe_clean_two_turns.mjs`，从「新建分析」开始，DOM 与库同源）
+
+| 现象 | 观测 |
+|---|---|
+| 一轮出现**两个助手气泡** | `assistant: ["▸思考了 6 步 · 8.0s", "报告已生成并保留在当前会话…"]` |
+| 两轮之后**两张报告** | `papers: ["REPORT / v1", "REPORT / v2"]` |
+| 气泡间距 | `.wb-message` `margin-bottom: 14px`（贴得紧） |
+| 左侧版本条仍显示「8 小时前」 | `snapshot_service` 里 `report_versions[].created_at` / `updated_at` 直接传 datetime（FastAPI 序列化成无时区） |
+
+### 修法
+
+1. **一轮只留一个助手气泡**：`AgentBubble` 增加 `trace` 插槽，思考过程并进「报告已生成…」这条气泡；
+   有 agentCopy 时不再单独渲染那条只含 trace 的消息（`showsAgentCopy` 互斥）。
+2. **只显示当前版本一份报告**：历史时间线改为**默认收起**（`expandLatest={false}`），
+   旧版本通过「查看 vN 报告」按需展开；主区域永远只渲染当前版本。
+3. **气泡间距** 14px → 22px。
+4. **版本/会话时间**：`snapshot_service` 的 `updated_at` / `report_versions[].created_at` 改用 `utc_iso`；
+   顺带修正它把 `created_at` 当 `updated_at` 返回的取值错误。
+
+### 修复后同一条脚本的输出
+
+```
+turn1: assistant=["▸思考了 6 步 · 8.3s报告已生成并保…"]  papers=["REPORT / v1"]
+turn2: user=[Q1, Q2]  assistant=["▸思考了 6 步 · 4.4s报告已生成并保…"]  papers=["REPORT / v2"]
+        history=["v1 … 已完成"]（收起）
+左侧：会话「刚刚 / 5 分钟前」；版本「当前 / 刚刚」；间距 22px
+```
+
+前端全量 **420 passed**。
