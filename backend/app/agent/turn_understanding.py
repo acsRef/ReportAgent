@@ -51,35 +51,46 @@ def understand_turn(
     task: ActiveAnalysisTask | None = None,
     history: list[str] | None = None,
     schema_digest: str = "",
-) -> TurnPlan | None:
-    """调强模型产出 TurnPlan；失败返回 None（调用方回落到既有 requirement_parse 路径）。
+    model: str | None = None,
+    enable_thinking: bool | None = None,
+    thinking_budget: int | None = None,
+) -> tuple[TurnPlan | None, str]:
+    """调强模型产出 (TurnPlan, 思维链)；失败返回 (None, "") 让调用方回落旧解析。
+
+    - `model`：本次调用用的模型（评测时逐个模型对比用）；None → `LLM_TURN_MODEL` → 主模型；
+    - `enable_thinking` / `thinking_budget`：推理模型的思考开关与预算（provider 支持时透传）；
+    - 思维链只用于**观测**（trace/调试），不参与任何业务判断。
 
     失败**不猜**：宁可走旧路径，也不要拿一个半懂的 TurnPlan 去改任务状态。
     """
-    from app.llm import call_llm
+    from app.llm.reasoning_client import chat_with_reasoning
 
     prompt = build_turn_plan_prompt(
         user_query, task=task, history=history, schema_digest=schema_digest,
     )
-    kwargs: dict[str, Any] = {"max_tokens": 1200}
-    model = turn_model()
-    if model:
-        kwargs["model"] = model
-    try:
-        raw = call_llm(prompt, **kwargs)
-    except Exception as exc:  # noqa: BLE001 - 理解失败回落旧路径
-        logger.warning("turn understanding llm failed: %s", exc)
-        return None
+    chosen_model = model or turn_model()
+    # Turn Understanding 走**直连**（见 app/llm/reasoning_client 的说明）：需要独立超时，
+    # 需要 `reasoning_content`，而且 LangChain 那条路径实测会 60s 超时。
+    reply = chat_with_reasoning(
+        prompt,
+        model=chosen_model,
+        max_tokens=1200,
+        enable_thinking=enable_thinking,
+        thinking_budget=thinking_budget,
+    )
+    if reply is None:
+        return None, ""
+    raw, reasoning = reply.content, reply.reasoning
     parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(parsed, dict):
         logger.warning("turn understanding returned non-json: %s", str(raw)[:200])
-        return None
+        return None, reasoning
     parsed = _normalize_plan_dict(parsed)
     try:
-        return TurnPlan.model_validate(parsed)
+        return TurnPlan.model_validate(parsed), reasoning
     except Exception as exc:  # noqa: BLE001 - schema 不合法就用回退路径
         logger.warning("turn plan schema invalid: %s | payload=%s", exc, json.dumps(parsed)[:300])
-        return None
+        return None, reasoning
 
 
 def _normalize_plan_dict(parsed: dict) -> dict:
@@ -316,6 +327,12 @@ def project_card(
             detail_level = "detail"
 
     metric = (task.metrics or [None])[0]
+    # 模型给的口径名不可信（实测给了「销售」这种半截词）→ 归一到注册表业务名
+    if task.metrics:
+        from app.agent.requirement_parser import _display_metric
+
+        task.metrics = [_display_metric(str(m)) for m in task.metrics]
+        metric = task.metrics[0]
     if extreme_goals:
         directions = {g.direction for g in extreme_goals if g.direction}
         units = [g.unit for g in extreme_goals if g.unit]
@@ -347,6 +364,14 @@ def project_card(
             label=blocker.question,
             kind="single",
             options=[RequirementOption(label=opt, value=f"metric:{opt}") for opt in blocker.options],
+        ))
+    # 数据能力不支持（指标/实体不在注册表/Schema）也要拦住：不能装成一张「可直接确认」的卡
+    if reportability is not None and reportability.verdict == "UNSUPPORTED":
+        missing.append(RequirementMissingField(
+            key="unsupported",
+            label="、".join(reportability.notes) or "当前数据不支持这个分析",
+            kind="single",
+            options=[],
         ))
 
     return RequirementCard(

@@ -17,6 +17,26 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _REASONING_RE = re.compile(r"<reasoning>.*?</reasoning>", re.DOTALL | re.IGNORECASE)
 
 
+def _extract_reasoning(resp: Any) -> str:
+    """从 provider 响应里取思维链（`reasoning_content`），取不到返回空串。
+
+    硅基流动把 CoT 放在 `message.reasoning_content`；LangChain 的 `AIMessage` 会把它落到
+    `additional_kwargs`（部分版本落到 `response_metadata`）。两种都试一次。
+    """
+    for container in (
+        getattr(resp, "additional_kwargs", None),
+        getattr(resp, "response_metadata", None),
+    ):
+        if not isinstance(container, dict):
+            continue
+        for key in ("reasoning_content", "reasoning", "thinking"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+
 def strip_think_tags(text: str) -> str:
     if not text:
         return text
@@ -73,6 +93,19 @@ class LLMAdapter:
         return ChatOpenAI(**cfg)
 
     def generate(self, prompt: str | list, **kwargs: Any) -> str:
+        text, _reasoning = self.generate_with_reasoning(prompt, **kwargs)
+        return text
+
+    def generate_with_reasoning(
+        self, prompt: str | list, **kwargs: Any,
+    ) -> tuple[str, str]:
+        """返回 (正文, 思维链)。
+
+        2026-11-05（plan turn-understanding-agent）：硅基流动对推理模型会额外返回
+        `reasoning_content`（不进 `content`）。此前被忽略 → 界面上看不到模型的思考。
+        这里把它取出来单独返回：正文照旧走 `strip_think_tags`，思维链**只给观测通道**
+        （trace/调试），不参与业务判断。
+        """
         llm = self._chat(**kwargs)
         start = time.monotonic()
         resp = invoke_with_retry(
@@ -82,6 +115,7 @@ class LLMAdapter:
         )
         elapsed_ms = int((time.monotonic() - start) * 1000)
         raw = (getattr(resp, "content", "") or "").strip()
+        reasoning = _extract_reasoning(resp)
         text = strip_think_tags(raw)
         if not text:
             logger.warning("llm generate empty after strip raw=%r", raw[:2000])
@@ -107,7 +141,7 @@ class LLMAdapter:
                 )
         except Exception as exc:
             logger.warning("llm trace failed: %s", exc)
-        return text
+        return text, reasoning
 
     def generate_structured(
         self,

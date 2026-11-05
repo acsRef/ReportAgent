@@ -9,6 +9,9 @@ class LLMConfig:
         self.api_key: str | None = os.getenv("LLM_API_KEY") or os.getenv("MINIMAX_API_KEY")
         self.base_url: str = os.getenv("LLM_BASE_URL") or os.getenv("MINIMAX_BASE_URL") or "https://api.siliconflow.cn/v1"
         self.provider: str = os.getenv("LLM_PROVIDER", "siliconflow")
+        # 2026-11-05（plan turn-understanding-agent）：轮次理解专用模型。
+        # 留空 → 回落 `model`；配置了就只影响 Turn Understanding，不动 SQL/Report。
+        self.turn_model: str = (os.getenv("LLM_TURN_MODEL") or "").strip()
         self.timeout: float = float(os.getenv("LLM_TIMEOUT", "60"))
         # 宪法 §11 契约值：LLM transient retry 预算 2（P9 自 P6 遗留默认 5 收敛）。
         self.max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))

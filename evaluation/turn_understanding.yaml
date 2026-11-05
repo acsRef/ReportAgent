@@ -1,0 +1,132 @@
+# Turn Understanding 评测集（plan 2026-11-05-turn-understanding-agent Phase 2）
+#
+# 目的：决定「谁来做 Turn Understanding」——用 ReportAgent 的**真实多轮对话**比，
+# 不用通用问答。
+#
+# 每个 case：
+#   id          用例名
+#   task        进入这一轮时的任务状态（上一轮归并结果），为空 = 第一轮
+#   query       这一轮用户原话（就是会拿来测的真实说法）
+#   expect:
+#     act          期望的 conversation_act（null = 不考察）
+#     goals        期望的分析目标 type 集合（null = 不考察）
+#     directions   期望的 extreme_period 方向集合（null = 不考察）
+#     unit         期望的极值单位（null = 不考察）
+#     preserve     必须被保留（未在 update/clear 里出现、且归并后仍在）的字段
+#     cleared      必须被清空的字段
+#     updated      必须被改写的字段（只看键）
+#
+# 评分口径（runner 里实现）：
+#   意图准确率 / 目标准确率 / 继承-修改准确率 / JSON 合法率 / 平均延迟。
+
+cases:
+  - id: t1_new_task
+    task: null
+    query: "2024年华东销售趋势和异常"
+    expect:
+      act: new_task
+      goals: [trend, anomaly]
+      preserve: []
+      cleared: []
+      updated: [time_range, scope, metrics]
+
+  - id: t2_both_extremes
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      granularity: "week"
+      goals: [{type: trend}, {type: anomaly}]
+    query: "销售额最多和最小的具体情况是什么"
+    expect:
+      act: follow_up
+      goals: [extreme_period]
+      directions: [max, min]
+      unit: month
+      preserve: [time_range, scope, metrics]
+      cleared: []
+      updated: [goals]
+
+  - id: t3_time_reference
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      granularity: "month"
+      goals: [{type: trend}]
+    query: "那七月份呢"
+    expect:
+      act: follow_up
+      goals: null
+      preserve: [scope, metrics]
+      cleared: []
+      updated: [time_range]
+
+  - id: t4_add_dimension
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      granularity: "month"
+      goals: [{type: trend}]
+    query: "再按产品细分"
+    expect:
+      act: follow_up
+      goals: [compare]
+      preserve: [time_range, scope, metrics]
+      cleared: []
+      updated: [goals]
+
+  - id: t5_override_scope
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      goals: [{type: trend}]
+    query: "不看华东了，看华南"
+    expect:
+      act: modify_task
+      goals: null
+      preserve: [time_range, metrics]
+      cleared: []
+      updated: [scope]
+
+  - id: t6_new_topic
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      goals: [{type: trend}]
+    query: "现在看看退货情况"
+    expect:
+      act: new_task
+      goals: null
+      preserve: []
+      cleared: [scope]
+      updated: [metrics]
+
+  - id: t7_inherit_and_detail
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      granularity: "month"
+      goals: [{type: extreme_period, direction: max, unit: month}]
+    query: "把刚才最高的那个月详细列出来"
+    expect:
+      act: follow_up
+      goals: [detail_rows]
+      preserve: [time_range, scope, metrics]
+      cleared: []
+      updated: [goals]
+
+  - id: t8_ambiguous
+    task: null
+    query: "看一下数据"
+    expect:
+      act: null
+      goals: null
+      preserve: []
+      cleared: []
+      updated: []
+      needs_clarification: true

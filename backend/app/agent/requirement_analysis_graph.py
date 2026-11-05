@@ -80,6 +80,8 @@ class RequirementAnalysisState(TypedDict, total=False):
     analysis_task: Optional[Any]
     task_revision: Optional[Any]
     reportability: Optional[Any]
+    # 推理模型返回的思维链（只用于观测/前端展示，不参与业务判断）
+    turn_reasoning: Optional[str]
 
 
 # --- Nodes ----------------------------------------------------------------
@@ -493,7 +495,7 @@ async def _turn_understand(state: RequirementAnalysisState) -> dict:
         logger.warning("load_latest_task failed: %s", exc)
 
     digest = _schema_digest(state.get("schema_context"))
-    plan = understand_turn(
+    plan, reasoning = understand_turn(
         state.get("user_query", ""), task=prior, history=None, schema_digest=digest,
     )
     _progress_detail(
@@ -505,7 +507,10 @@ async def _turn_understand(state: RequirementAnalysisState) -> dict:
             else "理解失败，回落通用解析"
         ),
     )
-    return {"turn_plan": plan}
+    # 2026-11-05：推理模型的思维链同步给前端（由 `_run_requirement_graph` 在图结束后
+    # 作为一条额外的 trace 帧发出：步骤名「理解意图 · 思考」，正文是 CoT 原文）。
+    # 只做观测：不参与判定，也不当作「对用户的解释」。
+    return {"turn_plan": plan, "turn_reasoning": reasoning[:4000] if reasoning else ""}
 
 
 @traced_node("task_reduce")

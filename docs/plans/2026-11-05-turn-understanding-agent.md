@@ -203,3 +203,64 @@ SQL    month IN (11,2) → 2 行：2月 5,444,341.66 / 11月 9,437,879.30
   当前真链路用的是主模型（V3）产 TurnPlan。
 - 前端「任务变更日志」UI 未做（数据已落 `agent.analysis_task_revision`）。
 - 默认开关仍为关（`TURN_UNDERSTANDING` 未设置时走旧路径），等模型对比后再切默认。
+
+## Phase 2 落地记录（2026-11-05）：模型对比 + 思维链同步
+
+### 直连探针（同一句 prompt，硅基流动 `/chat/completions`）
+
+| 模型 | 耗时 | `reasoning_content` | 备注 |
+|---|---|---|---|
+| **deepseek-ai/DeepSeek-V4-Flash** | **1.5s** | 有 | 最快，JSON 干净 |
+| Qwen/Qwen3.8-27B | 7.4s | 有（389 字符） | 短 prompt 很快，但**本项目的长 prompt 会 >90s 超时** |
+| Qwen/Qwen3.5-35B-A3B | 20.3s | 有（2015 字符） | **思维链漏进 content**（`blocks for clarity…`），JSON 不可用 |
+| deepseek-ai/DeepSeek-V3（旧） | 3.3s | 无 | 无 CoT |
+
+### 经本仓链路（`understand_turn`）
+
+- LangChain 的 `ChatOpenAI + extra_body` 这条路对推理模型**不可用**：60s 超时、重试后整轮失败、
+  且拿不到 `reasoning_content`。→ 新增 `app/llm/reasoning_client.py` **直连**（独立超时 + 取 CoT）。
+- 直连后：V4-Flash 11.0s / 有效 TurnPlan / 805 字符 CoT；Qwen3.8 仍超时（长 prompt）。
+
+### 评测（`evaluation/turn_understanding.yaml`，8 条真实多轮用例）
+
+```
+model                          json   act    goals  extreme  inherit  upd    median  CoT
+deepseek-ai/DeepSeek-V4-Flash  8/8    6/7    2/4    1/1      5/5      8/8    15.2s   8/8
+Qwen/Qwen3.8-27B               4/8    4/4    2/2    —        3/3      4/4    116.3s  0/8（超时）
+```
+
+- V4-Flash 未过的三例：`t4 再按产品细分`（应 compare）、`t7 把刚才最高的那个月详细列出来`
+  （应 detail_rows）、`t6 现在看看退货情况`（应 new_task）——**目标准确率是下一步要修的**。
+- Qwen3.8-27B 在它完成的 4 例上 act/goals 全对，瓶颈是长 prompt + 思考导致超时
+  （需要裁剪 prompt / 流式 / 更大预算后才能公平比较）。
+
+### 选型与配置（已写入 `.env`）
+
+```
+LLM_TURN_MODEL=deepseek-ai/DeepSeek-V4-Flash
+TURN_UNDERSTANDING=1
+TURN_ENABLE_THINKING=1
+TURN_THINKING_BUDGET=512
+LLM_TURN_TIMEOUT=90
+```
+
+### 思维链同步（用户要求「有思维链就同步给前端」）
+
+- `reasoning_client` 取 `message.reasoning_content`；`_turn_understand` 存进
+  `state["turn_reasoning"]`；
+- `_run_requirement_graph` 在图结束后发一条独立 trace 帧：
+  `{step: "理解意图 · 思考", status: "success", detail: <CoT 前 2000 字>}`；
+- 前端 `TracePanel` 按普通步骤渲染（可展开看全文）；**只做观测，不参与判定**。
+
+真链路实测（本机）：需求轮的 trace 现在是
+
+```
+安全检查 → 识别意图 → 准备分析数据 → 理解意图 → 归并任务 → 可报告性 → 投影需求卡
+→ 口径预览 → 保存需求卡 → 理解意图 · 思考（CoT 全文）
+```
+
+### 顺带修掉的两处
+
+- `progress.PROGRESS_NODES` 没登记新节点 → 新链路的步骤帧全被丢弃（界面上看不到理解过程）；
+- 模型把指标写成「销售」这类半截词 → `project_card` 归一到注册表业务名（销售 → 销售额）；
+  且 `UNSUPPORTED` 时不再装成「可直接确认」的卡（补一条阻塞项）。

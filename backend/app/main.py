@@ -726,6 +726,21 @@ async def _run_requirement_graph(
             progress_detail.reset(detail_token)
         completed = True
 
+        # 2026-11-05（plan turn-understanding-agent）：推理模型返回的思维链同步给前端。
+        # 作为一条独立 trace 帧发出（步骤名带「· 思考」），前端在过程面板里按步骤展示；
+        # 它只是观测，不参与任何判定（错判的依据不能当结论给用户看）。
+        _reasoning = result.get("turn_reasoning") or ""
+        if _reasoning:
+            registry.publish(task, {
+                "event": "trace",
+                "data": json.dumps({
+                    "step": "理解意图 · 思考",
+                    "status": "success",
+                    "detail": _reasoning[:2000],
+                    "kind": "agent",
+                }, ensure_ascii=False),
+            })
+
         # 安全闸：HIGH → 拒绝（不建卡、不落库；与改造前逐字段一致）。
         if result.get("security_level") == "HIGH":
             await _safe_update_phase(session_id, "error", mode)

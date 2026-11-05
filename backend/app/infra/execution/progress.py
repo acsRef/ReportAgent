@@ -31,6 +31,11 @@ PROGRESS_NODES: dict[str, tuple[str, str]] = {
     # ── requirement-analysis 图（2026-11-04：需求轮也要能看见「在想什么」）──
     "security_guard": ("agent", "安全检查"),
     "classify_intent": ("agent", "识别意图"),
+    # 2026-11-05（plan turn-understanding-agent）：强模型理解 → 确定性归并 → 可报告性裁决
+    "turn_understand": ("agent", "理解意图"),
+    "task_reduce": ("agent", "归并任务"),
+    "reportability": ("agent", "可报告性"),
+    "requirement_project": ("agent", "投影需求卡"),
     "requirement_parse": ("agent", "解析需求"),
     "requirement_preview": ("tool", "口径预览"),
     "persist_draft": ("agent", "保存需求卡"),
