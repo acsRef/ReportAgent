@@ -156,7 +156,8 @@ describe('ConversationTimeline — 历史轮次不再消失', () => {
     )
     expect(screen.getByText('2024年各区域销售额')).toBeTruthy()
     expect(screen.getByText('好，我理解为：2024年的销售额。')).toBeTruthy()
-    expect(screen.getByText(/思考了 1 步/)).toBeTruthy()
+    // 2026-11-05（plan reasoning-chain-display）：历史轮的思考块默认收起，只留一行「已思考（用时 N 秒）」
+    expect(screen.getByText(/已思考（用时/)).toBeTruthy()
   })
 
   it('没有历史轮次时不渲染任何东西', () => {

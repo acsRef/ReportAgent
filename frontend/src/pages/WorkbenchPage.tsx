@@ -804,6 +804,9 @@ export default function WorkbenchPage() {
                       entries={timeline}
                       note={timelineNote}
                       running={busy || sending || confirming}
+                      // 2026-11-05（plan reasoning-chain-display D3）：当轮默认展开——
+                      // 刚问完就能读到「它在想什么」；历史轮次由时间线收起。
+                      autoOpen
                     />
                   ) : null
                 }

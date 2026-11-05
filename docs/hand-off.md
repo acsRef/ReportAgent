@@ -11,7 +11,7 @@
 | 主链路 | 需求理解 → 确认 → SQL → 报告 → 落库，**可用**（真机两轮验证过） |
 | 需求层 | **Turn Understanding Agent 已上**（强模型产 `TurnPlan` + 确定性 Reducer + 可报告性裁决，`TURN_UNDERSTANDING=1`）；`RequirementCard` 契约不变 |
 | 需求模型 | `LLM_TURN_MODEL=deepseek-ai/DeepSeek-V4-Flash`（有 CoT，中位 15s，JSON 8/8） |
-| 可观测 | 模型**原文思维链**（`reasoning_content`）已进 trace 帧 `reasoning` 字段，前端步骤下方独立块展示 |
+| 可观测 | 模型**原文思维链**进 trace `reasoning`；「已思考（用时 N 秒）」块默认展开当轮、历史收起 |
 | 对话记录 | `app.conversations` 是**真对话记录**（assistant 文本已落库）；历史不再整表覆盖 |
 | 消息模型 | **append-only 聊天账本**（`stores/chatTranscript.ts`）：发送即 append，按 `serverId` 合并 |
 | 视觉形态 | 一轮 = 一条用户消息 + **一条**助手消息（过程/状态/动作/进度都在里面）；卡片只在「需求详情」按需展开 |
@@ -23,7 +23,7 @@
 ```bash
 # 主链路（真 LLM）
 python .e2elogs/probe_transcript.py          # 两轮：问 + 答是否都落库（transcript）
-node   .e2elogs/probe_reasoning_ui.mjs       # 过程面板是否出现「模型推理」原文块
+node   .e2elogs/probe_reasoning_ui.mjs       # 「已思考（用时 N 秒）」+ 模型原文链路 + 执行步骤（8 项判据）
 node   .e2elogs/probe_clean_two_turns.mjs    # 两轮：一份报告 / 一条助手消息 / 历史仍在
 node   .e2elogs/probe_hit_test.mjs           # 全页按钮命中测试（被遮挡元素应为 0）
 node   .e2elogs/probe_reasoning_models.py    # 推理模型直连探针（CoT / 延迟）
@@ -60,6 +60,7 @@ python -m evaluation.turn_understanding_runner --models deepseek-ai/DeepSeek-V4-
 | 10 | **模型原文思维链**进 trace `reasoning` 字段，前端「模型推理」块展示 | `0f9a8fb` |
 | 11 | **对话记录**：assistant 文本落库，历史轮次渲染「问 + 答 + 版本条」 | `4650f69` |
 | 12 | **P0 消息模型**（见 §3）：append-only 账本 + 一条助手消息 + 去只读整卡 + 详情按需；修合并错序真 bug | `a1d3596` |
+| 13 | **思考链路重塑**（plan `2026-11-05-reasoning-chain-display.md`）：头部「已思考（用时 N 秒）」+ 展开读模型原文（纯文本 `pre-wrap` / markdown 分别渲染）+ 执行步骤结论；当轮展开、历史收起；删掉步骤内嵌的等宽原文块 | 见 plan 落地记录 |
 
 ### 2026-11-04 做完的事
 

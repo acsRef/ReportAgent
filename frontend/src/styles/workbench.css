@@ -1404,8 +1404,9 @@
   border-top: 1px dashed var(--line);
 }
 
-/* ---------- 「思考」= 助手消息里的一行摘要（2026-11-04 返工） ---------- */
-/* 用户要求：一整个、不要卡片、太占地方。这里没有边框/缩进，只有一行可展开摘要。 */
+/* ---------- 「思考」块：一行头 + 思考链路 + 执行步骤（2026-11-05 重塑） ---------- */
+/* 用户要求：一整个、不要卡片、太占地方。折叠时只有一行「已思考（用时 N 秒）」；
+   展开后先读**模型原文链路**（正文样式，不做等宽日志感），再读执行步骤的结论。 */
 .wb-think { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--sp-s); }
 .wb-think-toggle {
   align-self: flex-start;
@@ -1415,16 +1416,49 @@
   border: none;
   background: transparent;
   padding: 0;
-  color: var(--muted);
+  /* 参考产品（用户截图）里「已思考（用时 4 秒）」是蓝色可点态——这里用 teal-deep 对齐可点感 */
+  color: var(--teal-deep);
   font-size: 12px;
   cursor: pointer;
 }
-.wb-think-toggle:hover { color: var(--teal-deep); }
+.wb-think-toggle:hover { text-decoration: underline; }
 .wb-think.is-running .wb-think-toggle { color: var(--amber); }
+.wb-think.is-failed .wb-think-toggle { color: var(--red); }
 .wb-think-arrow { font-size: 10px; }
 .wb-think-note { font-size: 11px; color: var(--amber); line-height: 1.5; }
+.wb-think-body { display: flex; flex-direction: column; gap: var(--sp-s); margin: 4px 0 2px; }
+
+/* 思考链路：模型原文。段落用正文色正文排版，限高可滚，避免一屏被 CoT 占满。 */
+.wb-chain { display: flex; flex-direction: column; gap: 6px; }
+.wb-chain-label {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.wb-chain-block { display: flex; flex-direction: column; gap: 4px; }
+.wb-chain-node { color: var(--teal-deep); font-size: 11px; font-weight: 600; }
+.wb-chain-text,
+.wb-chain-markdown {
+  margin: 0;
+  /* 常见 CoT（≈1200 字）能整段显示；后端上限 4000 字时才出现内部滚动，
+     避免一整面墙把这条消息里真正要看的结论挤走 */
+  max-height: 480px;
+  overflow-y: auto;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+/* 纯文本 CoT：保留模型自己的换行（markdown 渲染会把它吃掉） */
+.wb-chain-text { white-space: pre-wrap; }
+.wb-chain-markdown > :first-child { margin-top: 0; }
+.wb-chain-markdown > :last-child { margin-bottom: 0; }
+
+/* 执行步骤：每步一行 + 结论（2026-11-04 的紧凑列表，去掉边框） */
+.wb-chain-steps { display: flex; flex-direction: column; gap: 4px; }
 .wb-think-list {
-  margin: 2px 0 0;
+  margin: 0;
   padding: 0 0 0 10px;
   list-style: none;
   border-left: 1px solid var(--line);
@@ -1447,30 +1481,4 @@
 .wb-think-name { color: var(--ink-2); font-weight: 500; white-space: nowrap; }
 .wb-think-status { color: var(--faint); font-size: 10px; white-space: nowrap; }
 .wb-think-detail { color: var(--muted); overflow-wrap: anywhere; }
-/* 2026-11-05：模型原文思维链（`reasoning_content`）——与结论分开的独立块，保留换行 */
-.wb-think-reasoning {
-  grid-column: 1 / -1;
-  margin: 4px 0 6px;
-  padding: 8px 10px;
-  border-left: 2px solid var(--teal);
-  background: var(--tint, #f6f8f7);
-  border-radius: 4px;
-}
-.wb-think-reasoning-tag {
-  display: inline-block;
-  margin-bottom: 4px;
-  color: var(--teal-deep, #0a5c50);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-.wb-think-reasoning-body {
-  margin: 0;
-  color: var(--ink-2, #444);
-  font: 11px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 260px;
-  overflow-y: auto;
-}
 .wb-bit-bubble { display: flex; flex-direction: column; }
