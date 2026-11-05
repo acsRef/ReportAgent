@@ -12,14 +12,16 @@ class SessionManager:
         refresh `last_checkpoint_at` but keep the original `user_id` (a session
         cannot be reassigned to a different user).
         """
-        now = datetime.datetime.now()
+        # 2026-11-05：时间戳统一由数据库 `NOW()` 生成（服务端时区 UTC）。
+        # 之前用 `datetime.now()`（本地 naive）→ created_at 比 updated_at 早/晚 8 小时，
+        # 前端按相对时间显示就变成「8 小时前」（用户实测反馈）。
         pool = get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """INSERT INTO agent.session (thread_id, user_id, title, created_at, status, last_checkpoint_at)
-                   VALUES ($1, $2, $3, $4, $5, $6)
-                   ON CONFLICT (thread_id) DO UPDATE SET last_checkpoint_at = $6""",
-                session_id, user_id, "", now, "active", now,
+                   VALUES ($1, $2, $3, NOW(), $4, NOW())
+                   ON CONFLICT (thread_id) DO UPDATE SET last_checkpoint_at = NOW()""",
+                session_id, user_id, "", "active",
             )
         return session_id
 

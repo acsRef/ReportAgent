@@ -124,6 +124,13 @@ export default function WorkbenchPage() {
   const [changeNote, setChangeNote] = useState<string | null>(null)
   // 2026-11-04（Phase 5）：需求卡降级为「详情」视图；默认只显示「一次一问」或确认条。
   const [detailsOpen, setDetailsOpen] = useState(false)
+  /**
+   * 2026-11-05（用户反馈「无法继续调整」）：报告出完之后再发一句，后端走的是
+   * supplement 重新解析 → 停在「等待确认」，要用户再点一次确认。用户的体感是
+   * 「我发话了，什么都没发生」。这里记住「本轮是接着上一份报告改的」，
+   * 解析出**完整卡且无需再问**时自动确认并生成新版本；需要澄清时照旧停下来问。
+   */
+  const autoConfirmRef = useRef(false)
   // 选项提交（PATCH）进行中——防止连点造成两次 PATCH。
   const [answering, setAnswering] = useState(false)
   const prevCardRef = useRef<RC | null>(null)
@@ -155,6 +162,22 @@ export default function WorkbenchPage() {
   const awaitingCard = phase === 'awaiting_confirm' || phase === 'awaiting_missing'
   // 整卡只在两种情况下出现：执行中（只读）或用户主动「展开详情」
   const showCard = requirementMode === 'card'
+
+  // 2026-11-05：「接着上一份报告改」的一轮，若解析出的卡已经完整、且不需要再问，
+  // 就直接确认并生成新版本——否则用户看到的是「我发了话，界面停在等待确认」。
+  // 需要澄清（awaiting_missing / 有待问槽位）时照旧停下来问。
+  useEffect(() => {
+    if (!autoConfirmRef.current) return
+    if (phase === 'awaiting_missing' || questionField) {
+      autoConfirmRef.current = false
+      return
+    }
+    if (phase !== 'awaiting_confirm' || !requirement) return
+    if (cardLocked || patching || confirming) return
+    if (requirement.status !== 'complete' || (requirement.missing_fields?.length ?? 0) > 0) return
+    autoConfirmRef.current = false
+    void handlePatchAndConfirm(requirement)
+  }, [phase, requirement, cardLocked, patching, confirming, questionField])
 
   // ── 卡片更新提示（2026-11-03）────────────────────────────────────────────
   // 用户补充需求时，卡片内容会被重算——不解释的话看起来像「又冒出一张新卡」。
@@ -412,6 +435,8 @@ export default function WorkbenchPage() {
     setStageIndex(1)
     setLiveDetail(undefined)
     setTurnBaseVersion(selectedReportVersion)
+    // 接着上一份报告改：解析出完整卡就自动确认，不让用户再点一次（见 autoConfirmRef）
+    autoConfirmRef.current = phase === 'report_ready'
     // 新一轮开始：收起详情 + 清掉上一轮的执行过程（否则面板会把两轮步骤混在一起）
     setDetailsOpen(false)
     dispatch({ type: 'timeline/cleared' })

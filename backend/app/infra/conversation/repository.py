@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from app.infra.db.postgres import get_pool
+from app.utils.timefmt import utc_iso
 
 
 async def save_message(
@@ -40,7 +41,7 @@ async def get_messages(session_id: str, user_id: int) -> list[dict]:
                 "content": r["content"],
                 "message_type": r["message_type"],
                 "metadata": r["metadata"],
-                "created_at": r["created_at"].isoformat(),
+                "created_at": utc_iso(r["created_at"]),
             }
             for r in rows
         ]
@@ -104,7 +105,7 @@ async def list_sessions(user_id: int, limit: int = 30, offset: int = 0) -> list[
                     "title": v["title"] or "",
                     "status": v["status"],
                     "favorite": bool(v["favorite"]),
-                    "created_at": v["created_at"].isoformat() if v["created_at"] else "",
+                    "created_at": utc_iso(v["created_at"]) or "",
                 })
         return [
             {
@@ -112,7 +113,7 @@ async def list_sessions(user_id: int, limit: int = 30, offset: int = 0) -> list[
                 "title": r["title"] or "",
                 "phase": r["phase"] or "idle",
                 "msg_count": r["msg_count"],
-                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else "",
+                "updated_at": utc_iso(r["updated_at"]) or "",
                 "first_message": r["first_message"] or "",
                 "last_message": r["last_message"] or "",
                 "report_versions": versions_by_session.get(r["session_id"], []),

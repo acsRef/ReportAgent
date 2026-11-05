@@ -12,6 +12,7 @@ from app.infra.db import requirement_repository, report_version_repository
 from app.infra.db.postgres import get_pool
 from app.infra.checkpoint.session import session_manager
 from app.infra.conversation.repository import get_messages
+from app.utils.timefmt import utc_iso
 
 
 async def get_session_snapshot(
@@ -88,7 +89,7 @@ def _decode_requirement(row: dict | None) -> dict | None:
         "version": row["version"],
         "status": row["status"],
         "payload": payload,
-        "confirmed_at": row["confirmed_at"].isoformat() if row.get("confirmed_at") else None,
+        "confirmed_at": utc_iso(row.get("confirmed_at")),
     }
 
 
@@ -111,5 +112,5 @@ def _decode_latest_report(row: dict | None) -> dict | None:
         "query_snapshot": snapshot,
         "trace_id": row["trace_id"],
         "favorite": row["favorite"],
-        "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+        "created_at": utc_iso(row.get("created_at")),
     }

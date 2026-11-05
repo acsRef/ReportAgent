@@ -1422,7 +1422,9 @@ async def get_report_version(
     if isinstance(row.get("query_snapshot"), str):
         row["query_snapshot"] = _json.loads(row["query_snapshot"])
     if row.get("created_at"):
-        row["created_at"] = row["created_at"].isoformat()
+        from app.utils.timefmt import utc_iso
+
+        row["created_at"] = utc_iso(row["created_at"])
     payload = row.get("report_payload") or {}
     row["execution_status"] = payload.get("execution_status")
     return {"report": row}
