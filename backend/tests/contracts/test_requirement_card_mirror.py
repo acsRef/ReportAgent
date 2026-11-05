@@ -44,6 +44,8 @@ TS_REQUIREMENT_CARD_FIELDS = (
     "granularity",
     # 2026-11-03：明细/汇总（镜像 TS RequirementCard.detail_level）
     "detail_level",
+    # 2026-11-04（plan 2026-11-04-top-period-detail-intent）：「最高/最低的那一期」
+    "top_period",
     "scope",
     "dimensions",
     "analysis_methods",
