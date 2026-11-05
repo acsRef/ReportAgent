@@ -54,24 +54,23 @@ _NOISE_NAMES = frozenset({
 
 
 def format_progress_frame(
-    node: str, status: str, detail_text: str = "",
+    node: str, status: str, detail_text: str = "", reasoning_text: str = "",
 ) -> Optional[dict]:
     """node + 生命周期状态 → SSE trace 帧；未映射节点返回 None。
 
-    `detail_text` = 这一步的**结论**（P1-②/2026-11-04 用户要求「思考的内容也要输出」）：
-    意图、口径、行数、失败原因这类确定性短句，由 `progress_detail.detail()` 写入。
+    - `detail_text`：这一步的**结论**（意图/口径/行数/失败原因），由 `progress_detail` 写；
+    - `reasoning_text`：**模型原文思维链**（`reasoning_content`），由 `reasoning` 通道写。
+      两者分开传：结论可以直接当答案看，思维链只用于「看模型怎么想的」，
+      前端用独立块展示（可折叠），不混进结论文案。
     """
     hit = PROGRESS_NODES.get(node)
     if hit is None:
         return None
     kind, label = hit
-    return {
-        "event": "trace",
-        "data": json.dumps(
-            {"step": label, "status": status, "detail": detail_text, "kind": kind},
-            ensure_ascii=False,
-        ),
-    }
+    payload: dict = {"step": label, "status": status, "detail": detail_text, "kind": kind}
+    if reasoning_text:
+        payload["reasoning"] = reasoning_text
+    return {"event": "trace", "data": json.dumps(payload, ensure_ascii=False)}
 
 
 class ProgressTraceHandler(AsyncCallbackHandler):
@@ -111,12 +110,14 @@ class ProgressTraceHandler(AsyncCallbackHandler):
         self._last[node] = status
         # 只有「收尾」帧带内容（running 时节点还没有结论）
         detail_text = ""
+        reasoning_text = ""
         if status in ("success", "error"):
-            from app.infra.execution import progress_detail
+            from app.infra.execution import progress_detail, reasoning
 
             label = PROGRESS_NODES.get(node, ("", ""))[1]
             detail_text = progress_detail.current(label)
-        frame = format_progress_frame(node, status, detail_text)
+            reasoning_text = reasoning.current(node)
+        frame = format_progress_frame(node, status, detail_text, reasoning_text)
         if frame is not None:
             self._on_frame(frame)
 
@@ -151,6 +152,10 @@ class ProgressTraceHandler(AsyncCallbackHandler):
     ) -> None:
         node = (metadata or {}).get("langgraph_node") or (name or "")
         if node in PROGRESS_NODES:
+            # 2026-11-05：告诉推理通道「现在这个节点调模型时产生的思维链归谁」
+            from app.infra.execution import reasoning as reasoning_channel
+
+            reasoning_channel.set_node(node)
             # 线性图：新节点已开始 ⇒ 之前的节点必然结束（end 事件归因不了）
             self._close_pending(except_node=node)
             if node not in self._pending:

@@ -61,6 +61,8 @@ export interface TimelineEntry {
   nodeName: string
   status: 'pending' | 'running' | 'success' | 'error'
   detail?: string
+  /** 2026-11-05：模型原文思维链（`reasoning_content`），与 detail（我们判定的结论）分开。 */
+  reasoning?: string
   kind?: TraceProgressKind
   duration?: string
   timestamp: number

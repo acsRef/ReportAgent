@@ -88,6 +88,14 @@ export default function TracePanel({ entries, note = null, running }: Props) {
               <span className="wb-think-name">{entry.nodeName}</span>
               <span className="wb-think-status">{STATUS_TEXT[entry.status] ?? ''}</span>
               {entry.detail && <span className="wb-think-detail">{entry.detail}</span>}
+              {/* 2026-11-05：模型原文思维链（`reasoning_content`）。与 detail（我们判定的结论）
+                  分开显示：原文更长更碎，单独成块并保留换行。 */}
+              {entry.reasoning && (
+                <div className="wb-think-reasoning">
+                  <span className="wb-think-reasoning-tag">模型推理</span>
+                  <pre className="wb-think-reasoning-body">{entry.reasoning}</pre>
+                </div>
+              )}
             </li>
           ))}
         </ol>

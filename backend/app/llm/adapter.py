@@ -116,6 +116,15 @@ class LLMAdapter:
         elapsed_ms = int((time.monotonic() - start) * 1000)
         raw = (getattr(resp, "content", "") or "").strip()
         reasoning = _extract_reasoning(resp)
+        if reasoning:
+            # 2026-11-05：把模型的思维链写进「当前节点」的推理通道，
+            # ProgressTraceHandler 收尾时作为 trace 帧的 `reasoning` 字段发给前端。
+            try:
+                from app.infra.execution import reasoning as reasoning_channel
+
+                reasoning_channel.record(reasoning)
+            except Exception as exc:  # noqa: BLE001 - 观测失败不影响主流程
+                logger.debug("reasoning sink failed: %s", exc)
         text = strip_think_tags(raw)
         if not text:
             logger.warning("llm generate empty after strip raw=%r", raw[:2000])

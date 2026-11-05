@@ -226,6 +226,14 @@ async def _run_confirmed_graph(
         handler = ProgressTraceHandler(
             on_frame=lambda frame, _task=task: registry.publish(_task, frame),
         )
+        # 2026-11-05：执行/报告链的思维链通道（换推理模型后，SQL/报告节点也会带回 CoT）
+        from app.infra.execution import progress_detail as _pd
+        from app.infra.execution import reasoning as reasoning_channel
+
+        _detail_sink: dict[str, str] = {}
+        _detail_token = _pd.install(_detail_sink)
+        _reasoning_sink: dict[str, str] = {}
+        _reasoning_token = reasoning_channel.install(_reasoning_sink)
         config = {
             "configurable": {"thread_id": session_id},
             "callbacks": [handler],
@@ -233,6 +241,10 @@ async def _run_confirmed_graph(
         # P9：背景任务总预算（伞形 §200）——超时 → Persist FAILED → ReportVersion(error)
         # → 前端 error，不允许永远停在 generating。runner 有界 ⇒ registry 不会挂死。
         result = await run_with_timeout(graph.ainvoke(initial, config), MAX_TASK_DURATION)
+        # 把最后一个节点的 running 收成 success，并复位两条观测通道（结论 / 思维链）
+        handler.close_all()
+        _pd.reset(_detail_token)
+        reasoning_channel.reset(_reasoning_token)
         graph_completed = True
         status = result.get("execution_status", "FAILED")
         if status == "FAILED":
@@ -709,6 +721,12 @@ async def _run_requirement_graph(
         # 节点把「这一步的结论」写进 detail（意图/口径/待确认项…），收尾帧带上
         detail_sink: dict[str, str] = {}
         detail_token = progress_detail.install(detail_sink)
+        # 2026-11-05：模型思维链通道（节点里调模型拿到的 `reasoning_content`），
+        # 收尾帧的 `reasoning` 字段带上——前端在步骤下方独立展示。
+        from app.infra.execution import reasoning as reasoning_channel
+
+        reasoning_sink: dict[str, str] = {}
+        reasoning_token = reasoning_channel.install(reasoning_sink)
         try:
             with mcp_down.scoped(bool(mcp_down_flag)):
                 result = await run_with_timeout(
@@ -724,11 +742,13 @@ async def _run_requirement_graph(
             handler.close_all()
         finally:
             progress_detail.reset(detail_token)
+            reasoning_channel.reset(reasoning_token)
         completed = True
 
-        # 2026-11-05（plan turn-understanding-agent）：推理模型返回的思维链同步给前端。
-        # 作为一条独立 trace 帧发出（步骤名带「· 思考」），前端在过程面板里按步骤展示；
-        # 它只是观测，不参与任何判定（错判的依据不能当结论给用户看）。
+        # 2026-11-05（plan turn-understanding-agent）：**需求解析那一次**直连调用
+        # （`reasoning_client`，不走 adapter）拿到的思维链不经过 reasoning 通道，
+        # 这里补发一条独立 trace 帧（步骤名带「· 思考」）。
+        # 其余节点（若换成推理模型）走 adapter → reasoning 通道 → 拼进该步骤的 success 帧。
         _reasoning = result.get("turn_reasoning") or ""
         if _reasoning:
             registry.publish(task, {
@@ -736,7 +756,9 @@ async def _run_requirement_graph(
                 "data": json.dumps({
                     "step": "理解意图 · 思考",
                     "status": "success",
-                    "detail": _reasoning[:2000],
+                    # detail 只放一句说明；原文放 `reasoning`，前端用独立块渲染（保留换行）
+                    "detail": f"模型原文 {len(_reasoning)} 字",
+                    "reasoning": _reasoning[:4000],
                     "kind": "agent",
                 }, ensure_ascii=False),
             })

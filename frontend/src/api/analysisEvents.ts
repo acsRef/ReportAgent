@@ -142,6 +142,10 @@ function readTimelineEntry(payload: Record<string, unknown>): TimelineEntry | nu
     nodeName: payload.step,
     status,
     ...(typeof payload.detail === 'string' ? { detail: payload.detail } : {}),
+    // 2026-11-05：模型原文思维链（推理模型才有），前端在步骤下方单独展示
+    ...(typeof payload.reasoning === 'string' && payload.reasoning
+      ? { reasoning: payload.reasoning as string }
+      : {}),
     ...(kind ? { kind } : {}),
     timestamp: Date.now(),
   }

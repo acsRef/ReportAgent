@@ -264,3 +264,42 @@ LLM_TURN_TIMEOUT=90
 - `progress.PROGRESS_NODES` 没登记新节点 → 新链路的步骤帧全被丢弃（界面上看不到理解过程）；
 - 模型把指标写成「销售」这类半截词 → `project_card` 归一到注册表业务名（销售 → 销售额）；
   且 `UNSUPPORTED` 时不再装成「可直接确认」的卡（补一条阻塞项）。
+
+## 追加（同日，用户：「模型的推理链路不能给前端看吗 我说的是推理过程」）
+
+**之前只到了「步骤结论」这一层**：面板里是「理解意图｜对话行为 new_task｜目标 trend、anomaly」，
+那是我们判定的结论，不是模型原文。现在把 `reasoning_content` 真正送到界面：
+
+### 后端
+
+| 改动 | 说明 |
+|---|---|
+| `app/infra/execution/reasoning.py`（新） | 思维链通道（contextvar）：Adapter 记录 → `ProgressTraceHandler` 收尾时读 |
+| `LLMAdapter.generate_with_reasoning` | 取 provider 的 `reasoning_content`，写进**当前节点**的推理通道 |
+| `progress.format_progress_frame(..., reasoning_text="")` | trace 帧新增可选 `reasoning` 字段（与 `detail` 分离） |
+| `ProgressTraceHandler` | `on_chain_start` 记录当前节点；success 帧带上该节点的 CoT |
+| `main._run_requirement_graph` / `_run_confirmed_graph` | 两条链都安装/复位推理 sink；需求解析那次直连调用（`reasoning_client`）单独补发一条 `理解意图 · 思考` 帧 |
+
+### 前端
+
+- `TimelineEntry.reasoning?`（类型 + 解析）；
+- `TracePanel` 在步骤下方渲染「模型推理」块：等宽字体、保留换行、左侧 teal 边、最高 260px 可滚动；
+- 与 `detail`（结论）**并排分开**：结论是一句话，推理是原文。
+
+### 真机验收（`probe_reasoning_ui.mjs`）
+
+```
+步骤：安全检查 → 识别意图 → 准备分析数据 → 理解意图 → 归并任务 → 可报告性
+      → 投影需求卡 → 口径预览 → 保存需求卡 → 理解意图 · 思考（模型原文 1114 字）
+reasoningBlocks: 1
+首句：我们只需要输出JSON。需要理解用户原话："2024年华东销售趋势和异常"。上一轮为空，所以是新任务…
+```
+
+截图：`.e2elogs/reasoning_ui.png`。
+
+### 边界（要说清楚）
+
+- 只有**用推理模型调用的节点**才有原文推理：目前是 Turn Understanding（`LLM_TURN_MODEL=DeepSeek-V4-Flash`）；
+- SQL 规划/生成/报告叙述仍跑 V3（无 CoT）——但通道是通用的：那些节点一旦换推理模型，
+  它们的 CoT 会自动出现在对应步骤下面，不需要再改前端；
+- 推理原文**只做观测**：不参与判定、不当作结论、不下发到报告正文。
