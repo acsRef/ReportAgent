@@ -132,7 +132,14 @@ def _build_ddl(table_name: str, columns: list[dict]) -> str:
 
 
 def _parse_table_doc(text: str) -> dict | None:
-    """解析字典表结构文档 chunk → {table_name, description, columns}；失败返回 None。"""
+    """解析字典表结构文档 chunk → {table_name, description, columns}；失败返回 None。
+
+    兼容两种标题/字段形态（2026-11-05 与 backend/app/tools/rag_schema.py 对齐）：
+    - 旧格式：`# 表 \\`public.fact_orders\\`` + `## 字段` + `字段 order_id 类型 integer 含义 …`
+    - 新格式（ragent-py `render_table_doc` 改版）：`【表 public.fact_orders / 字段详解】` /
+      `# 表 public.fact_orders`（无 backtick）+ `## 字段清单` + Markdown 表格
+      （`| \\`order_id\\` | integer | 订单主键 | … |`）
+    """
     if not text:
         return None
     table_name = None
@@ -144,14 +151,35 @@ def _parse_table_doc(text: str) -> dict | None:
         if line.startswith("# 表 `"):
             inner = line.split("`")[1] if "`" in line else line
             table_name = inner.split(".")[-1].strip()
+        elif line.startswith("# 表 ") or line.startswith("【表 "):
+            prefix_len = len("# 表 ") if line.startswith("# 表 ") else len("【表 ")
+            inner = line[prefix_len:]
+            if "`" in inner:
+                inner = inner.split("`")[1] if inner.startswith("`") else inner.split("`")[0]
+            # chunk 标题可能带节名：`【表 public.fact_orders / 字段】` → 只取表名
+            table_name = inner.split("/")[0].split(".")[-1].strip()
         elif line.startswith("## 字段"):
             in_fields = True
         elif in_fields:
             m = re.match(r"^字段 (\S+) 类型 (.*?) 含义", line)
             if m:
                 columns.append({"name": m.group(1), "type": m.group(2).strip()})
-        elif not in_fields and table_name and line and not line.startswith(("#", "【")):
-            description_lines.append(line)
+            elif line.startswith("|"):
+                cells = [c.strip().strip("`").strip() for c in line.strip("|").split("|")]
+                if (
+                    len(cells) >= 2
+                    and cells[0].replace("-", "").strip()
+                    and not cells[0].startswith(("字段名", "--"))
+                ):
+                    columns.append({"name": cells[0], "type": cells[1]})
+        elif not in_fields and table_name and line and not line.startswith(("#", "【", "|", "-")):
+            # 「表 `public.dim_store` 用途:门店维度表…」也算描述（新格式的说明就在这一行）
+            note = line
+            if note.startswith("表 "):
+                note = note.split("用途:", 1)[1] if "用途:" in note else ""
+            note = note.strip().rstrip("。")
+            if note:
+                description_lines.append(note)
     if not table_name or not columns:
         return None
     return {
@@ -212,10 +240,26 @@ class SchemaRegistry:
             table = base.split("_", 1)[1] if "_" in base else base
             if not _is_analytical_table(table):
                 continue
+            # 2026-11-05：`chunk_count` 是**文档切片数**，不是字段数——之前直接当
+            # column_count 返回（7 张表里出现 1/2 这种明显错误）。这里改为解析该表的
+            # 字典文档，如实给出字段数与描述。
+            description = ""
+            column_count = 0
+            try:
+                items = _retrieve_dict(table, top_k=1)
+            except Exception as exc:  # noqa: BLE001 - 单表失败不拖垮整张清单
+                logger.warning("list_tables: retrieve %s failed: %s", table, exc)
+                items = []
+            for item in items:
+                parsed = _parse_table_doc(item.get("text") or "")
+                if parsed and parsed["table_name"] == table:
+                    description = parsed.get("description") or ""
+                    column_count = len(parsed.get("columns") or [])
+                    break
             results.append({
                 "table_name": table,
-                "description": (d.get("title") or "")[:120],
-                "column_count": int(d.get("chunk_count") or 0),
+                "description": description[:120] or (d.get("title") or "")[:120],
+                "column_count": column_count,
             })
         return results
 

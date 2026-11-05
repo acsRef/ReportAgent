@@ -16,6 +16,10 @@ ragent-py mcp_server (Retrieval Runtime, 已有子进程)
 
 - ReportAgent 不得重新实现 Embedding / Chunking / Vector Search / Reranking / RAG Indexing，只经 `MCP Client → RAG MCP Server` 使用（Forbidden Patterns 第 1/8 条）。
 - `mcp_schema_server/` 为本仓历史资产，无 backend 消费者；P5 判定保留但不在正路。
+  - 2026-11-05 追加：它已迁到 `mcp` SDK 2.x 的 `MCPServer` 写法并可独立启动
+    （`python -m mcp_schema_server.server`，或 `MCP_SCHEMA_TRANSPORT=streamable-http` 常驻
+    `http://127.0.0.1:8765/mcp`），作为**本仓扩展 MCP 工具的落点**；正路仍是上面那条
+    `mcp_client → ragent-py mcp_server`。见 plan `2026-11-05-mcp-schema-server-sdk2.md`。
 - 工具层以外禁止 `import app.tools.rag_schema / interface_dict_tools / mcp_client / mcp_errors` 与 `D:/PyProject/ragent-py` 硬编码（`test_mcp_boundary_freeze` 钉住）。
 
 ## 二、Tool 白名单与禁入清单
