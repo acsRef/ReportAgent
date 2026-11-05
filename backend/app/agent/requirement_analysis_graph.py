@@ -391,10 +391,48 @@ async def _persist_draft(state: RequirementAnalysisState) -> dict:
         f"已保存 #{draft_id} · {'需要补充' if card.missing_fields else '可直接确认'}"
         f"（{len(card.missing_fields)} 项待定）",
     )
+    # 2026-11-05（plan conversation-transcript-messages）：把「这一轮助手说了什么」也落库。
+    # 之前 `app.conversations` 只有用户提问行 + report_version 指针行，历史轮次渲染不出
+    # 助手的话 → 用户发下一句时，上一轮 Agent 的回复看起来「消失」了。
+    try:
+        from app.infra.conversation.repository import save_message
+
+        await save_message(
+            session_id, int(user_id or 0), "assistant",
+            _requirement_reply_text(card), "assistant_text",
+        )
+    except Exception as exc:  # noqa: BLE001 - 记录失败不影响需求卡主流程
+        logger.warning("save assistant_text failed: %s", exc)
     return {
         "draft_id": draft_id,
         "execution_status": "SUCCESS",
     }
+
+
+def _requirement_reply_text(card) -> str:
+    """需求轮结束后「助手说的那句话」（与前端确认气泡同一口径）。"""
+    scope = "、".join(card.scope) if card.scope else ""
+    metric = "、".join(card.target_metrics) if card.target_metrics else ""
+    subject = "的".join(part for part in (scope, metric) if part) or "这批数据"
+    head = f"{card.time_range or ''}{subject}".strip()
+    extras: list[str] = []
+    if card.granularity:
+        extras.append(
+            {"day": "按日", "week": "按周", "month": "按月",
+             "quarter": "按季度", "year": "按年"}.get(card.granularity, card.granularity)
+        )
+    if getattr(card, "top_period", None) is not None:
+        top = card.top_period
+        unit = {"day": "日", "week": "周", "month": "月", "quarter": "季度",
+                "year": "年"}.get(top.unit, top.unit)
+        word = {"both": "最高和最低", "min": "最低", "max": "最高"}.get(top.direction, "最高")
+        extras.append(f"{metric or '指标'}{word}的{unit}")
+    if card.detail_level == "detail":
+        extras.append("逐条明细")
+    sentence = "，".join(part for part in [head, *extras] if part)
+    if card.missing_fields:
+        return f"好，我理解为：{sentence}。还需要你补充 {len(card.missing_fields)} 项信息。"
+    return f"好，我理解为：{sentence}。确认后我就开始查数据。"
 
 
 @traced_node("requirement_preview")

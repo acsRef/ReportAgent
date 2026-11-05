@@ -208,10 +208,12 @@ async def _persist(
             new_version = row["version"]
 
             # Conversation pointer row
+            # 2026-11-05（plan conversation-transcript-messages）：content 里补一句人话，
+            # 否则历史轮次只看得到「vN 版本条」，助手这轮说的话在对话里是空白。
             await conn.execute(
                 """INSERT INTO app.conversations
                        (session_id, user_id, role, content, message_type, metadata)
-                   VALUES ($1, $2, 'assistant', NULL, 'report_version',
+                   VALUES ($1, $2, 'assistant', $4, 'report_version',
                            $3::jsonb)""",
                 session_id, user_id,
                 json.dumps(
@@ -223,6 +225,7 @@ async def _persist(
                     },
                     ensure_ascii=False,
                 ),
+                f"报告 v{new_version} 已生成：{title}",
             )
 
             # Session pointer + phase（current_phase / last_failed_action 由调用方语义决定）

@@ -99,7 +99,11 @@ function pairVersions(
 }
 
 /**
- * 历史轮次 = 除当轮以外的所有提问，按出现顺序配对版本。
+ * 历史轮次 = 除当轮以外的所有提问，按出现顺序配对「助手回复」与「报告版本」。
+ *
+ * 2026-11-05（plan conversation-transcript-messages）：一轮对话 = 问 + 答。
+ * 之前只配对版本，历史里没有助手说的话 → 用户发下一句时，上一轮 Agent 的回复
+ * 看起来凭空消失。现在把该轮之后的第一条 assistant 文本一起配进去。
  *
  * 版本归属在**全量**提问上算（含当轮），否则当轮拥有的版本会被错误地算到上一轮头上；
  * 算完再把尾部当轮剔除。只有尾部提问会被当成当轮：用户重复问了同一句话时，
@@ -113,14 +117,50 @@ export function buildHistoryTurns(
   const questions = toQuestions(messages)
   if (questions.length === 0) return []
 
+  const assistantByKey = pairAssistantText(messages, questions)
   const byKey = pairVersions(questions, versions)
   const turns: TimelineTurn[] = questions.map((question) => ({
     key: question.key,
     question: question.text,
     version: byKey.get(question.key) ?? null,
+    answer: assistantByKey.get(question.key) ?? null,
   }))
 
   const live = (liveQuestion ?? '').trim()
   if (live && turns[turns.length - 1].question === live) turns.pop()
   return turns
+}
+
+/** assistant 文本按时间归给「它之前最近的那个提问」。
+ *
+ * 优先取 `assistant_text`（需求轮那句「我理解为…」）；没有才用最后一条
+ * （例如只有 `报告 vN 已生成：…`）。报告本身由版本条承载，不重复进气泡。
+ */
+function pairAssistantText(
+  messages: ConversationMessage[],
+  questions: TurnQuestion[],
+): Map<string, string> {
+  const byKey = new Map<string, string>()
+  const primary = new Set<string>()
+  let current = -1
+  for (const message of messages) {
+    if (message.role === 'user') {
+      const text = (message.content ?? '').trim()
+      if (!text) continue
+      current = questions.findIndex((q) => q.key === `turn-${message.id}`)
+      continue
+    }
+    if (message.role !== 'assistant' || current < 0) continue
+    const text = (message.content ?? '').trim()
+    if (!text) continue
+    const key = questions[current].key
+    const isPrimary = (message.message_type ?? '') === 'assistant_text'
+    if (isPrimary) {
+      byKey.set(key, text)
+      primary.add(key)
+    } else if (!primary.has(key)) {
+      byKey.set(key, text)
+    }
+  }
+  return byKey
 }
