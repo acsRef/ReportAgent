@@ -143,10 +143,21 @@ export default function ReportPaper({
 
   const blocks: ReportBlock[] = adaptReport(payload as Parameters<typeof adaptReport>[0])
   const overviewBlock = blocks.find((block) => block.type === 'markdown')
-  const chartBlock = blocks.find((block) => block.type === 'chart')
+  // 2026-11-05（用户：「生成这种东西干什么」）：后端明确给了 `chart.type=table` 时没有图可画，
+  // 之前仍渲染「02 / VISUALIZATION」整节 → 一个空面板。现在整节不出现。
+  const chartBlock = blocks.find((block) => {
+    if (block.type !== 'chart') return false
+    const chartType = String((block.data as Record<string, unknown>)?.type ?? '')
+    return chartType !== 'table'
+  })
   const tableBlock = blocks.find((block) => block.type === 'table')
   const insight = typeof answer.insight === 'string' && answer.insight ? answer.insight : null
   const isEmpty = verdict === 'EMPTY'
+  // 单值结果（1 行 1 列）不该铺成「数据明细」表格——那是把 9.38 亿这种一个数
+  // 塞进 1×1 表里，信息量为零。改为一个醒目的数值块。
+  const tableRows = (tableBlock?.data as { rows?: unknown[] } | undefined)?.rows ?? []
+  const tableCols = (tableBlock?.data as { columns?: unknown[] } | undefined)?.columns ?? []
+  const isSingleValue = tableRows.length === 1 && tableCols.length === 1
 
   /** 收藏：乐观更新 + 失败回滚（PATCH 幂等，重试安全）。 */
   const toggleFavorite = async () => {
@@ -336,7 +347,31 @@ export default function ReportPaper({
           </section>
         )}
 
-        {tableBlock && (
+        {tableBlock && isSingleValue && (
+          <section className="wb-report-section">
+            <div className="wb-section-head">
+              <div>
+                <div className="wb-section-index">{nextIndex()} / METRIC</div>
+                <h2 className="wb-section-title">关键指标</h2>
+              </div>
+              <span className="wb-section-note">来自已校验 SQL 的查询结果</span>
+            </div>
+            <div className="wb-kpi">
+              <div className="wb-kpi-value">
+                {String((tableRows[0] as Record<string, unknown>)[
+                  String((tableCols[0] as { key?: string; title?: string }).key ??
+                    (tableCols[0] as { title?: string }).title ??
+                    '')
+                ] ?? '—')}
+              </div>
+              <div className="wb-kpi-label">
+                {String((tableCols[0] as { title?: string }).title ?? '')}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {tableBlock && !isSingleValue && (
           <section className="wb-report-section">
             <div className="wb-section-head">
               <div>

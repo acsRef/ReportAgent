@@ -163,21 +163,17 @@ export default function WorkbenchPage() {
   // 整卡只在两种情况下出现：执行中（只读）或用户主动「展开详情」
   const showCard = requirementMode === 'card'
 
-  // 2026-11-05：「接着上一份报告改」的一轮，若解析出的卡已经完整、且不需要再问，
-  // 就直接确认并生成新版本——否则用户看到的是「我发了话，界面停在等待确认」。
-  // 需要澄清（awaiting_missing / 有待问槽位）时照旧停下来问。
+  // 2026-11-05（用户：「你在这里生成卡片、生成这种东西干什么」）：
+  // **不自动确认、不自动跑 SQL**。上一版为了修「无法继续调整」做成了自动确认，
+  // 结果是用户没点确认就冒出报告——比「没反应」更糟。
+  // 现在：解析出完整卡就把确认条滚到视野里，由用户决定要不要生成。
   useEffect(() => {
     if (!autoConfirmRef.current) return
-    if (phase === 'awaiting_missing' || questionField) {
-      autoConfirmRef.current = false
-      return
-    }
     if (phase !== 'awaiting_confirm' || !requirement) return
-    if (cardLocked || patching || confirming) return
-    if (requirement.status !== 'complete' || (requirement.missing_fields?.length ?? 0) > 0) return
     autoConfirmRef.current = false
-    void handlePatchAndConfirm(requirement)
-  }, [phase, requirement, cardLocked, patching, confirming, questionField])
+    const node = document.querySelector('[aria-label="需求确认"]')
+    node?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [phase, requirement])
 
   // ── 卡片更新提示（2026-11-03）────────────────────────────────────────────
   // 用户补充需求时，卡片内容会被重算——不解释的话看起来像「又冒出一张新卡」。

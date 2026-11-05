@@ -805,6 +805,23 @@
   padding: 24px 30px 24px 34px;
   border-bottom: 1px solid var(--line);
 }
+/* 单值结果（1 行 1 列）用这个块，代替「1×1 数据明细表」（2026-11-05） */
+.wb-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 20px;
+  border: 1px solid var(--line-2);
+  border-left: 3px solid var(--teal);
+  border-radius: 6px;
+  background: var(--paper-2, var(--paper));
+}
+.wb-kpi-value {
+  font: 700 30px/1.15 var(--font-display);
+  color: var(--teal-deep, #0a5c50);
+  font-variant-numeric: tabular-nums;
+}
+.wb-kpi-label { color: var(--muted, #6b7280); font-size: 12px; }
 .wb-section-head {
   display: flex;
   align-items: flex-end;
