@@ -133,6 +133,36 @@ export function methodLabel(method: string): string {
 }
 
 /**
+ * 需求 → **一句人话**（2026-11-05，用户：「不要卡片，直接改成对话的方式」）。
+ *
+ * 之前确认消息是「已按你的补充更新：维度 → 时间、区域」+ 一排参数 chip，
+ * 读起来像表单回执而不是在跟人说话。这里把已确定的要素拼成一句：
+ *
+ *   `2024年华东的销售额，按月，做异常检测`
+ *
+ * 只拼有值的部分；口径若来自注册表默认值，用「（默认口径）」轻轻标一下。
+ */
+export function describeRequirement(card: RequirementCard | null): string {
+  if (!card) return ''
+  const scope = (card.scope ?? []).filter((item) => item && item !== 'ALL').join('、')
+  const metrics = (card.target_metrics ?? []).join('、')
+  const defaulted = (card.assumptions ?? []).some((item) =>
+    String(item.key ?? '').startsWith('metric_default:'),
+  )
+  const subject = [scope, metrics].filter(Boolean).join('的') || '这批数据'
+  const first = `${card.time_range ?? ''}${subject}`.trim()
+  const parts: string[] = first ? [first] : []
+  if (card.granularity) parts.push(GRANULARITY_TEXT[card.granularity] ?? card.granularity)
+  const topPeriod = topPeriodText(card)
+  if (topPeriod) parts.push(topPeriod)
+  if (card.detail_level === 'detail') parts.push('逐条明细')
+  const methods = (card.analysis_methods ?? []).map((m) => methodLabel(m))
+  if (methods.length) parts.push(methods.join('、'))
+  const sentence = parts.filter(Boolean).join('，')
+  return defaulted ? `${sentence}（默认口径）` : sentence
+}
+
+/**
  * 最高/最低的那一期 → 一句人话（2026-11-04，plan top-period-detail-intent）。
  *
  * 用户说「我只要2024年里最多月份的那个月的明细」时，之前界面上看不到「它听懂了

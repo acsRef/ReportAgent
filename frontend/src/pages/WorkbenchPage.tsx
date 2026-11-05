@@ -122,13 +122,10 @@ export default function WorkbenchPage() {
   const [turnBaseVersion, setTurnBaseVersion] = useState<number | null>(null)
   // 补充轮：告诉用户「卡片的哪些字段被改了」，避免看起来像凭空多出一张新卡。
   const [changeNote, setChangeNote] = useState<string | null>(null)
-  // 2026-11-04（Phase 5）：需求卡降级为「详情」视图；默认只显示「一次一问」或确认条。
-  const [detailsOpen, setDetailsOpen] = useState(false)
   /**
-   * 2026-11-05（用户反馈「无法继续调整」）：报告出完之后再发一句，后端走的是
-   * supplement 重新解析 → 停在「等待确认」，要用户再点一次确认。用户的体感是
-   * 「我发话了，什么都没发生」。这里记住「本轮是接着上一份报告改的」，
-   * 解析出**完整卡且无需再问**时自动确认并生成新版本；需要澄清时照旧停下来问。
+   * 2026-11-05（用户：「接着上一份报告改，发出去什么都没发生」→ 后来又说
+   * 「你在这里生成卡片、生成这种东西干什么」）：**不自动确认、不自动跑 SQL**，
+   * 只在解析出完整需求时把确认条滚进视野，由用户点「生成报告」。
    */
   const autoConfirmRef = useRef(false)
   // 选项提交（PATCH）进行中——防止连点造成两次 PATCH。
@@ -136,12 +133,6 @@ export default function WorkbenchPage() {
   const prevCardRef = useRef<RC | null>(null)
   const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
-  // 2026-11-04：**详情视图属于「一次查看」，不是一种模式**。
-  // 之前 `detailsOpen` 一旦点开就再不复位 → 之后每一轮新问题都直接渲染整张大卡
-  // （用户看到的就是「卡片怎么老在上面」）。这里随新卡到来 / 新一轮发送复位。
-  useEffect(() => {
-    setDetailsOpen(false)
-  }, [requirement?.id, requirement?.version])
 
   // 需求已确认并开始执行（或已出报告）→ 卡片只读。改需求走下方输入框（adjust）。
   // 2026-11-04（plan chat-like-conversation-flow）：`report_ready` 不再算锁定——
@@ -439,10 +430,10 @@ export default function WorkbenchPage() {
     setStageIndex(1)
     setLiveDetail(undefined)
     setTurnBaseVersion(selectedReportVersion)
-    // 接着上一份报告改：解析出完整卡就自动确认，不让用户再点一次（见 autoConfirmRef）
+    // 2026-11-05：**不自动确认**（用户：「你在这里生成卡片、生成这种东西干什么」）。
+    // 这里只记「本轮是接着报告改的」，用于把解析出来的确认条滚进视野。
     autoConfirmRef.current = phase === 'report_ready'
-    // 新一轮开始：收起详情 + 清掉上一轮的执行过程（否则面板会把两轮步骤混在一起）
-    setDetailsOpen(false)
+    // 新一轮开始：清掉上一轮的执行过程（否则面板会把两轮步骤混在一起）
     dispatch({ type: 'timeline/cleared' })
     const sid = activeSessionId ?? crypto.randomUUID()
     if (!activeSessionId) {
@@ -810,28 +801,18 @@ export default function WorkbenchPage() {
           {/* 确认 = 同一条消息形态：一句话 + 参数小结 + 一个按钮。
               「需求详情」在**这条消息里**就地展开（plan requirement-details-inline）：
               换页面/另起大卡会让唯一的动作（确认）从视野里消失，还多出一块空白气泡。 */}
+          {/* 确认 = 一句人话（2026-11-05 二次改造，用户：「不要卡片，直接从对话里读意图」）：
+              不再有「已按你的补充更新：维度 → …」的 diff，也不再有参数 chip 和「需求详情」；
+              参数就是这句话本身，按钮只有一个「生成报告」。 */}
           {showConfirmBar && requirement && (
             <ConfirmBar
               card={requirement}
-              changeNote={changeNote}
               busy={patching || confirming}
-              expanded={detailsOpen}
               trace={<TracePanel entries={timeline} note={timelineNote} running={busy || confirming} />}
               onConfirm={async () => {
                 await handlePatchAndConfirm(requirement)
               }}
-              onToggleDetails={() => setDetailsOpen((open) => !open)}
               onSupplement={() => composerRef.current?.focus()}
-              details={
-                <RequirementCardView
-                  variant="inline"
-                  card={requirement}
-                  readOnly
-                  changeNote={changeNote}
-                  onChange={() => {}}
-                  onConfirm={() => {}}
-                />
-              }
             />
           )}
 
