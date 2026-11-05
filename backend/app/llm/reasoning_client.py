@@ -27,6 +27,11 @@ class ReasoningReply:
     reasoning: str
     model: str
     elapsed_ms: int = 0
+    # 2026-11-05（plan live-session-issues D1）：思维链是否被**思考预算**截断。
+    # provider 用 `usage.completion_tokens_details.reasoning_tokens` 报出思考用量，
+    # 顶到 budget 时 CoT 会停在一句中间——不标注的话用户会以为界面坏了。
+    reasoning_tokens: int = 0
+    truncated: bool = False
 
 
 def turn_timeout() -> float:
@@ -71,7 +76,6 @@ def chat_with_reasoning(
             except (TypeError, ValueError):
                 thinking_budget = 512
         body["thinking_budget"] = thinking_budget
-
     url = f"{(config.base_url or '').rstrip('/')}/chat/completions"
     import time
 
@@ -101,12 +105,29 @@ def chat_with_reasoning(
         logger.warning("turn model bad json: %s", exc)
         return None
     choices = payload.get("choices") or []
-    message = (choices[0] or {}).get("message") if choices else {}
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    message = choice.get("message") if choices else {}
     if not isinstance(message, dict):
         return None
+
+    # 2026-11-05（plan live-session-issues D1）：判断思维链是否被思考预算截断。
+    usage = payload.get("usage") or {}
+    details = usage.get("completion_tokens_details") or {}
+    try:
+        reasoning_tokens = int((details or {}).get("reasoning_tokens") or 0)
+    except (TypeError, ValueError):
+        reasoning_tokens = 0
+    finish_reason = str(choice.get("finish_reason") or "")
+    budget = int(thinking_budget or 0)
+    truncated = finish_reason == "length" or (
+        budget > 0 and reasoning_tokens >= budget - 4
+    )
+
     return ReasoningReply(
         content=str(message.get("content") or ""),
         reasoning=str(message.get("reasoning_content") or ""),
         model=chosen,
         elapsed_ms=elapsed_ms,
+        reasoning_tokens=reasoning_tokens,
+        truncated=truncated,
     )

@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { TimelineEntry } from '../../types/report'
 import {
   looksLikeMarkdown,
   reasoningBlocks,
+  thoughtElapsedSeconds,
   thoughtSummary,
 } from './reasoningText'
 
@@ -57,9 +58,21 @@ export default function TracePanel({
 }: Props) {
   const [touched, setTouched] = useState(false)
   const [manualOpen, setManualOpen] = useState(false)
+  // 2026-11-05（plan live-session-issues D2）：执行中每秒刷新一次，让「还在跑」和
+  // 「卡死」在视觉上分得开（真机出现过 90s 只有静态「正在思考（理解意图）」）。
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [running])
 
   const failedAt = useMemo(
     () => entries.find((entry) => entry.status === 'error') ?? null,
+    [entries],
+  )
+  const activeRunning = useMemo(
+    () => [...entries].reverse().find((entry) => entry.status === 'running') ?? null,
     [entries],
   )
   const chain = useMemo(() => reasoningBlocks(entries), [entries])
@@ -67,7 +80,7 @@ export default function TracePanel({
   if (entries.length === 0 && !note) return null
 
   const open = touched ? manualOpen : autoOpen
-  const summary = thoughtSummary(entries, running)
+  const summary = thoughtSummary(entries, running, thoughtElapsedSeconds(activeRunning, now))
 
   return (
     <div className={`wb-think${running ? ' is-running' : ''}${failedAt ? ' is-failed' : ''}`}>

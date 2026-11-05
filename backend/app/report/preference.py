@@ -57,7 +57,54 @@ def apply_chart_preference(chart_config: dict, preferences: list[str]) -> dict:
     target = _preferred_chart_type(preferences or [])
     if target is None or not isinstance(chart_config, dict) or not chart_config:
         return chart_config
+    return _apply_type(chart_config, target)
 
+
+# ── 用户本轮**原话**里的显式图表要求（2026-11-05，plan live-session-issues D4）─────────
+#
+# 背景：`chart_advisor` 只看 QueryResult 的列形态；`apply_chart_preference` 只吃**召回的记忆
+# 偏好**。于是「按月份看，画饼图」这种**当轮明说**的要求没有任何通道，结果还是柱状图。
+#
+# 这里给「当轮原话」开一条确定性通道：词表与 chart_advisor 交集（pie/bar/table），
+# 优先级最高（显式指令 > 记忆偏好 > advisor 默认），数据不支持可视化时仍让位。
+
+_EXPLICIT_CHART_WORDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("饼图", "饼状图"), "pie"),
+    (("柱状图", "条形图", "柱形图"), "bar"),
+    (("表格",), "table"),
+)
+
+# 「不要表格 / 不用柱状图」不能被读成要它——词前 3 个字里出现否定词就跳过。
+_NEGATIONS = ("不", "别", "无需", "不是", "非")
+
+_TYPE_TO_WORD: dict[str, str] = {"pie": "饼图", "bar": "柱状图", "table": "表格"}
+
+
+def explicit_chart_type(text: str | None) -> str | None:
+    """从用户原话里读显式图表要求（`pie` / `bar` / `table`）；没有或是否定 → None。"""
+    if not text:
+        return None
+    for words, chart_type in _EXPLICIT_CHART_WORDS:
+        for word in words:
+            start = text.find(word)
+            while start >= 0:
+                prefix = text[max(0, start - 3):start]
+                if not any(neg in prefix for neg in _NEGATIONS):
+                    return chart_type
+                start = text.find(word, start + len(word))
+    return None
+
+
+def apply_explicit_chart_request(chart_config: dict, user_query: str | None) -> dict:
+    """按用户**当轮原话**覆盖图表类型（显式要求优先于记忆偏好）。"""
+    target = explicit_chart_type(user_query)
+    if target is None or not isinstance(chart_config, dict) or not chart_config:
+        return chart_config
+    return _apply_type(chart_config, target)
+
+
+def _apply_type(chart_config: dict, target: str) -> dict:
+    """把目标类型落到 chart_config 上（类型覆盖 + dimensions 键归一；不支持的形态让位）。"""
     cur_type = chart_config.get("type")
     if cur_type not in (_VISUAL_TYPES | {"table"}):
         return chart_config  # 无法识别的 chart_config 形态——防御，不碰
@@ -74,7 +121,7 @@ def apply_chart_preference(chart_config: dict, preferences: list[str]) -> dict:
     if cur_type not in _VISUAL_TYPES:
         return chart_config  # 数据不支持可视化 → 偏好让位，保持 table（§七）
     if cur_type == target:
-        return out  # 偏好与 chart_advisor 一致 → 仅拷贝返回（含其余字段）
+        return out  # 与 chart_advisor 一致 → 仅拷贝返回（含其余字段）
 
     # 跨类型 override：type + dimensions 键归一
     out["type"] = target

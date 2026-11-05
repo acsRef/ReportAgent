@@ -39,10 +39,21 @@ logger = logging.getLogger(__name__)
 # 极值目标最多支持两个方向（「最多和最小」）；再多就属于新的交互形态，先不猜。
 _MAX_GOALS = 6
 
+# 思维链被思考预算截断时追加的标注（UI 上直接可见，所以用中性中文）
+REASONING_TRUNCATED_MARKER = "（思考预算用尽，原文在此截断）"
+
 
 def turn_model() -> str | None:
     """Turn Understanding 专用模型；未配置时回落主模型（None = 用 adapter 默认）。"""
     return (os.getenv("LLM_TURN_MODEL") or "").strip() or None
+
+
+def fast_retry_timeout() -> float:
+    """「不思考」快速重试的超时（默认 45s）。"""
+    try:
+        return float(os.getenv("LLM_TURN_FAST_TIMEOUT", "45"))
+    except (TypeError, ValueError):
+        return 45.0
 
 
 def understand_turn(
@@ -54,14 +65,19 @@ def understand_turn(
     model: str | None = None,
     enable_thinking: bool | None = None,
     thinking_budget: int | None = None,
+    meta: dict | None = None,
 ) -> tuple[TurnPlan | None, str]:
     """调强模型产出 (TurnPlan, 思维链)；失败返回 (None, "") 让调用方回落旧解析。
 
     - `model`：本次调用用的模型（评测时逐个模型对比用）；None → `LLM_TURN_MODEL` → 主模型；
     - `enable_thinking` / `thinking_budget`：推理模型的思考开关与预算（provider 支持时透传）；
+    - `meta`：出参，记录这次走的是哪条路（`retried_without_thinking` / `reasoning_truncated`
+      / `failed`），供步骤 detail 如实说明——2026-11-05（plan live-session-issues D1/D2）；
     - 思维链只用于**观测**（trace/调试），不参与任何业务判断。
 
     失败**不猜**：宁可走旧路径，也不要拿一个半懂的 TurnPlan 去改任务状态。
+    但超时/HTTP 失败且默认开着思考时，会**立刻用不思考模式重试一次**（D2）——
+    多数情况下能拿回计划，比直接回落到通用解析好。
     """
     from app.llm.reasoning_client import chat_with_reasoning
 
@@ -78,9 +94,29 @@ def understand_turn(
         enable_thinking=enable_thinking,
         thinking_budget=thinking_budget,
     )
+    if reply is None and enable_thinking is not False:
+        # 超时/HTTP 失败：思考模式太慢时不硬等第二次 90s，直接换「不思考」快速重试。
+        logger.warning("turn understanding fell back to fast retry (thinking disabled)")
+        reply = chat_with_reasoning(
+            prompt,
+            model=chosen_model,
+            max_tokens=1200,
+            enable_thinking=False,
+            timeout=fast_retry_timeout(),
+        )
+        if reply is not None and meta is not None:
+            meta["retried_without_thinking"] = True
     if reply is None:
+        if meta is not None:
+            meta["failed"] = True
         return None, ""
+
     raw, reasoning = reply.content, reply.reasoning
+    if reply.truncated and reasoning:
+        # 预算用尽：原文停在半句。加一行标注，别让用户以为界面把内容吃了。
+        reasoning = f"{reasoning.rstrip()}\n\n{REASONING_TRUNCATED_MARKER}"
+        if meta is not None:
+            meta["reasoning_truncated"] = True
     parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(parsed, dict):
         logger.warning("turn understanding returned non-json: %s", str(raw)[:200])

@@ -6,9 +6,15 @@ from langchain_core.tools import tool
 
 from app.tools.rag_schema import (
     get_table_ddl_from_rag,
+    last_schema_error,
     list_tables_from_rag,
     search_tables_from_rag,
 )
+
+# 2026-11-05（plan live-session-issues D3）：把 schema 检索失败原因从 tools 层转发出去。
+# `app.agent.*` 不允许直接 import `app.tools.rag_schema`（P2 传输层边界钉子），
+# 但步骤文案需要如实说明「为什么没检索到」，所以由 tools 层做唯一出口。
+__all__ = ["search_tables", "get_table_ddl", "list_tables", "last_schema_error"]
 
 
 @tool

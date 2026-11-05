@@ -10,7 +10,11 @@ from langgraph.graph import END, StateGraph
 
 from app.llm import _format_tools_for_prompt, call_llm
 from app.models.contracts import QueryResult
-from app.report.preference import apply_chart_preference
+from app.report.preference import (
+    apply_chart_preference,
+    apply_explicit_chart_request,
+    explicit_chart_type,
+)
 from app.report.spec import ComponentSpec, DataBinding, ReportSpec, TableSpec
 from app.tools.sql_tools import chart_advisor, insight_analyst
 from app.utils.text import safe_json_parse, strip_markdown_fence
@@ -44,6 +48,27 @@ class ReportAgentState(TypedDict):
     # 2026-11-02：需求卡透传——报告规划需要 analysis_methods / dimensions / summary，
     # 否则「分析趋势和异常」只会产出一张图 + 一张表。
     requirement_card: Optional[dict]
+
+
+def _user_words(state: ReportAgentState) -> str:
+    """用户在这一轮说过的原话（用于显式图表要求等确定性判定）。
+
+    confirm 流里 `user_query` 是空串（安全闸约定），真正的原话在需求卡 `summary`；
+    adjust 流还会带 `adjustment_text`。三处拼起来判断，顺序=用户原话优先。
+
+    `requirement_card` 在子图里是 **dict**（父图 `model_dump()` 透传），
+    不能按 Pydantic 模型取属性——2026-11-05 真机踩过（`getattr(dict, "summary")` 恒为空）。
+    """
+    card = state.get("requirement_card") or {}
+    if isinstance(card, dict):
+        summary = card.get("summary") or ""
+    else:  # 兼容传模型的情况（测试/其它调用点）
+        summary = getattr(card, "summary", "") or ""
+    return " ".join(
+        part
+        for part in (state.get("user_query") or "", str(summary), state.get("adjustment_text") or "")
+        if part
+    )
 
 
 def _validate_qr(qr_raw) -> Optional[QueryResult]:
@@ -442,7 +467,16 @@ def _build_output(state: ReportAgentState) -> dict:
 
     # P16 D3：视觉化偏好确定性应用（memory-architecture §二触发 2）——ContextRuntime
     # 召回的 preference 文本 → chart type override；词表外偏好/数据不支持时让位。
-    chart_config = apply_chart_preference(chart_config, state.get("report_preferences") or [])
+    # 2026-11-05（plan live-session-issues D4）：**用户当轮原话**里的显式要求（「画饼图」）
+    # 优先级最高——命中它就不再让记忆偏好二次覆盖（显式指令 > 记忆偏好 > advisor 默认）。
+    #
+    # 注意 confirm 流的 `user_query` 是**空串**（见 confirmed_execution_graph 的安全闸说明），
+    # 用户原话在需求卡 summary / 调整文本里——三处都看，否则「画饼图」永远进不了图表决策。
+    explicit_query = _user_words(state)
+    if explicit_chart_type(explicit_query):
+        chart_config = apply_explicit_chart_request(chart_config, explicit_query)
+    else:
+        chart_config = apply_chart_preference(chart_config, state.get("report_preferences") or [])
 
     # P10：v2 spec 带 provenance——chart 行/字段锚定 QueryResult（validator 钉），
     # table 列直通 QueryResult 列名，kpi 不生产（无业务诉求，schema+校验机制就位）。

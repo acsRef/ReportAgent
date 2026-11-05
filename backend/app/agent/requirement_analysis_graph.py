@@ -234,11 +234,24 @@ async def _data_agent(state: RequirementAnalysisState) -> dict:
                 str(getattr(t, "name", "") or "") for t in tables[:5]
             ),
         )
-    else:
+    elif not ds.get("has_data_intent", True):
+        # 2026-11-05（plan live-session-issues D3）：这里此前写「schema 未连通（MCP 不可达
+        # 或无需检索）」——把「本轮不需要检索」说成了「MCP 断了」，用户直接被误导。
         _progress_detail(
             "准备分析数据",
-            "schema 未连通（MCP 不可达或无需检索）→ 用本地 schema 兜底",
+            "本轮沿用上一轮 schema（问题里没有新的表/字段线索，跳过检索）",
         )
+    else:
+        from app.tools.data_tools import last_schema_error
+
+        error = last_schema_error()
+        if error:
+            _progress_detail(
+                "准备分析数据",
+                f"schema 检索失败（{error[:60]}）→ 用本地 schema 兜底",
+            )
+        else:
+            _progress_detail("准备分析数据", "未检索到匹配的表 → 用本地 schema 兜底")
     return {
         "schema_context": ds.get("schema_context"),
         "execution_status": "RUNNING",
@@ -533,22 +546,39 @@ async def _turn_understand(state: RequirementAnalysisState) -> dict:
         logger.warning("load_latest_task failed: %s", exc)
 
     digest = _schema_digest(state.get("schema_context"))
+    meta: dict = {}
     plan, reasoning = understand_turn(
         state.get("user_query", ""), task=prior, history=None, schema_digest=digest,
+        meta=meta,
     )
-    _progress_detail(
-        "理解意图",
-        (
+    # 2026-11-05（plan live-session-issues D1/D2）：把「这一次到底发生了什么」如实写进
+    # 步骤结论——超时后用不思考模式救回来了 / 思维链被思考预算截断了，都不藏。
+    if plan is not None:
+        detail = (
             f"对话行为 {plan.conversation_act}｜目标 "
             + "、".join(goal.type for goal in plan.analysis_goals)
-            if plan is not None
+        )
+        if meta.get("retried_without_thinking"):
+            detail += "｜首轮超时 → 不思考模式重试成功"
+        if meta.get("reasoning_truncated"):
+            detail += "｜思考预算用尽（思维链被截断）"
+    else:
+        detail = (
+            "理解失败（模型超时/输出不合法），回落通用解析"
+            if meta.get("failed")
             else "理解失败，回落通用解析"
-        ),
-    )
+        )
+    _progress_detail("理解意图", detail)
     # 2026-11-05：推理模型的思维链同步给前端（由 `_run_requirement_graph` 在图结束后
     # 作为一条额外的 trace 帧发出：步骤名「理解意图 · 思考」，正文是 CoT 原文）。
     # 只做观测：不参与判定，也不当作「对用户的解释」。
-    return {"turn_plan": plan, "turn_reasoning": reasoning[:4000] if reasoning else ""}
+    # 载入 state 时按 4000 字裁剪，但「思考预算用尽」标注必须留在末尾（否则用户看不到原因）。
+    from app.agent.turn_understanding import REASONING_TRUNCATED_MARKER
+
+    clipped = reasoning[:4000]
+    if REASONING_TRUNCATED_MARKER in reasoning and REASONING_TRUNCATED_MARKER not in clipped:
+        clipped = clipped.rstrip() + "\n\n" + REASONING_TRUNCATED_MARKER
+    return {"turn_plan": plan, "turn_reasoning": clipped}
 
 
 @traced_node("task_reduce")

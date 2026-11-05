@@ -5,6 +5,7 @@ import {
   looksLikeMarkdown,
   reasoningBlocks,
   thoughtDurationMs,
+  thoughtElapsedSeconds,
   thoughtSummary,
 } from '../reasoningText'
 import type { TimelineEntry } from '../../../types/report'
@@ -41,12 +42,14 @@ describe('formatThoughtDuration — 讲时间不讲步骤数', () => {
 })
 
 describe('thoughtSummary — 三种状态三句话', () => {
-  it('执行中讲「在干什么」', () => {
+  it('执行中讲「在干什么」，带等待秒数（2026-11-05 D2：让「还在跑」和「卡死」分开）', () => {
     const entries = [
       entry('安全检查', 'success', 1000),
       entry('解析需求', 'running', 2000),
     ]
     expect(thoughtSummary(entries, true)).toBe('正在思考（解析需求）')
+    expect(thoughtSummary(entries, true, 12)).toBe('正在思考（解析需求 · 12s）')
+    expect(thoughtSummary(entries, true, 0)).toBe('正在思考（解析需求）')
   })
 
   it('执行中但没有 running 步骤 → 准备中', () => {
@@ -79,6 +82,21 @@ describe('thoughtDurationMs', () => {
   it('首尾跨度；空列表为 0', () => {
     expect(thoughtDurationMs([entry('a', 'success', 1000), entry('b', 'success', 4000)])).toBe(3000)
     expect(thoughtDurationMs([])).toBe(0)
+  })
+})
+
+describe('thoughtElapsedSeconds — 执行中「已经等了多久」', () => {
+  it('正常秒数', () => {
+    expect(thoughtElapsedSeconds(entry('解析需求', 'running', 10_000), 25_400)).toBe(15)
+  })
+
+  it('没有 running 步骤 → null', () => {
+    expect(thoughtElapsedSeconds(null, 25_400)).toBeNull()
+  })
+
+  it('时间戳在未来/过旧 → null（历史数据或时钟错位，不显示荒谬秒数）', () => {
+    expect(thoughtElapsedSeconds(entry('解析需求', 'running', 30_000), 25_000)).toBeNull()
+    expect(thoughtElapsedSeconds(entry('解析需求', 'running', 1), 1_000_000)).toBeNull()
   })
 })
 

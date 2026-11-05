@@ -190,6 +190,22 @@ def _list_dict_docs() -> list[dict]:
     return [d for d in resp.json() if d.get("kb_id") == kb_id]
 
 
+# 2026-11-05（plan live-session-issues D3）：最近一次 schema 检索的失败原因。
+# 工具层契约仍是「失败返回 []、不阻塞主链」，但**步骤文案**要能说清是「没命中」还是
+# 「MCP 不可达」——此前一律写成「schema 未连通（MCP 不可达或无需检索）」，误导用户。
+_last_schema_error: str | None = None
+
+
+def last_schema_error() -> str | None:
+    """最近一次 `search_tables_from_rag` 的失败原因（成功时为 None）。"""
+    return _last_schema_error
+
+
+def _set_schema_error(message: str | None) -> None:
+    global _last_schema_error
+    _last_schema_error = message
+
+
 def search_tables_from_rag(query: str, top_k: int = 3) -> list[dict]:
     """检索字典 KB → 解析命中表文档 → 结构化 schema 列表。
 
@@ -199,6 +215,7 @@ def search_tables_from_rag(query: str, top_k: int = 3) -> list[dict]:
       - 其它 Exception → 返回 []（兜底）
 
     不抛错到上游——SQL 生成主流程不应因 schema 检索失败阻塞。
+    失败原因写进 `_last_schema_error`，供步骤文案如实说明（D3）。
     """
     try:
         items = _retrieve_dict(query, top_k * _MAX_RETRIEVE)
@@ -207,10 +224,13 @@ def search_tables_from_rag(query: str, top_k: int = 3) -> list[dict]:
             "schema search from rag failed (MCP): %s [%s]",
             exc.detail, exc.code.value,
         )
+        _set_schema_error(f"MCP {exc.code.value}：{exc.detail}")
         return []
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 兜底：不阻塞主链
         logger.warning("schema search from rag failed: %s", exc)
+        _set_schema_error(f"{type(exc).__name__}：{exc}")
         return []
+    _set_schema_error(None)
     results = []
     for it in items:
         parsed = _parse_table_doc(it.get("text") or "")

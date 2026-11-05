@@ -11,7 +11,8 @@
 | 主链路 | 需求理解 → 确认 → SQL → 报告 → 落库，**可用**（真机两轮验证过） |
 | 需求层 | **Turn Understanding Agent 已上**（强模型产 `TurnPlan` + 确定性 Reducer + 可报告性裁决，`TURN_UNDERSTANDING=1`）；`RequirementCard` 契约不变 |
 | 需求模型 | `LLM_TURN_MODEL=deepseek-ai/DeepSeek-V4-Flash`（有 CoT，中位 15s，JSON 8/8） |
-| 可观测 | 模型**原文思维链**进 trace；「已思考（用时 N 秒）」块当轮展开、历史收起；**链路已落库**（`turn_trace` 行），F5 后历史轮次仍能点开读 |
+| 可观测 | 模型**原文思维链**进 trace；「已思考（用时 N 秒）」块当轮展开、历史收起；**链路已落库**（`turn_trace` 行），F5 后历史轮次仍能点开读；思考被预算截断时**有标注** |
+| 图表 | 决策顺序 = **用户当轮原话**（"画饼图/柱状图/表格"）> 记忆偏好 > `chart_advisor` 默认 |
 | 对话记录 | `app.conversations` 是**真对话记录**（user / assistant_text / 报告指针 / turn_trace 四类行），历史不整表覆盖 |
 | 消息模型 | **append-only 聊天账本**（`stores/chatTranscript.ts`）：发送即 append，按 `serverId` 合并 |
 | 视觉形态 | 一轮 = 一条用户消息 + **一条**助手消息（过程/状态/动作/进度都在里面）；卡片只在「需求详情」按需展开 |
@@ -25,6 +26,7 @@
 python .e2elogs/probe_transcript.py          # 两轮：问 + 答是否都落库（transcript）
 node   .e2elogs/probe_reasoning_ui.mjs       # 「已思考（用时 N 秒）」+ 模型原文链路 + 执行步骤（8 项判据）
 node   .e2elogs/probe_trace_persistence.mjs  # 思考链路落库：两行 turn_trace + F5 后仍能展开读原文（12 项判据）
+node   .e2elogs/probe_live_issues.mjs        # 「画饼图」出 pie + schema 步骤文案 + 等待秒数 + 截断标注（5 项判据）
 node   .e2elogs/probe_clean_two_turns.mjs    # 两轮：一份报告 / 一条助手消息 / 历史仍在
 node   .e2elogs/probe_hit_test.mjs           # 全页按钮命中测试（被遮挡元素应为 0）
 node   .e2elogs/probe_reasoning_models.py    # 推理模型直连探针（CoT / 延迟）
@@ -67,6 +69,7 @@ Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
 | 12 | **P0 消息模型**（见 §3）：append-only 账本 + 一条助手消息 + 去只读整卡 + 详情按需；修合并错序真 bug | `a1d3596` |
 | 13 | **思考链路重塑**（plan `2026-11-05-reasoning-chain-display.md`）：头部「已思考（用时 N 秒）」+ 展开读模型原文（纯文本 `pre-wrap` / markdown 分别渲染）+ 执行步骤结论；当轮展开、历史收起；删掉步骤内嵌的等宽原文块 | 见 plan 落地记录 |
 | 14 | **思考链路落库**（plan `2026-11-05-trace-persistence.md`）：`app.conversations` 加 `turn_trace` 行（entries + 时长 + 原文），两个 runner 顺手收集落库；前端按行序挂到该轮助手消息；顺带补闲聊 `assistant_text` | 见 plan 落地记录 |
+| 15 | **真机 5 问收口**（plan `2026-11-05-live-session-issues.md`）：思考截断标注 / 超时快速重试 + 等待秒数 / schema 步骤文案拆四种 / 显式图表要求（「画饼图」→ pie，优先于记忆偏好） | 见 plan 落地记录 |
 
 ### 2026-11-04 做完的事
 
@@ -261,6 +264,18 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
 19. **`app.conversations` 里有四类行**：`text`（用户提问）/`assistant_text`（助手那句话）/
     `report_version`（版本指针）/`turn_trace`（思考链路）。**只有前两类是气泡**；后两类由
     版本条与思考块承载，统计口径（`list_sessions` 的 msg_count / 首末句）要排除 `turn_trace`。
+20. **confirm 流的 `user_query` 是空串**（安全闸约定）：报告层要读用户原话（图表类型、口径…）
+    必须同时看 `requirement_card.summary` 与 `adjustment_text`。而且报告子图里
+    `requirement_card` 是 **dict**（父图 model_dump），`getattr(dict, "summary")` 恒为空——
+    2026-11-05 饼图第一次没生效就是这个。
+21. **思考链路会被 `TURN_THINKING_BUDGET`（默认 512 tokens）截断**，`finish_reason` 仍是 `stop`，
+    只能靠 `usage.completion_tokens_details.reasoning_tokens` 判断。现在截断会标注；
+    想要完整链路就调大预算（代价是每轮更慢，也更容易撞 `LLM_TURN_TIMEOUT=90`）。
+22. **turn 模型超时会回落到通用解析**：现在超时后先自动用「不思考」模式重试一次
+    （`LLM_TURN_FAST_TIMEOUT`，默认 45s），两次都失败才回落——排查「理解失败」先看后端日志
+    的 `turn model http failed`。
+23. **`app/agent/*` 不能 import `app.tools.rag_schema`**（P2 传输层边界钉子）：需要 schema 检索
+    的失败原因走 `app.tools.data_tools.last_schema_error` 转发，别直连。
 
 ## 5. 文档地图
 

@@ -29,13 +29,22 @@ export function thoughtDurationMs(entries: TimelineEntry[]): number {
 /**
  * 折叠头文案。
  *
- * 执行中讲「在干什么」，结束后讲「想了多久」，中途失败/被停止则点名断在哪一步
- * ——三种都是用户当下最想知道的那一句。
+ * 执行中讲「在干什么」（可选带上**已经等了多久**——2026-11-05 真机 90s 等待时
+ * 界面只有一个静态词，用户以为卡死），结束后讲「想了多久」，中途失败/被停止则
+ * 点名断在哪一步——三种都是用户当下最想知道的那一句。
  */
-export function thoughtSummary(entries: TimelineEntry[], running: boolean): string {
+export function thoughtSummary(
+  entries: TimelineEntry[],
+  running: boolean,
+  elapsedSeconds?: number | null,
+): string {
   if (running) {
     const active = [...entries].reverse().find((entry) => entry.status === 'running')
-    return `正在思考（${active?.nodeName ?? '准备中'}）`
+    const waited =
+      typeof elapsedSeconds === 'number' && elapsedSeconds >= 1
+        ? ` · ${elapsedSeconds}s`
+        : ''
+    return `正在思考（${active?.nodeName ?? '准备中'}${waited}）`
   }
 
   const duration = formatThoughtDuration(thoughtDurationMs(entries))
@@ -44,6 +53,22 @@ export function thoughtSummary(entries: TimelineEntry[], running: boolean): stri
   const stopped = entries.find((entry) => entry.status === 'pending')
   if (stopped) return `已停止于「${stopped.nodeName}」（后台继续）`
   return `已思考（用时 ${duration}）`
+}
+
+/**
+ * 执行中那一步「已经等了多久」。
+ *
+ * 上限 600s 与 `MAX_TASK_DURATION` 对齐：超过说明时间戳不可信（历史数据 / 时钟错位），
+ * 宁可不显示，也不要显示一个荒谬的秒数。
+ */
+export function thoughtElapsedSeconds(
+  entry: TimelineEntry | null | undefined,
+  now: number,
+): number | null {
+  if (!entry) return null
+  const seconds = Math.floor((now - entry.timestamp) / 1000)
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > 600) return null
+  return seconds
 }
 
 /** 有原文的节点 → 一条思考链路（按到达顺序）。 */

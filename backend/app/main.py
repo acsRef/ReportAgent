@@ -768,14 +768,20 @@ async def _run_requirement_graph(
         # 其余节点（若换成推理模型）走 adapter → reasoning 通道 → 拼进该步骤的 success 帧。
         _reasoning = result.get("turn_reasoning") or ""
         if _reasoning:
+            from app.agent.turn_understanding import REASONING_TRUNCATED_MARKER
+
+            _truncated = REASONING_TRUNCATED_MARKER in _reasoning
+            _detail = f"模型原文 {len(_reasoning)} 字"
+            if _truncated:
+                _detail += "（思考预算用尽，已截断）"
             reasoning_frame = {
                 "event": "trace",
                 "data": json.dumps({
                     "step": "理解意图 · 思考",
                     "status": "success",
                     # detail 只放一句说明；原文放 `reasoning`，前端用独立块渲染（保留换行）
-                    "detail": f"模型原文 {len(_reasoning)} 字",
-                    "reasoning": _reasoning[:4000],
+                    "detail": _detail,
+                    "reasoning": _reasoning,
                     "kind": "agent",
                 }, ensure_ascii=False),
             }

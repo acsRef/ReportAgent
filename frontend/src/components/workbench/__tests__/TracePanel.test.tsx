@@ -37,6 +37,16 @@ describe('TracePanel — 「已思考（用时 N 秒）」+ 思考链路（2026-
     expect(screen.queryByText('安全检查')).toBeNull()
   })
 
+  // 2026-11-05（plan live-session-issues D2）：真机出现过 90s 只有一个静态词，用户以为卡死。
+  it('运行中超过 1 秒后显示已等待秒数', () => {
+    const justStarted: TimelineEntry[] = [
+      { ...entry('理解意图', 'running'), timestamp: Date.now() - 5_000 },
+    ]
+    render(<TracePanel entries={justStarted} running />)
+
+    expect(screen.getByText(/正在思考（理解意图 · [456]s）/)).toBeTruthy()
+  })
+
   it('结束后：一行「已思考（用时 N 秒）」——讲时间，不讲步骤数', () => {
     render(<TracePanel entries={DONE} running={false} />)
 
