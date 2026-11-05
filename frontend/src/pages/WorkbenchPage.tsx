@@ -453,6 +453,9 @@ export default function WorkbenchPage() {
       dispatch({ type: 'session/selected', sessionId: sid })
     }
     const mode = chatModeForPhase(phase)
+    // 2026-11-05：发送即拉一次会话消息——后端在 /chat 起手就把这句话落库了，
+    // 早拉一次能保证「上一句」立刻进入历史（见下方 requirement 帧处的说明）。
+    void refreshMessages(sid)
     // P11 Review-1 P1-2：openChat 返回 AbortController——必须 armStream 注册到
     // 单例，否则 adjust 模式下「停止」按钮实际无效（SSE 继续收事件）。
     const controller = openChat(
@@ -475,6 +478,19 @@ export default function WorkbenchPage() {
           setCasualReply,
           onTrace: handleProgress,
         })
+        // 2026-11-05（用户：「我说了啥都记录下来了，为什么不显示」）：
+        // 历史气泡来自 `messages`，而它此前**只在 report_ready / error 时刷新**。
+        // 于是「第一轮还在等确认时发第二句」这种最常见的追问里，第一句在界面上消失
+        // （库里明明有）。这里在需求轮落地（requirement 帧）和终态（report/error/done）
+        // 各拉一次会话消息，保证历史永远和库里一致；尾部当前提问会被 historyTurns 自动剔除。
+        if (
+          evt.type === 'requirement' ||
+          evt.type === 'report' ||
+          evt.type === 'error' ||
+          evt.type === 'done'
+        ) {
+          void refreshMessages(sid)
+        }
       },
       undefined,
       // 2026-11-03：流「静默结束」（无 requirement/report/error/done）时前端自己
