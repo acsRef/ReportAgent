@@ -40,6 +40,10 @@ pytest backend/tests/graphs/test_requirement_parser.py -q
 
 # Turn Understanding 模型对比（8 条真实多轮用例）
 python -m evaluation.turn_understanding_runner --models deepseek-ai/DeepSeek-V4-Flash
+
+# 维护：清理探针会话（消息 / 草稿 / 版本 / 审计 / 会话级记忆 / trace / checkpoint 一起删）
+Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
+  docker exec -i ragent-postgres psql -U ragent -d ragent -v before="'2026-11-05 00:00'" -f -
 ```
 
 启动服务（顺序）：`ragent-py :8000` → `backend :8100` → `frontend :3000`。
