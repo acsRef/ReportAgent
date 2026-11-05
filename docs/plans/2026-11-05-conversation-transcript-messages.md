@@ -185,6 +185,13 @@ history        = 除当轮以外的所有轮次（ConversationTimeline 数据源
 
 ## 落地记录（2026-11-05 21:00，修订 A 全部完成）
 
+> commit `a1d3596`（feat(ui): collapse message rendering into an append-only transcript）。
+> 同一提交里同步了 Playwright 选择器：`e2e/helpers/page-objects.ts` 的
+> `expectRequirementCard` 改等 `[aria-label="需求确认|需求澄清"]`、`expectBusy` 改等
+> `.wb-turn-progress`；`11/12/screenshots` 三个 spec 的旧选择器（`.wb-requirement-card` /
+> `.wb-progress-card`）一并改掉。**Contract E2E 本次没跑**（要 mock backend + 真 PG，
+> 独立 nightly/manual workflow，且此前已有 known-red），下次夜间跑时以本提交为准。
+
 ### 实际改动
 
 | 文件 | 改动 |

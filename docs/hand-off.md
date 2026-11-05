@@ -59,7 +59,7 @@ python -m evaluation.turn_understanding_runner --models deepseek-ai/DeepSeek-V4-
 | 9 | 选型 `DeepSeek-V4-Flash`（JSON 8/8、CoT 8/8、中位 15.2s）；新增直连 `reasoning_client` | `07a1fb3` |
 | 10 | **模型原文思维链**进 trace `reasoning` 字段，前端「模型推理」块展示 | `0f9a8fb` |
 | 11 | **对话记录**：assistant 文本落库，历史轮次渲染「问 + 答 + 版本条」 | `4650f69` |
-| 12 | **P0 消息模型**（见 §3）：append-only 账本 + 一条助手消息 + 去只读整卡 + 详情按需；修合并错序真 bug | 见 plan 落地记录 |
+| 12 | **P0 消息模型**（见 §3）：append-only 账本 + 一条助手消息 + 去只读整卡 + 详情按需；修合并错序真 bug | `a1d3596` |
 
 ### 2026-11-04 做完的事
 
