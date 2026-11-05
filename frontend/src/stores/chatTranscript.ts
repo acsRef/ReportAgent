@@ -18,6 +18,9 @@ import type { TimelineEntry } from '../types/report'
 
 export type ChatRole = 'user' | 'assistant'
 
+/** `app.conversations.message_type`：落库的思考链路的行类型（2026-11-05）。 */
+export const TURN_TRACE_MESSAGE_TYPE = 'turn_trace'
+
 /** 一条消息的生命周期：流式中 → 完成 / 失败。 */
 export type ChatStatus = 'streaming' | 'done' | 'error'
 
@@ -204,12 +207,95 @@ function numberOrNull(value: unknown): number | null {
  *
  * - `role='system'`（`requirement_patch` 指针行）没有可读文本，不进；
  * - `message_type='report_version'` 的指针行由「版本条」表达，重复渲染会让一轮
- *   冒出两条助手气泡。
+ *   冒出两条助手气泡；
+ * - `message_type='turn_trace'`（2026-11-05 落库的思考链路）只提供 `trace`
+ *   数据，由 `mergeServerHistory` 挂到该轮助手消息上，本身不是消息。
  */
 function isTranscriptRow(row: ConversationMessage): boolean {
   if (row.role !== 'user' && row.role !== 'assistant') return false
-  if ((row.message_type ?? '') === 'report_version') return false
+  const type = row.message_type ?? ''
+  if (type === 'report_version' || type === TURN_TRACE_MESSAGE_TYPE) return false
   return normalize(row.content).length > 0 || row.role === 'user'
+}
+
+function isTurnTraceRow(row: ConversationMessage): boolean {
+  return (row.message_type ?? '') === TURN_TRACE_MESSAGE_TYPE
+}
+
+/** `app.conversations.metadata` —— asyncpg 没有 jsonb codec，线上是 JSON 字符串。 */
+function rowMetadata(row: ConversationMessage): Record<string, unknown> | null {
+  const raw = row.metadata
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      return typeof parsed === 'object' && parsed !== null
+        ? (parsed as Record<string, unknown>)
+        : null
+    } catch {
+      return null
+    }
+  }
+  return typeof raw === 'object' ? (raw as Record<string, unknown>) : null
+}
+
+/**
+ * 落库的思考链路 → `TimelineEntry[]`。
+ *
+ * 字段是后端 `trace_store.build_trace_metadata` 写下的：
+ * `{nodeName, status, detail?, kind?, reasoning?, ts}`——与前端类型一一对应，
+ * 不需要第二套映射。缺字段的条目直接丢掉（宁可少一条，不要脏数据）。
+ */
+export function traceFromServerRow(row: ConversationMessage): TimelineEntry[] {
+  const metadata = rowMetadata(row)
+  const rawEntries = metadata?.entries
+  if (!Array.isArray(rawEntries)) return []
+  const entries: TimelineEntry[] = []
+  for (const raw of rawEntries) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const item = raw as Record<string, unknown>
+    const nodeName = typeof item.nodeName === 'string' ? item.nodeName : ''
+    const status = item.status
+    if (!nodeName) continue
+    if (status !== 'running' && status !== 'success' && status !== 'error' && status !== 'pending') {
+      continue
+    }
+    const ts = typeof item.ts === 'number' && Number.isFinite(item.ts) ? item.ts : 0
+    entries.push({
+      id: `srv-${row.id}-${nodeName}-${entries.length}`,
+      nodeName,
+      status,
+      ...(typeof item.detail === 'string' && item.detail ? { detail: item.detail } : {}),
+      ...(typeof item.kind === 'string' && item.kind
+        ? { kind: item.kind as TimelineEntry['kind'] }
+        : {}),
+      ...(typeof item.reasoning === 'string' && item.reasoning
+        ? { reasoning: item.reasoning }
+        : {}),
+      timestamp: ts,
+    })
+  }
+  return entries
+}
+
+/**
+ * 合并过程步骤：**已有顺序不动**，只追加新节点。
+ *
+ * - 本地实时帧比落库的更新（当轮），同一节点保留本地那条；
+ * - 落库的两行（需求阶段 / 执行阶段）按到达顺序追加，最终链路顺序正确；
+ * - 重复合并幂等（同一 nodeName 不会出现两次）。
+ */
+function mergeTraceEntries(
+  current: TimelineEntry[],
+  incoming: TimelineEntry[],
+): TimelineEntry[] {
+  if (current.length === 0) return incoming
+  const merged = [...current]
+  for (const entry of incoming) {
+    if (merged.some((item) => item.nodeName === entry.nodeName)) continue
+    merged.push(entry)
+  }
+  return merged
 }
 
 function fromServerRow(row: ConversationMessage, index: number): ChatMessage | null {
@@ -297,7 +383,8 @@ export function mergeServerHistory(
   messages: ChatMessage[],
   server: ConversationMessage[] | null | undefined,
 ): ChatMessage[] {
-  const rows = (server ?? []).filter(isTranscriptRow)
+  const allRows = server ?? []
+  const rows = allRows.filter(isTranscriptRow)
   const consumed = new Set<number>()
   const result: ChatMessage[] = []
 
@@ -346,5 +433,56 @@ export function mergeServerHistory(
     const created = fromServerRow(row, index)
     if (created) insertByTime(result, created)
   })
+
+  attachPersistedTraces(result, allRows)
   return result
+}
+
+/**
+ * 把落库的思考链路（`turn_trace` 行）挂到**它在数据库里紧邻的那条助手消息**上。
+ *
+ * 判定不看时间戳（同一事务里多行 `created_at` 相同，时间比较会串轮）：
+ * 沿服务端行序往前找最近一条「已进入结果集的 assistant 行」，用它的 `serverId`
+ * 定位结果下标。服务端还没有这一轮的助手消息（正在流）时，退回本地未落地的最后一条。
+ *
+ * 同一轮会落两行（需求阶段一行、执行阶段一行），按到达顺序合并；
+ * 本地实时 trace 优先（比库里新），重复合并幂等（按 nodeName 去重）。
+ */
+function attachPersistedTraces(result: ChatMessage[], rows: ConversationMessage[]): void {
+  const indexByRowId = new Map<number, number>()
+  result.forEach((message, index) => {
+    if (message.serverId !== null) indexByRowId.set(message.serverId, index)
+  })
+
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r]
+    if (!isTurnTraceRow(row)) continue
+    const persisted = traceFromServerRow(row)
+    if (persisted.length === 0) continue
+
+    let target = -1
+    for (let k = r - 1; k >= 0; k--) {
+      const candidate = rows[k]
+      if (candidate.role !== 'assistant' || !isTranscriptRow(candidate)) continue
+      const id = numberOrNull(candidate.id)
+      const index = id === null ? undefined : indexByRowId.get(id)
+      if (index !== undefined) {
+        target = index
+        break
+      }
+    }
+    if (target < 0) {
+      for (let i = result.length - 1; i >= 0; i--) {
+        if (result[i].role === 'assistant' && result[i].serverId === null) {
+          target = i
+          break
+        }
+      }
+    }
+    if (target < 0) continue
+    result[target] = {
+      ...result[target],
+      trace: mergeTraceEntries(result[target].trace, persisted),
+    }
+  }
 }

@@ -53,6 +53,7 @@ from app.infra.checkpoint.session import session_manager
 from app.infra.execution import registry
 from app.infra.execution.progress import ProgressTraceHandler
 from app.infra.execution import progress_detail
+from app.infra.execution import trace_store
 from app.infra.trace.sdk import get_tracer
 from app.infra.auth.repository import ensure_default_user, verify_user
 from app.infra.auth.startup_guard import validate_auth_security_config
@@ -219,12 +220,17 @@ async def _run_confirmed_graph(
     final_phase = "report_ready"
     events: list[dict] = []
     graph_completed = False
+    # 2026-11-05（plan trace-persistence）：这一轮的 trace 帧**同时**收进 collected，
+    # 结束时落一行到会话账本——刷新后历史轮次仍能点开读「当时怎么想的」。
+    collected: list[dict] = []
     try:
         # P11：config 挂 ProgressTraceHandler——图节点生命周期实时 publish 成
         # trace progress 帧（kind×status），订阅者在线可收，complete 后随
         # result 重放。run_with_timeout 语义不变。
         handler = ProgressTraceHandler(
-            on_frame=lambda frame, _task=task: registry.publish(_task, frame),
+            on_frame=lambda frame, _task=task, _sink=collected: _publish_and_collect(
+                _task, frame, _sink,
+            ),
         )
         # 2026-11-05：执行/报告链的思维链通道（换推理模型后，SQL/报告节点也会带回 CoT）
         from app.infra.execution import progress_detail as _pd
@@ -342,6 +348,13 @@ async def _run_confirmed_graph(
             }, ensure_ascii=False),
         })
     finally:
+        # 这一轮的 trace 先落库（best-effort：失败只 warning，不影响事件/相位）
+        await trace_store.save_turn_trace(
+            session_id=session_id,
+            user_id=task.user_id,
+            frames=collected,
+            status="error" if final_phase == "error" else "done",
+        )
         events.append({
             "event": "done",
             "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
@@ -710,13 +723,17 @@ async def _run_requirement_graph(
     final_phase = "error"
     completed = False
     events: list[dict] = []
+    # 2026-11-05（plan trace-persistence）：需求轮的 trace 也落库（与执行轮同一机制）。
+    collected: list[dict] = []
     try:
         await _safe_update_phase(session_id, "parsing", None)
         # 2026-11-04（plan trace-visible-reasoning）：需求轮也发 trace 帧——用户要能看见
         # 「Agent 在想什么」（安全检查 → 识别意图 → 解析需求 → 口径预览 → 保存需求卡）。
         # 与 confirmed 图同一套机制（P11 契约：不新增顶层事件类型，progress 由 trace 载荷细化）。
         handler = ProgressTraceHandler(
-            on_frame=lambda frame, _task=task: registry.publish(_task, frame),
+            on_frame=lambda frame, _task=task, _sink=collected: _publish_and_collect(
+                _task, frame, _sink,
+            ),
         )
         # 节点把「这一步的结论」写进 detail（意图/口径/待确认项…），收尾帧带上
         detail_sink: dict[str, str] = {}
@@ -751,7 +768,7 @@ async def _run_requirement_graph(
         # 其余节点（若换成推理模型）走 adapter → reasoning 通道 → 拼进该步骤的 success 帧。
         _reasoning = result.get("turn_reasoning") or ""
         if _reasoning:
-            registry.publish(task, {
+            reasoning_frame = {
                 "event": "trace",
                 "data": json.dumps({
                     "step": "理解意图 · 思考",
@@ -761,7 +778,8 @@ async def _run_requirement_graph(
                     "reasoning": _reasoning[:4000],
                     "kind": "agent",
                 }, ensure_ascii=False),
-            })
+            }
+            _publish_and_collect(task, reasoning_frame, collected)
 
         # 安全闸：HIGH → 拒绝（不建卡、不落库；与改造前逐字段一致）。
         if result.get("security_level") == "HIGH":
@@ -782,6 +800,14 @@ async def _run_requirement_graph(
             casual = result.get("casual_reply") or "你好！有什么可以帮你的？"
             await _safe_update_phase(session_id, "idle", None)
             final_phase = "idle"
+            # 2026-11-05（plan trace-persistence D4）：闲聊回复也落库——此前只发 SSE，
+            # 刷新后那一轮变成「有思考、没回答」。落库失败不影响回复本身。
+            try:
+                await save_message(
+                    session_id, task.user_id, "assistant", casual, "assistant_text",
+                )
+            except Exception as exc:  # noqa: BLE001 - 观测之外的数据缺失不应打断本轮
+                logger.warning("save chitchat assistant_text failed: %s", exc)
             events.extend(_light_reply_events(casual)[:2])  # phase + report
             return
 
@@ -850,6 +876,14 @@ async def _run_requirement_graph(
             }, ensure_ascii=False),
         })
     finally:
+        # 2026-11-05（plan trace-persistence）：需求轮的 trace 也落一行——
+        # 刷新后历史轮次点开思考块，仍能读到步骤结论与模型原文。
+        await trace_store.save_turn_trace(
+            session_id=session_id,
+            user_id=task.user_id,
+            frames=collected,
+            status="done" if final_phase in ("awaiting_confirm", "awaiting_missing", "idle") else "error",
+        )
         events.append({
             "event": "done",
             "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
@@ -876,6 +910,20 @@ def _requirement_failure_event(
             "failed_action": mode,
         }, ensure_ascii=False),
     }
+
+
+def _publish_and_collect(
+    task: registry.ConfirmedTask, frame: dict, sink: list[dict],
+) -> None:
+    """P11 trace 帧出口：在线用户实时收到（publish），同一帧留给落库（collect）。
+
+    2026-11-05（plan trace-persistence）：`collected` 在轮次结束时写成
+    `app.conversations` 的 `turn_trace` 行，刷新后历史轮次仍能读到思考链路。
+    """
+    registry.publish(task, frame)
+    item = trace_store.collect_frame(frame)
+    if item is not None:
+        sink.append(item)
 
 
 async def _safe_update_phase(

@@ -10,17 +10,22 @@ async def save_message(
     session_id: str,
     user_id: int,
     role: str,
-    content: str,
+    content: str | None,
     message_type: str = "text",
     metadata: dict | None = None,
 ):
+    """写一行会话记录。
+
+    `content` 允许 None：`turn_trace`（思考链路，plan 2026-11-05-trace-persistence）
+    与 `requirement_patch` 指针行都只带 metadata，不是可读消息。
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO app.conversations (session_id, user_id, role, content, message_type, metadata)
                VALUES ($1, $2, $3, $4, $5, $6)""",
             session_id, user_id, role, content, message_type,
-            json.dumps(metadata) if metadata else None,
+            json.dumps(metadata, ensure_ascii=False) if metadata else None,
         )
 
 
@@ -81,7 +86,9 @@ async def list_sessions(user_id: int, limit: int = 30, offset: int = 0) -> list[
                         (array_agg(content ORDER BY created_at ASC))[1] AS first_message_text,
                         (array_agg(content ORDER BY created_at DESC))[1] AS last_message_text
                  FROM app.conversations
-                 WHERE user_id = $1
+                 -- 2026-11-05：思考链路（`turn_trace`）只带 metadata、没有正文，
+                 -- 参与统计会把 msg_count 灌水、末句预览变成 NULL。
+                 WHERE user_id = $1 AND message_type <> 'turn_trace'
                  GROUP BY session_id
                ) conv ON conv.session_id = s.thread_id
                WHERE s.user_id = $1

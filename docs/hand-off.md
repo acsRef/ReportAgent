@@ -11,8 +11,8 @@
 | 主链路 | 需求理解 → 确认 → SQL → 报告 → 落库，**可用**（真机两轮验证过） |
 | 需求层 | **Turn Understanding Agent 已上**（强模型产 `TurnPlan` + 确定性 Reducer + 可报告性裁决，`TURN_UNDERSTANDING=1`）；`RequirementCard` 契约不变 |
 | 需求模型 | `LLM_TURN_MODEL=deepseek-ai/DeepSeek-V4-Flash`（有 CoT，中位 15s，JSON 8/8） |
-| 可观测 | 模型**原文思维链**进 trace `reasoning`；「已思考（用时 N 秒）」块默认展开当轮、历史收起 |
-| 对话记录 | `app.conversations` 是**真对话记录**（assistant 文本已落库）；历史不再整表覆盖 |
+| 可观测 | 模型**原文思维链**进 trace；「已思考（用时 N 秒）」块当轮展开、历史收起；**链路已落库**（`turn_trace` 行），F5 后历史轮次仍能点开读 |
+| 对话记录 | `app.conversations` 是**真对话记录**（user / assistant_text / 报告指针 / turn_trace 四类行），历史不整表覆盖 |
 | 消息模型 | **append-only 聊天账本**（`stores/chatTranscript.ts`）：发送即 append，按 `serverId` 合并 |
 | 视觉形态 | 一轮 = 一条用户消息 + **一条**助手消息（过程/状态/动作/进度都在里面）；卡片只在「需求详情」按需展开 |
 | 测试策略 | **主干优先**：真机脚本 + 命中测试；全量单测平时不跑（用户明确要求） |
@@ -24,6 +24,7 @@
 # 主链路（真 LLM）
 python .e2elogs/probe_transcript.py          # 两轮：问 + 答是否都落库（transcript）
 node   .e2elogs/probe_reasoning_ui.mjs       # 「已思考（用时 N 秒）」+ 模型原文链路 + 执行步骤（8 项判据）
+node   .e2elogs/probe_trace_persistence.mjs  # 思考链路落库：两行 turn_trace + F5 后仍能展开读原文（12 项判据）
 node   .e2elogs/probe_clean_two_turns.mjs    # 两轮：一份报告 / 一条助手消息 / 历史仍在
 node   .e2elogs/probe_hit_test.mjs           # 全页按钮命中测试（被遮挡元素应为 0）
 node   .e2elogs/probe_reasoning_models.py    # 推理模型直连探针（CoT / 延迟）
@@ -61,6 +62,7 @@ python -m evaluation.turn_understanding_runner --models deepseek-ai/DeepSeek-V4-
 | 11 | **对话记录**：assistant 文本落库，历史轮次渲染「问 + 答 + 版本条」 | `4650f69` |
 | 12 | **P0 消息模型**（见 §3）：append-only 账本 + 一条助手消息 + 去只读整卡 + 详情按需；修合并错序真 bug | `a1d3596` |
 | 13 | **思考链路重塑**（plan `2026-11-05-reasoning-chain-display.md`）：头部「已思考（用时 N 秒）」+ 展开读模型原文（纯文本 `pre-wrap` / markdown 分别渲染）+ 执行步骤结论；当轮展开、历史收起；删掉步骤内嵌的等宽原文块 | 见 plan 落地记录 |
+| 14 | **思考链路落库**（plan `2026-11-05-trace-persistence.md`）：`app.conversations` 加 `turn_trace` 行（entries + 时长 + 原文），两个 runner 顺手收集落库；前端按行序挂到该轮助手消息；顺带补闲聊 `assistant_text` | 见 plan 落地记录 |
 
 ### 2026-11-04 做完的事
 
@@ -248,6 +250,13 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
     每次发送都打一个 404。历史由 requirement / 终态两次刷新按 id 合并回来就够了。
 16. **`app.conversations` 的行序要带 `id`**：同一事务多行 `created_at` 相同（`NOW()` 是事务开始
     时间），只按时间排会让「问 + 答」先后不确定。`get_messages` 已是 `ORDER BY created_at, id`。
+17. **`metadata` 从 API 出来是 JSON 字符串**（asyncpg 没注册 jsonb codec）：前端读它必须
+    `typeof === 'string' ? JSON.parse : 直读`。`turn_trace` 的 entries 就靠这个读回来。
+18. **trace 行归属别用时间判断**：同一事务里 `created_at` 相同，按时间挑「最近一条助手消息」
+    会把思考链路挂到下一轮。要沿**服务端行序**往前找最近一条已进入结果集的 assistant 行。
+19. **`app.conversations` 里有四类行**：`text`（用户提问）/`assistant_text`（助手那句话）/
+    `report_version`（版本指针）/`turn_trace`（思考链路）。**只有前两类是气泡**；后两类由
+    版本条与思考块承载，统计口径（`list_sessions` 的 msg_count / 首末句）要排除 `turn_trace`。
 
 ## 5. 文档地图
 

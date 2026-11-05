@@ -35,8 +35,19 @@ export interface ReportVersionSummary {
 export interface ConversationMessage {
   id: number
   role: 'user' | 'assistant' | 'system'
-  message_type: 'text' | 'requirement_patch' | 'report_version' | string
+  /**
+   * `text` | `assistant_text` | `report_version` | `requirement_patch` | `turn_trace`。
+   * 2026-11-05：`turn_trace` 是「这一轮的思考链路」（content=null，metadata.entries），
+   * 只作数据来源，不渲染成气泡。
+   */
+  message_type: 'text' | 'requirement_patch' | 'report_version' | 'turn_trace' | string
   content: string | null
+  /**
+   * 指针行 / trace 行的载荷。
+   * 注意：后端 asyncpg 没注册 jsonb codec，线上拿到的是 **JSON 字符串**——
+   * 读的时候要 `typeof === 'string' ? JSON.parse(...)`。
+   */
+  metadata?: unknown
   created_at: string
 }
 

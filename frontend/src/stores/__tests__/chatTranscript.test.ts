@@ -42,6 +42,25 @@ function sent(text = '2024年华东销售趋势'): ChatMessage[] {
   })
 }
 
+/**
+ * 落库的思考链路行（2026-11-05 plan trace-persistence）。
+ * `metadata` 故意给**字符串**——线上 asyncpg 没有 jsonb codec，API 返回的就是 JSON 文本。
+ */
+function traceRow(
+  id: number,
+  at: string,
+  entries: Array<Record<string, unknown>>,
+): ConversationMessage {
+  return {
+    id,
+    role: 'assistant',
+    content: null,
+    message_type: 'turn_trace',
+    created_at: at,
+    metadata: JSON.stringify({ entries, duration_ms: 3000, status: 'done' }),
+  }
+}
+
 describe('appendTurn — 发送即追加', () => {
   it('一次追加用户消息 + 空的助手占位', () => {
     const messages = sent()
@@ -189,6 +208,114 @@ describe('mergeServerHistory — 按 id 去重，绝不整表覆盖', () => {
       '问题一',
       '好，我理解为：问题一。',
     ])
+  })
+})
+
+describe('turn_trace —— 落库的思考链路（2026-11-05 plan trace-persistence）', () => {
+  it('trace 行不产生消息，挂到该轮助手消息上', () => {
+    const merged = mergeServerHistory([], [
+      row(1, 'user', '问题一'),
+      row(2, 'assistant', '好，我理解为：问题一。'),
+      traceRow(3, '2026-11-05T12:00:05Z', [
+        { nodeName: '安全检查', status: 'success', detail: '通过（LOW）', ts: 1000 },
+        { nodeName: '理解意图 · 思考', status: 'success', reasoning: '模型原文一句', ts: 4000 },
+      ]),
+    ])
+    expect(merged.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(merged[1].trace.map((entry) => entry.nodeName)).toEqual(['安全检查', '理解意图 · 思考'])
+    expect(merged[1].trace[1].reasoning).toBe('模型原文一句')
+    expect(merged[1].trace[0].detail).toBe('通过（LOW）')
+  })
+
+  it('metadata 是 JSON 字符串也能读（asyncpg 无 jsonb codec）', () => {
+    const merged = mergeServerHistory([], [
+      row(1, 'user', '问题一'),
+      row(2, 'assistant', '答一'),
+      traceRow(3, '2026-11-05T12:00:05Z', [{ nodeName: '解析需求', status: 'success', ts: 1 }]),
+    ])
+    expect(merged[1].trace).toHaveLength(1)
+  })
+
+  it('坏 metadata / 缺字段不炸，也不产生空步骤', () => {
+    const broken: ConversationMessage = {
+      id: 9,
+      role: 'assistant',
+      content: null,
+      message_type: 'turn_trace',
+      created_at: '2026-11-05T12:00:05Z',
+      metadata: '{not json',
+    }
+    const merged = mergeServerHistory([], [
+      row(1, 'user', '问题一'),
+      row(2, 'assistant', '答一'),
+      broken,
+      traceRow(10, '2026-11-05T12:00:09Z', [{ status: 'success', ts: 1 }]),
+    ])
+    expect(merged[1].trace).toEqual([])
+  })
+
+  it('同一轮两行 trace（需求阶段 + 执行阶段）合并成一条链路', () => {
+    const merged = mergeServerHistory([], [
+      row(1, 'user', '问题一'),
+      row(2, 'assistant', '好，我理解为：问题一。'),
+      traceRow(3, '2026-11-05T12:00:05Z', [{ nodeName: '解析需求', status: 'success', ts: 1000 }]),
+      traceRow(4, '2026-11-05T12:01:30Z', [
+        { nodeName: '规划查询', status: 'success', ts: 2000 },
+        { nodeName: '生成 SQL', status: 'success', ts: 3000 },
+      ]),
+    ])
+    expect(merged[1].trace.map((entry) => entry.nodeName)).toEqual([
+      '解析需求',
+      '规划查询',
+      '生成 SQL',
+    ])
+  })
+
+  it('本地实时 trace 优先，重复合并不翻倍（幂等）', () => {
+    let messages = sent('问题一')
+    messages = withTraceEntry(messages, {
+      id: 'live-解析需求',
+      nodeName: '解析需求',
+      status: 'success',
+      detail: '本地更全',
+      timestamp: 9999,
+    })
+    const server = [
+      row(1, 'user', '问题一'),
+      traceRow(2, '2026-11-05T12:00:05Z', [
+        { nodeName: '解析需求', status: 'success', detail: '库里旧数据', ts: 1000 },
+      ]),
+    ]
+    const once = mergeServerHistory(messages, server)
+    const twice = mergeServerHistory(once, server)
+    expect(once[1].trace).toHaveLength(1)
+    expect(once[1].trace[0].detail).toBe('本地更全')
+    expect(twice[1].trace).toHaveLength(1)
+  })
+
+  it('trace 行挂给它**紧邻的那一轮**，不会串到别的轮次', () => {
+    const merged = mergeServerHistory([], [
+      row(1, 'user', '问题一'),
+      row(2, 'assistant', '答一'),
+      traceRow(3, '2026-11-05T12:00:05Z', [{ nodeName: '解析需求', status: 'success', ts: 1000 }]),
+      row(4, 'user', '问题二'),
+      row(5, 'assistant', '答二'),
+    ])
+    expect(merged[1].trace.map((entry) => entry.nodeName)).toEqual(['解析需求'])
+    expect(merged[3].trace).toEqual([])
+  })
+
+  it('同一轮里两行 trace 都归该轮（需求阶段 + 执行阶段），不串下一轮', () => {
+    const merged = mergeServerHistory([], [
+      row(1, 'user', '问题一'),
+      row(2, 'assistant', '答一'),
+      traceRow(3, '2026-11-05T12:00:05Z', [{ nodeName: '解析需求', status: 'success', ts: 1000 }]),
+      traceRow(4, '2026-11-05T12:01:05Z', [{ nodeName: '生成 SQL', status: 'success', ts: 2000 }]),
+      row(5, 'user', '问题二'),
+      row(6, 'assistant', '答二'),
+    ])
+    expect(merged[1].trace.map((entry) => entry.nodeName)).toEqual(['解析需求', '生成 SQL'])
+    expect(merged[3].trace).toEqual([])
   })
 })
 
