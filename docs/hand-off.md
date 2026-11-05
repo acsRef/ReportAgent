@@ -1,6 +1,6 @@
 # ReportAgent 当前状态 / Hand-off
 
-> 最后更新：**2026-11-03 22:00**
+> 最后更新：**2026-11-05 20:20**
 > **新对话请先读这一份，再读 `docs/plans/README.md`。**
 > 维护原则：本文只回答「现在在哪 / 下一步做什么 / 怎么验证」，不复刻会过期的数字。
 
@@ -8,38 +8,53 @@
 
 | 项 | 状态 |
 |---|---|
-| 主链路 | 需求卡 → 确认 → SQL → 报告 → 落库，**可用** |
-| 需求层 | 意图三层（确定性 → 模型 → 服务端校验）；模糊问法会先澄清，不再瞎猜 |
-| 报告层 | 核心发现是**叙述**（结论/证据/原因/建议），按分析角度分流，数字有锚定校验 |
-| 测试策略 | **主干优先**：端到端真实问法 + 多轮 e2e；全量单测平时不跑（用户明确要求） |
-| CI | backend pytest + frontend vitest/tsc（任意分支 push / PR） |
-| 服务 | PG 5432 / ragent-py 8000 / backend 8100 / 前端 3000 |
+| 主链路 | 需求理解 → 确认 → SQL → 报告 → 落库，**可用**（真机两轮验证过） |
+| 需求层 | **Turn Understanding Agent 已上**（强模型产 `TurnPlan` + 确定性 Reducer + 可报告性裁决，`TURN_UNDERSTANDING=1`）；`RequirementCard` 契约不变 |
+| 需求模型 | `LLM_TURN_MODEL=deepseek-ai/DeepSeek-V4-Flash`（有 CoT，中位 15s，JSON 8/8） |
+| 可观测 | 模型**原文思维链**（`reasoning_content`）已进 trace 帧 `reasoning` 字段，前端步骤下方独立块展示 |
+| 对话记录 | `app.conversations` 现在是**真对话记录**（assistant 文本已落库），历史轮次渲染「问 + 答 + 版本条」 |
+| 视觉形态 | 确认 = 一句话；卡片只做按需详情；不再每轮一张卡 |
+| 测试策略 | **主干优先**：真机脚本 + 命中测试；全量单测平时不跑（用户明确要求） |
+| 服务 | PG 5432 / ragent-py 8000 / backend 8100 / 前端 3000 / MCP schema 8765 |
 
 ## 1. 怎么验证（按这个顺序，别跑全量单测）
 
 ```bash
-# 主干 3 条（迭代期，~2 分钟）
-python .e2elogs/smoke_trunk.py "2024年各区域销售额"                     # 明确问法
-python .e2elogs/smoke_trunk.py "2024年的销售情况" --no-confirm          # 模糊问法（应出澄清）
+# 主链路（真 LLM）
+python .e2elogs/probe_transcript.py          # 两轮：问 + 答是否都落库（transcript）
+node   .e2elogs/probe_reasoning_ui.mjs       # 过程面板是否出现「模型推理」原文块
+node   .e2elogs/probe_clean_two_turns.mjs    # 两轮：一份报告 / 一条助手消息 / 历史仍在
+node   .e2elogs/probe_hit_test.mjs           # 全页按钮命中测试（被遮挡元素应为 0）
+node   .e2elogs/probe_reasoning_models.py    # 推理模型直连探针（CoT / 延迟）
 
-# 补充轮 / 断连不丢结果（改了解析轮或前端事件面时必跑，~4 分钟）
-node .e2elogs/probe_card_refresh.mjs                                   # A 补充刷新 + B 解析中刷新页面
-python .e2elogs/probe_supplement_hang.py                               # 连续 4 轮 补充→确认，逐轮落库
-
-# 14 条真实问法（阶段完成 / 提交前，~5.5 分钟）
-REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_real_user_questions.py -s
-
-# 多轮追问（~2.5 分钟；当前首轮断言是红的，见 §3 P1）
-REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_multiturn_followup.py -q
-
-# 只在改了某模块时，跑它自己的单测文件（秒级）
+# 需求理解离线（不调模型，秒级）
+pytest backend/tests/graphs/test_turn_understanding.py -q
 pytest backend/tests/graphs/test_requirement_parser.py -q
-pytest backend/tests/api -q
+
+# Turn Understanding 模型对比（8 条真实多轮用例）
+python -m evaluation.turn_understanding_runner --models deepseek-ai/DeepSeek-V4-Flash
 ```
 
-启动服务（顺序）：`ragent-py :8000` → `backend :8100` → `frontend :3000`。命令见 `CLAUDE.md`。
+启动服务（顺序）：`ragent-py :8000` → `backend :8100` → `frontend :3000`。
+`mcp_schema_server` 用 `MCP_SCHEMA_TRANSPORT=streamable-http MCP_SCHEMA_PORT=8765` 常驻（SDK 2.x 已适配）。
 
-## 2. 2026-11-04 做完的事
+## 2. 2026-11-05 做完的事
+
+| # | 内容 | commit |
+|---|---|---|
+| 1 | MCP schema server 迁到 SDK 2.x（stdio + streamable-http），解析器对齐 ragent-py 新字典格式 | `3b9e8a0` |
+| 2 | 会话时间差 8 小时：写入改 `NOW()`、读出 `utc_iso()` 带时区，迁移 1176 行 | `d75c5c8` |
+| 3 | 「最高的那个月的明细」：选期由系统算（注册表口径取极值 → 确定性 WHERE）+ 明细契约只看 SELECT 投影 | `a614823` |
+| 4 | 澄清策略：**有默认就不问**（口径缺省按注册表）+ 置信度闸（0.75，`REQUIREMENT_CLARIFY_CONFIDENCE`） | `5337f3a` `61defeb` |
+| 5 | 「最多和最小」两个方向：`top_period.direction=both`，SQL `month IN (11,2)` → 2 行 | `e8493f8` |
+| 6 | 确认变成**一句人话**（去掉 diff 行 / chip / 需求详情） | `6ed48b9` |
+| 7 | 撤回自动确认（不再替用户跑 SQL）；没有图就不渲染空可视化；单值结果改「关键指标」块 | `1578c5d` |
+| 8 | **Turn Understanding Agent**：`TurnPlan` + 确定性 `Task State Reducer` + `Reportability Validator` + `ActiveAnalysisTask`/`TaskRevision` 审计（`agent.analysis_task_revision`） | `30100a1` `bf93d22` |
+| 9 | 选型 `DeepSeek-V4-Flash`（JSON 8/8、CoT 8/8、中位 15.2s）；新增直连 `reasoning_client` | `07a1fb3` |
+| 10 | **模型原文思维链**进 trace `reasoning` 字段，前端「模型推理」块展示 | `0f9a8fb` |
+| 11 | **对话记录**：assistant 文本落库，历史轮次渲染「问 + 答 + 版本条」 | `4650f69` |
+
+### 2026-11-04 做完的事
 
 | # | 内容 | commit |
 |---|---|---|
@@ -77,6 +92,35 @@ pytest backend/tests/api -q
 | 12 | **P1-① 收口**：异常类必须按日/周出水（粒度确定性 + 形态分流 + 报告层两处） | `ace1017` |
 
 ## 3. 下一步（按优先级，用户已确认顺序）
+
+### P0（下一步就做）消息渲染彻底收敛成聊天产品（plan `2026-11-05-conversation-transcript-messages.md`）
+
+已完成一半：**助手文本已落库**（历史轮次能渲染「问 + 答 + 版本条」）。
+剩余两件，用户已拍板要做：
+
+1. **append-only 消息生命周期**（当前仍是「一轮结束后整体刷新」）：
+   发送 → 立即 append 用户消息 + 空的助手占位（`streaming`）→ SSE 增量更新**最后一条** →
+   `done` 标记完成 → 合并服务端历史时**按 id 去重**，不整表覆盖。
+   涉及：`stores/analysisReducer.ts` 的 `messages` 语义、`sessionEvents.ts` 的刷新时机、
+   `ConversationTimeline` 的数据源（统一成 `ChatTurn[]`）。
+2. **`generating` 阶段去掉只读整卡**：只留进度；卡片仅作「需求详情」按需视图。
+
+约束（用户明确）：
+- 一条消息就是一条消息，不要每条助手消息套一层白卡；
+- 历史永久连续，绝不整表覆盖；
+- 结构化组件（ReportPaper / 表格 / 图表 / 进度）按需出现；
+- 过程（思考摘要、执行状态）融进同一条助手回复。
+
+### P1（Turn Understanding 收口）
+
+- 评测里还差三例目标分类：`再按产品细分`（应 compare）、`把刚才最高的那个月详细列出来`
+  （应 detail_rows）、`现在看看退货情况`（应 new_task）——`goals 2/4、act 6/7`；
+  修 prompt 示例或加确定性后置规则，目标是 `goals 4/4`；
+- **Qwen3.8-27B 未公平比较**：短 prompt 7.4s 且有 CoT，但本项目长 prompt 会 >90s 超时。
+  要重测就得先裁 prompt / 改流式 / 加大预算；
+- 把 `TURN_UNDERSTANDING` 从实验开关变成默认（现在 `=1` 已在 `.env` 开着，但代码默认仍是关，
+  回退只需删这一行）；
+- 前端「任务变更日志」UI（数据已在 `agent.analysis_task_revision`，接口 `list_revisions` 已有）。
 
 ### 2026-11-04 新增：需求层槽位契约（已落地，plan `2026-11-04-requirement-slot-contract.md`）
 
@@ -167,6 +211,17 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    parsing 中途，误判成「卡片不刷新」。长任务的判据是终态事件或 DB 行。
 8. **Vite 里 `WorkbenchPage.tsx` 的 `useExecutionPoll` 导出会触发 `hmr invalidate` → 整页重载**，
    重载会掐掉正在跑的 SSE（这正是本次 bug 的手动触发方式）。调试 UI 时别在有任务跑的时候改这个文件。
+9. **推理模型不要走 LangChain 的 `ChatOpenAI + extra_body`**（2026-11-05 实测）：60s 超时、
+   拿不到 `reasoning_content`、重试后整轮失败。用 `app/llm/reasoning_client.py` 直连
+   `/chat/completions`；超时用 `LLM_TURN_TIMEOUT` 单独配。
+10. **`agent.analysis_task_revision` 的读写必须在 async 节点里**：asyncpg 池绑定主事件循环，
+    在同步节点里 `asyncio.run` 会拿到另一个 loop → 一条 revision 都落不了库、第二轮继承全丢。
+11. **历史里「助手说了什么」原本不存在**：`app.conversations` 只存 user 文本 + report_version 指针，
+    assistant 的 content 是空的。任何「历史消息消失」判断先看这张表有没有 assistant 行。
+12. **新增图节点要同时登记 `progress.PROGRESS_NODES`**，否则该节点的 trace 帧被静默丢弃，
+    界面上看不到这一步（本次 Turn Understanding 的四个节点就踩过）。
+13. **前端跑 420 个单测没有价值**（用户明确要求不跑）：用真机脚本 + 命中测试代替；
+    改组件时最多跑该组件自己的单测文件。
 
 ## 5. 文档地图
 
