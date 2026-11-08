@@ -126,3 +126,37 @@ python .e2elogs/probe_c_quality.py
   `handleSSEEvent` / `RequirementCardView`），`tsc -b` 干净；
 - 真机 `probe_c_quality.py` 见上表；探针会话（`cqual-*` 9 个）已按前缀清理，库中会话回到 13。
 
+## 追加（2026-11-08 晚，用户截图触发）
+
+用户截图：问「分析 2024 年华东**销售**趋势和异常」，卡上写
+「待确认 1 项（指标未注册：销售）」、可报告性 `UNSUPPORTED`，可同一屏又写着
+「要我现在生成报告吗？」并给了生成按钮。
+
+### 根因（两条）
+
+1. `_display_metric` 只做「物理列 → 中文」（`label_for_metric_column`），**不认同义词**——
+   注册表明明 `resolve_metric("销售") == 销售额`，卡上却留「销售」；
+2. `assess_reportability` 拿它跟 `{"销售额", ...}` 做**字符串精确匹配** → 判「未注册」。
+
+**用户拍板**：「不要做精确匹配啊，这个方案肯定是有问题的」——同义词、别名、不同写法都会漏。
+
+### 修法（按用户要求改成语义判断）
+
+- `assess_reportability` 不再用 `known_metrics` 判定注册：改为 `metric_resolver`
+  （默认 `knowledge.resolve_metric(...) is not None`），`known_metrics` 只用来给
+  「用哪个指标？」的候选列表；测试可注入 resolver。
+- `_display_metric` 先走同义词归一（`resolve_metric` → `.name`），再退回列名映射，
+  所以卡上直接显示「销售额」，用户自己也看得懂。
+- **前端**：`ConfirmBar` 在 `missing_fields` 非空时不再说「要我现在生成报告吗」，
+  改成「这里还差 N 项，先补上才能生成：指标未注册：销售」，并**禁用生成按钮**
+  （后端 gate 本来也会拦，此前是文案与状态自相矛盾）。
+
+### 真机验证
+
+同一句问法：改前 `status=missing`、`missing=[unsupported]`、`UNSUPPORTED`；
+改后 **`status=complete`、`missing=[]`**，SQL 正常跑 2024 华东按周销售额。
+
+测试：`test_metric_registration.py` **19 passed**（同义词 READY / 真不存在的仍拦 /
+`known_metrics` 不参与判定 / resolver 可注入 / 卡片不再 UNSUPPORTED）、
+`ConfirmBar.test.tsx` **9 passed**（+2：缺项文案与禁用）、`tsc -b` 干净。
+

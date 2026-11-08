@@ -492,22 +492,43 @@ def reduce_task(
 # --- 可报告性（确定性裁决） -------------------------------------------------
 
 
+def _registry_has_metric(name: str) -> bool:
+    """注册表能不能解析这个指标——**语义**判断，不做字符串集合匹配。
+
+    2026-11-08（用户拍板）：「拿名字跟 set 做精确匹配」这个方案本身就是错的——
+    同义词（销售 / GMV / 销售金额）、别名、不同写法都会被判成「未注册」。
+    注册表本来负责解析这些，判断也该交给它，而不是自己拼一个字符串集合。
+    """
+    try:
+        from app.knowledge import registry as knowledge
+
+        return knowledge.resolve_metric(str(name or "").strip()) is not None
+    except Exception:  # noqa: BLE001 - 知识库不可用时不误杀（宁可放过也不拦用户）
+        return True
+
+
 def assess_reportability(
     task: ActiveAnalysisTask,
     *,
     known_metrics: set[str] | None = None,
+    metric_resolver: Callable[[str], bool] | None = None,
 ) -> Reportability:
-    """判断当前任务是否具备出报告的条件。模型不参与。"""
+    """判断当前任务是否具备出报告的条件。模型不参与。
+
+    `known_metrics`：只用来给「用哪个指标？」的候选列表，**不参与注册判定**；
+    `metric_resolver`：注册判定的真实来源（默认问注册表，测试可注入）。
+    """
     blockers: list[Blocker] = []
     notes: list[str] = []
+    resolver = metric_resolver or _registry_has_metric
 
     if not task.metrics:
         blockers.append(Blocker(
             key="metric", question="用哪个指标？",
             options=sorted(known_metrics)[:3] if known_metrics else [],
         ))
-    elif known_metrics is not None:
-        unknown = [m for m in task.metrics if m not in known_metrics]
+    else:
+        unknown = [m for m in task.metrics if not resolver(m)]
         if unknown:
             return Reportability(
                 verdict="UNSUPPORTED",

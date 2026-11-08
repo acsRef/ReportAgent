@@ -81,8 +81,40 @@ describe('ConfirmBar — 确认就是一句话（2026-11-05 二次改造）', ()
     expect(onSupplement).toHaveBeenCalledTimes(1)
   })
 
-  it('busy 时两个动作都禁用（避免重复 PATCH/confirm）', () => {
-    const { onConfirm, onSupplement } = renderBar(makeCard(), { busy: true })
+  // 2026-11-08 真机：卡上还有待确认项时，这句「要我现在生成报告吗？」是假话。
+  it('还有待确认项时不说「要我现在生成报告吗」，并且禁用生成', () => {
+    const card = makeCard({
+      status: 'missing',
+      missing_fields: [
+        {
+          key: 'unsupported',
+          label: '指标未注册：销售',
+          kind: 'single',
+          options: [],
+          selected_value: null,
+        },
+      ],
+    })
+    const { onConfirm } = renderBar(card)
+
+    expect(screen.getByText(/还差 1 项/)).toBeTruthy()
+    expect(screen.getByText(/指标未注册：销售/)).toBeTruthy()
+    expect(screen.queryByText(/要我现在生成报告吗/)).toBeNull()
+
+    const confirmBtn = screen.getByText('生成报告') as HTMLButtonElement
+    expect(confirmBtn.disabled).toBe(true)
+    fireEvent.click(confirmBtn)
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('没有待确认项时仍是那句话，按钮可点', () => {
+    renderBar(makeCard())
+
+    expect(screen.getByText(/要我现在生成报告吗/)).toBeTruthy()
+    expect((screen.getByText('生成报告') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('busy 时两个动作都禁用（避免重复 PATCH/confirm）', () => {    const { onConfirm, onSupplement } = renderBar(makeCard(), { busy: true })
 
     fireEvent.click(screen.getByText('生成报告'))
     fireEvent.click(screen.getByText('补充或修改'))

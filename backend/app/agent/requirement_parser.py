@@ -731,14 +731,23 @@ def _deterministic_intent(user_query: str) -> str | None:
 
 
 def _display_metric(term: str) -> str:
-    """指标名规范化：物理列 → 业务中文名（order_amount → 销售额）。
+    """指标名规范化：物理列 / 同义词 → 注册表**业务中文名**（order_amount、销售 → 销售额）。
 
     2026-11-03 用户实测：卡片上直接显示 `payment_amount`、`region`，没人看得懂。
     展示层必须是中文；物理列绑定留给 SQL 阶段（注册表负责翻译回去）。
+
+    2026-11-08 真机（plan analysis-quality-cleanup 后续）：只做「物理列 → 中文」不够。
+    用户说「分析 2024 年华东**销售**趋势」，模型也照抄「销售」，而 `resolve_metric("销售")`
+    明明认得（synonyms 里有）——`label_for_metric_column` 不认同义词，于是卡上留着「销售」，
+    可报告性再拿它跟注册表名字集合做**精确匹配** → 误判「指标未注册：销售」→ 整张卡 UNSUPPORTED。
+    所以先走同义词归一，再退回列名映射。
     """
     text = str(term or "").strip()
     if not text:
         return text
+    metric = knowledge.resolve_metric(text)
+    if metric is not None:
+        return metric.name
     label = knowledge.label_for_metric_column(text)
     if label:
         return label

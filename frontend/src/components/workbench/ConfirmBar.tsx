@@ -45,10 +45,27 @@ export default function ConfirmBar({
 }: Props) {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const description = describeRequirement(card)
+  // 2026-11-08（真机）：卡还缺项时，这句「要我现在生成报告吗？」是假话——
+  // 用户看到「待确认 1 项（指标未注册：销售）」却还被告知可以生成。
+  // 缺项就把话说清楚，并禁用主按钮（后端 gate 本来也会拦）。
+  const pending = card.missing_fields ?? []
+  const blocked = pending.length > 0
+  const pendingText = pending
+    .map((field) => field.label)
+    .filter(Boolean)
+    .join('、')
 
   const content = (
     <>
-      <p className="wb-ask-text">好，{description}。要我现在生成报告吗？</p>
+      {blocked ? (
+        <p className="wb-ask-text">
+          这里还差 {pending.length} 项，先补上才能生成：
+          <strong>{pendingText || '需求信息'}</strong>
+          。你可以直接说一句，或点下面的「补充或修改」。
+        </p>
+      ) : (
+        <p className="wb-ask-text">好，{description}。要我现在生成报告吗？</p>
+      )}
       {detailsOpen && (
         <div className="wb-ask-details">
           <RequirementCardView
@@ -65,7 +82,8 @@ export default function ConfirmBar({
           type="button"
           className="wb-primary wb-ask-confirm"
           onClick={onConfirm}
-          disabled={busy}
+          disabled={busy || blocked}
+          title={blocked ? '先补上缺的项才能生成报告' : undefined}
         >
           生成报告
         </button>

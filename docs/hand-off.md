@@ -362,6 +362,14 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    要靠契约拦（`_comparison_contract_violation` → repair），不能只靠 prompt。
 42. **写「已说基线」的正则时别把裸「比」算进去**：「对**比**一下各区域」会被自己的「比」判成
    「已说基线」，于是永远不问基线。用「和/与/跟 + 词」「相比」「同期/去年/上期」这类线索。
+43. **「指标是否已注册」不要拿字符串集合做精确匹配**（2026-11-08 用户截图触发）：注册表明明
+   `resolve_metric("销售") == 销售额`（synonyms 里有），可 `known_metrics` 是个 `set[str]`，
+   `"销售" not in {"销售额", …}` → 判「指标未注册：销售」→ 整卡 UNSUPPORTED，而同一屏还问
+   「要现在生成报告吗」。用户原话：「不要做精确匹配啊，这个方案肯定是有问题的」。
+   判断标准应该是「注册表能不能解析它」——`assess_reportability` 现在收 `metric_resolver`
+   （默认问注册表），`known_metrics` 只用于给候选选项。**别再用集合做语义判断**。
+44. **卡片缺项时不能还说「要我现在生成报告吗」**：`ConfirmBar` 原来不看 `missing_fields`，
+   永远问这句话并给可点的生成按钮——文案与状态自相矛盾。现在缺项时改说「还差 N 项」并禁用按钮。
 
 ## 5. 文档地图
 
