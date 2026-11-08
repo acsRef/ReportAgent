@@ -21,6 +21,7 @@ Timing 语义分层（plan: docs/plans/2026-09-01-p13-langfuse-execution-timing.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -34,7 +35,52 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # 根 observation 名：Langfuse UI 里一次请求一条 trace，trace_id == tracer.trace_id。
+# 2026-11-08（plan trace-inspector）：默认名只在拿不到用户问题时用——UI 里一屏十几条
+# `report_agent_run` 谁分得清哪条是哪轮？能拿到原话就用原话。
 _ROOT_NAME = "report_agent_run"
+_ROOT_QUESTION_CHARS = 40
+# observation 的 input/output 上限（2026-11-08 真机）：一轮 trace 有几十个 observation，
+# 每个都带完整结果集时批次会撑爆云端 5s 上报超时 → 整批丢弃、UI 空白。
+_OBS_PAYLOAD_CHARS = 4000
+
+
+def _bounded(value: Any) -> Any:
+    """redact + 截断 observation 的 input/output（大 payload 只留头部并标注原文长度）。"""
+    redacted = redact(value)
+    if redacted is None:
+        return None
+    text = (
+        redacted if isinstance(redacted, str)
+        else json.dumps(redacted, ensure_ascii=False, default=str)
+    )
+    if len(text) <= _OBS_PAYLOAD_CHARS:
+        return redacted
+    return f"{text[:_OBS_PAYLOAD_CHARS]}…（截断，原 {len(text)} 字符）"
+
+
+def _root_name(tracer: "Tracer") -> str:
+    """根 observation / trace 的人话名字：用户这一轮问的是什么。"""
+    question = " ".join(str(getattr(tracer, "user_query", "") or "").split())
+    if not question:
+        return _ROOT_NAME
+    if len(question) <= _ROOT_QUESTION_CHARS:
+        return question
+    return f"{question[:_ROOT_QUESTION_CHARS]}…"
+
+
+def _node_human(name: str) -> tuple[str, str]:
+    """技术节点名 → (中文标签, kind)；查不到就原样返回（不猜）。
+
+    复用 `infra/execution/progress.PROGRESS_NODES`（前端进度卡用的同一张表），
+    这样 Langfuse 里看到的「生成 SQL / 执行查询」和界面上完全一致。
+    """
+    from app.infra.execution.progress import PROGRESS_NODES
+
+    for candidate in (name, name.removeprefix("confirmed_")):
+        hit = PROGRESS_NODES.get(candidate)
+        if hit:
+            return hit[1], hit[0]
+    return name, ""
 
 
 def _langfuse_trace_id(trace_id: str) -> str:
@@ -60,9 +106,10 @@ def _llm_call_obs(langfuse: Any, llm: Any):
             "input": getattr(llm, "prompt_tokens", 0),
             "output": getattr(llm, "completion_tokens", 0),
         },
-        # adapter 端已 redact 过一次，此处再走一遍防 span 之外的字典/列表深字段
-        input=redact(getattr(llm, "input", None)) or None,
-        output=redact(getattr(llm, "output", None)) or None,
+        # adapter 端已 redact 过一次，此处再走一遍防 span 之外的字典/列表深字段；
+        # 同时截断（prompt 可能很长，会把云端批次撑爆）
+        input=_bounded(getattr(llm, "input", None)),
+        output=_bounded(getattr(llm, "output", None)),
         metadata={"latency_ms": getattr(llm, "latency_ms", 0)},
     )
 
@@ -115,6 +162,12 @@ async def flush_to_langfuse(
     if langfuse is None:
         return
 
+    # 函数内 import：SDK 版本较老时 `propagate_attributes` 可能不存在，
+    # 让 ImportError 只影响这一条 trace 的元数据，而不是整个模块导入失败。
+    from contextlib import nullcontext
+
+    from langfuse import propagate_attributes
+
     try:
         # 按 span_id 分组（空串表示无归属，兜底挂 root）
         llm_by_span: dict[str, list] = {}
@@ -130,21 +183,57 @@ async def flush_to_langfuse(
             sid = pv.get("span_id") or ""
             pv_by_span.setdefault(sid, []).append(pv)
 
+        # 2026-11-08（plan trace-inspector）：「人性化」+ 减包两件事一起做。
+        # `*_output` 这类 DATA span 是内部状态摘要：名字让人看不懂、数量把 observation
+        # 翻了一倍（实测一轮 57 个，一半是它们），还撑着云端 5s 上报超时。
+        # 这里把它的内容并进**父节点**的 output，自己不再单独上报。
+        data_output: dict[str, Any] = {}
+        node_spans = []
+        for span in tracer._spans:
+            if getattr(span, "span_type", "") == "DATA":
+                parent_id = getattr(span, "parent_span_id", None)
+                if parent_id:
+                    data_output[parent_id] = getattr(span, "input", None)
+                continue
+            node_spans.append(span)
+
         # 根 observation：trace_context 钉住 trace_id，metadata 保留原始 UUID 反查
         # + 整 trace 业务总耗时（与 PG traces.total_duration_ms 对账）
         trace_obj = getattr(tracer, "_trace", None)
-        root_md: dict[str, Any] = {"pg_trace_id": tracer.trace_id}
+        # 2026-11-08（plan trace-inspector）：metadata 补上「这是谁、哪一轮」——
+        # 排查时第一眼要能确认「是不是这个用户这一轮」，而不是靠 trace_id 反查 PG。
+        root_md: dict[str, Any] = {
+            "pg_trace_id": tracer.trace_id,
+            "session_id": getattr(tracer, "session_id", None),
+            "user_id": getattr(tracer, "user_id", None),
+            "question": getattr(tracer, "user_query", None),
+            "node_count": len(getattr(tracer, "_spans", ()) or ()),
+        }
+        root_md = {k: v for k, v in root_md.items() if v not in (None, "")}
         root_md.update(_timing_fields(
             getattr(trace_obj, "total_duration_ms", None),
             getattr(trace_obj, "start_time", None),
             getattr(trace_obj, "end_time", None),
             duration_key="total_duration_ms",
         ))
-        with langfuse.start_as_current_observation(
-            name=_ROOT_NAME,
-            trace_context={"trace_id": _langfuse_trace_id(tracer.trace_id)},
-            input=redact({"user_query": tracer.user_query}) if tracer.user_query else None,
-            metadata=root_md or None,
+        # 2026-11-08（plan trace-inspector）：session_id / user_id / trace_name 走 SDK v4 的
+        # `propagate_attributes`（`trace_context` 只认 trace_id，塞不进去）。设了它，
+        # UI 里 trace 右上角才有可点的 `Session:` 链接——「这个会话的每一轮」点进去就能翻。
+        attrs: dict[str, Any] = {}
+        if getattr(tracer, "session_id", None):
+            attrs["session_id"] = str(tracer.session_id)
+        if getattr(tracer, "user_id", None) is not None:
+            attrs["user_id"] = str(tracer.user_id)
+        if getattr(tracer, "user_query", None):
+            attrs["trace_name"] = _root_name(tracer)
+        with (
+            propagate_attributes(**attrs) if attrs else nullcontext(),
+            langfuse.start_as_current_observation(
+                name=_root_name(tracer),
+                trace_context={"trace_id": _langfuse_trace_id(tracer.trace_id)},
+                input=_bounded({"user_query": tracer.user_query}) if tracer.user_query else None,
+                metadata=root_md or None,
+            ),
         ):
             # 无匹配 span 的 LLM calls → 兜底挂 root
             for llm in llm_by_span.pop("", []):
@@ -152,8 +241,15 @@ async def flush_to_langfuse(
                     pass
 
             # 每个 traced_node span → observation；同 span 的 decisions / pv 聚合到 metadata
-            for span in tracer._spans:
+            for span in node_spans:
                 span_md: dict[str, Any] = {}
+                # 2026-11-08（plan trace-inspector）：UI 上直接给中文节点名（「生成 SQL」），
+                # 技术名留在 metadata.node 里，方便和 PG spans.span_name 对账。
+                human, kind = _node_human(span.span_name)
+                if human != span.span_name:
+                    span_md["node"] = span.span_name
+                if kind:
+                    span_md["kind"] = kind
                 span_decisions = dec_by_span.pop(span.span_id, [])
                 if span_decisions:
                     span_md["decisions"] = [redact(d) for d in span_decisions]
@@ -171,8 +267,14 @@ async def flush_to_langfuse(
                     duration_key="execution_duration_ms",
                 ))
                 with langfuse.start_as_current_observation(
-                    name=span.span_name,
-                    input=redact(span.input) if getattr(span, "input", None) else None,
+                    name=human,
+                    # 2026-11-08：节点输出也进 observation（UI 里「这个节点算出了什么」）。
+                    # 优先用 DATA span 记下的状态摘要（就是那个节点的产出），
+                    # 没有再退回 span 自身的 output。
+                    input=_bounded(span.input) if getattr(span, "input", None) else None,
+                    output=_bounded(
+                        data_output.get(span.span_id) or getattr(span, "output", None)
+                    ),
                     metadata=span_md or None,
                 ):
                     # 嵌套 LLM generations：沿 OTel context 自动挂到当前 span 下

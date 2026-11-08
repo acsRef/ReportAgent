@@ -7,6 +7,19 @@ from typing import Optional
 from app.infra.db.postgres import get_pool
 from app.infra.trace.models import LLMCall, Span, Trace
 
+# span 的 input/output 可能是一整张结果集：渲染前截断，避免页面被大 payload 卡死。
+_SPAN_PAYLOAD_CHARS = 2000
+
+
+def _bounded_payload(value: object) -> Optional[str]:
+    """span 的 input/output → 有界文本（超长截断并标注原始长度）。"""
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= _SPAN_PAYLOAD_CHARS:
+        return text
+    return f"{text[:_SPAN_PAYLOAD_CHARS]}…（已截断，原 {len(text)} 字符）"
+
 
 class TraceRepository:
     async def save_trace(self, trace: Trace):
@@ -73,32 +86,32 @@ class TraceRepository:
 
     async def list_traces(
         self, *, user_id: int, limit: int = 50, offset: int = 0,
-        status: Optional[str] = None,
+        status: Optional[str] = None, session_id: Optional[str] = None,
     ) -> list[dict]:
         """A-3：一律按 user_id 过滤——他人 trace 不可见，
         历史无主行（user_id IS NULL）对所有人不可见。"""
         pool = get_pool()
         async with pool.acquire() as conn:
+            # 2026-11-08（plan trace-inspector D2）：会话过滤也是排查入口——
+            # 用户手里通常只有「刚才那轮」，不是 trace_id。
+            clauses = ["user_id = $1"]
+            params: list = [user_id]
             if status:
-                rows = await conn.fetch(
-                    """SELECT trace_id, session_id, user_query, status,
-                              start_time, end_time, total_duration_ms
-                       FROM observability.agent_trace
-                       WHERE user_id = $1 AND status = $2
-                       ORDER BY start_time DESC NULLS LAST
-                       LIMIT $3 OFFSET $4""",
-                    user_id, status, limit, offset,
-                )
-            else:
-                rows = await conn.fetch(
-                    """SELECT trace_id, session_id, user_query, status,
-                              start_time, end_time, total_duration_ms
-                       FROM observability.agent_trace
-                       WHERE user_id = $1
-                       ORDER BY start_time DESC NULLS LAST
-                       LIMIT $2 OFFSET $3""",
-                    user_id, limit, offset,
-                )
+                params.append(status)
+                clauses.append(f"status = ${len(params)}")
+            if session_id:
+                params.append(session_id)
+                clauses.append(f"session_id = ${len(params)}")
+            params.extend([limit, offset])
+            rows = await conn.fetch(
+                f"""SELECT trace_id, session_id, user_query, status,
+                           start_time, end_time, total_duration_ms
+                    FROM observability.agent_trace
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY start_time DESC NULLS LAST
+                    LIMIT ${len(params) - 1} OFFSET ${len(params)}""",
+                *params,
+            )
             return [self._trace_row(r) for r in rows]
 
     async def get_trace(self, trace_id: str, *, user_id: int) -> Optional[dict]:
@@ -119,7 +132,7 @@ class TraceRepository:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """SELECT span_id, parent_span_id, span_name, span_type,
-                          start_time, duration_ms, status, error
+                          start_time, duration_ms, status, error, input, output
                    FROM observability.agent_trace_span
                    WHERE trace_id = $1
                    ORDER BY start_time ASC NULLS LAST""",
@@ -134,6 +147,10 @@ class TraceRepository:
                     "start_time": r["start_time"].isoformat() if r["start_time"] else None,
                     "duration_ms": r["duration_ms"],
                     "status": r["status"],
+                    # 2026-11-08（plan trace-inspector D1）：排查时最需要的其实是
+                    # 「这个节点算出了什么」。表里一直存着 input/output，此前 SELECT 没取。
+                    "input": _bounded_payload(r["input"]),
+                    "output": _bounded_payload(r["output"]),
                     "error": r["error"],
                 }
                 for r in rows

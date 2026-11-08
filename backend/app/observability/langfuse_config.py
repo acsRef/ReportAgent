@@ -28,5 +28,12 @@ class LangfuseConfig(BaseModel):
                 self.enabled = True
                 self.public_key = pk
                 self.secret_key = sk
-        self.host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        # 2026-11-08（plan trace-inspector）：本机 `.env` 写的是 `LANGFUSE_BASE_URL`，
+        # 而这里只读 `LANGFUSE_HOST` —— 因为默认值恰好也是 cloud，一直静默「能用」；
+        # 一旦换成自托管，改了 `.env` 也不会生效，trace 还是往 cloud 发。
+        self.host = (
+            os.getenv("LANGFUSE_HOST")
+            or os.getenv("LANGFUSE_BASE_URL")
+            or "https://cloud.langfuse.com"
+        )
         self.flush_timeout = float(os.getenv("LANGFUSE_FLUSH_TIMEOUT", "10.0"))

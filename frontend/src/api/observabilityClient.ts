@@ -51,6 +51,10 @@ export interface SpanDetail {
   start_time: string | null
   duration_ms: number | null
   status: string
+  /** 2026-11-08（plan trace-inspector D1）：节点输入的有界文本（后端已截断）。 */
+  input?: string | null
+  /** 节点输出的有界文本——排查时最需要的就是它。 */
+  output?: string | null
   error: string | null
 }
 
@@ -87,9 +91,12 @@ export function fetchTraces(
   limit = 50,
   offset = 0,
   status?: string,
+  sessionId?: string,
 ): Promise<{ traces: TraceSummary[]; limit: number; offset: number }> {
   const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   if (status) qs.set('status', status)
+  // 2026-11-08（plan trace-inspector D2）：按会话筛——排查时手里只有「刚才那轮」。
+  if (sessionId) qs.set('session_id', sessionId)
   return jsonFetch(`/api/v1/observability/traces?${qs.toString()}`)
 }
 

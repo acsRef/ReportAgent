@@ -31,13 +31,19 @@ async def list_traces(
     limit: int = 50,
     offset: int = 0,
     status: str | None = None,
+    session_id: str | None = None,
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """trace 列表（按 start_time 倒序，仅本人），支持分页与按 status 过滤。"""
+    """trace 列表（按 start_time 倒序，仅本人），支持分页、status 过滤与按会话过滤。
+
+    2026-11-08（plan trace-inspector D2）：`session_id` 是排查入口——用户手里通常只有
+    「刚才那一轮」，不是 trace_id。
+    """
     limit = max(1, min(limit, 200))   # 防一次性拉爆
     offset = max(0, offset)
     traces = await _repo.list_traces(
         user_id=user["id"], limit=limit, offset=offset, status=status,
+        session_id=session_id,
     )
     return {"traces": traces, "limit": limit, "offset": offset}
 

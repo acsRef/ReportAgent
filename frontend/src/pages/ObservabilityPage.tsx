@@ -80,6 +80,27 @@ function StatusDot({ status }: { status: string }) {
   )
 }
 
+function SpanPayload({ label, value }: { label: string; value?: string | null }) {
+  if (!value) return null
+  return (
+    <div style={{ marginTop: 8 }}>
+      <span style={{ fontSize: 11, color: 'var(--faint)', letterSpacing: '0.06em' }}>{label}</span>
+      <pre
+        data-testid={`span-payload-${label}`}
+        style={{
+          margin: '4px 0 0', padding: '8px 10px', maxHeight: 200, overflow: 'auto',
+          background: 'var(--canvas)', border: '1px solid var(--row-line)', borderRadius: 6,
+          fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.5,
+          color: 'var(--ink)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+        }}
+      >
+        {value}
+      </pre>
+    </div>
+  )
+}
+
+
 function SpanRow({ span, maxDuration }: { span: SpanDetail; maxDuration: number }) {
   const [open, setOpen] = useState(false)
   const pct = maxDuration > 0 && span.duration_ms != null ? (span.duration_ms / maxDuration) * 100 : 0
@@ -121,6 +142,10 @@ function SpanRow({ span, maxDuration }: { span: SpanDetail; maxDuration: number 
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
             <div style={{ marginBottom: 4 }}>span_id: <code style={{ fontFamily: 'var(--font-mono)' }}>{span.span_id}</code></div>
             <div>开始：{fmtTime(span.start_time)}</div>
+            {/* 2026-11-08（plan trace-inspector D1）：节点输入/输出——排查时最需要的信息。
+                后端已做有界截断（>2000 字符标注原文长度），这里只负责原样展示。 */}
+            <SpanPayload label="输入" value={span.input} />
+            <SpanPayload label="输出" value={span.output} />
           </div>
         )}
       </div>
