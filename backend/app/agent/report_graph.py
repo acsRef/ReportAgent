@@ -8,7 +8,7 @@ from typing import Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from app.llm import _format_tools_for_prompt, call_llm
+from app.llm import _format_tools_for_prompt, budgets, call_llm
 from app.models.contracts import QueryResult
 from app.report.preference import (
     apply_chart_preference,
@@ -143,7 +143,7 @@ async def _plan_analysis(state: ReportAgentState) -> dict:
         dimensions=list(card.get("dimensions") or []),
     )
 
-    raw = call_llm(prompt, max_tokens=1500)
+    raw = call_llm(prompt, max_tokens=budgets.max_tokens("report_plan"))
     plan = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(plan, dict):
         plan = {}
@@ -396,7 +396,7 @@ def _compose_narrative(state, qr, results: list[dict], fallback: str) -> str:
         intent=_narrative_intent(card),
     )
     try:
-        raw = call_llm(prompt, max_tokens=900)
+        raw = call_llm(prompt, max_tokens=budgets.max_tokens("report_narrative"))
         data = safe_json_parse(raw) if isinstance(raw, str) else raw
     except Exception as exc:  # noqa: BLE001 - 叙述失败不能拖垮报告
         logger.warning("report narration failed: %s", exc)

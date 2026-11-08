@@ -569,11 +569,14 @@ async def _turn_understand(state: RequirementAnalysisState) -> dict:
         if meta.get("reasoning_truncated"):
             detail += "｜思考预算用尽（思维链被截断）"
     else:
-        detail = (
-            "理解失败（模型超时/输出不合法），回落通用解析"
-            if meta.get("failed")
-            else "理解失败，回落通用解析"
-        )
+        # 2026-11-08（plan llm-budget-and-accounting D3）：预算用尽时**没有**第二次尝试，
+        # 文案必须说实话——「重试也没救回来」和「根本没重试」对用户是两件事。
+        if meta.get("retry_skipped"):
+            detail = "理解超时且本轮预算用尽（未重试），回落通用解析"
+        elif meta.get("failed"):
+            detail = "理解失败（模型超时/输出不合法），回落通用解析"
+        else:
+            detail = "理解失败，回落通用解析"
     _progress_detail("理解意图", detail)
     # 2026-11-05：推理模型的思维链同步给前端（由 `_run_requirement_graph` 在图结束后
     # 作为一条额外的 trace 帧发出：步骤名「理解意图 · 思考」，正文是 CoT 原文）。

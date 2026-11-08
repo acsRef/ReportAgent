@@ -20,7 +20,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
@@ -42,45 +42,36 @@ class ReasoningReply:
     # 顶到 budget 时 CoT 会停在一句中间——不标注的话用户会以为界面坏了。
     reasoning_tokens: int = 0
     truncated: bool = False
+    # 2026-11-08（plan llm-budget-and-accounting D1）：usage 里的原始用量。
+    # 此前用完就丢，`observability.llm_call` / Langfuse 里查不到 turn 这条调用，
+    # 思考到底花了多少 token 只能靠猜。
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 def turn_timeout() -> float:
-    """Turn Understanding 的超时（默认 90s；推理模型开思考时比普通调用慢）。"""
-    try:
-        return float(os.getenv("LLM_TURN_TIMEOUT", "90"))
-    except (TypeError, ValueError):
-        return 90.0
+    """Turn Understanding 的超时（默认 90s；推理模型开思考时比普通调用慢）。
+
+    2026-11-08（plan llm-budget-and-accounting D2）：旋钮统一迁到 `app.llm.budgets`，
+    这里保留函数名做薄委托（既有调用方与测试面不动）。
+    """
+    from app.llm.budgets import turn_timeout as _turn_timeout
+
+    return _turn_timeout()
 
 
 def resolve_thinking_budget(override: int | None = None) -> int:
-    """思考预算（token）：思考阶段最多花多少。"""
-    if override is not None:
-        return max(1, int(override))
-    try:
-        return max(1, int(os.getenv("TURN_THINKING_BUDGET", "512")))
-    except (TypeError, ValueError):
-        return 512
+    """思考预算（token）：思考阶段最多花多少。委托 `budgets.thinking_budget`。"""
+    from app.llm.budgets import thinking_budget
+
+    return thinking_budget(override)
 
 
 def resolve_max_tokens(budget: int) -> int:
-    """总额（思考 + 回答共享）。默认 = 预算 + 900，保证回答那部分不会被预算吃掉。
+    """总额（思考 + 回答共享）：默认 = 预算 + 900。委托 `budgets.turn_max_tokens`。"""
+    from app.llm.budgets import turn_max_tokens
 
-    2026-11-05：`TURN_MAX_TOKENS` 若被配成 ≤ 预算（手滑/复制粘贴），回答一个 token 都拿不到
-    → JSON 截断 → 表现成「理解失败」。这里兜底抬到 `预算 + 300` 并告警，不让配置错误静默生效。
-    """
-    try:
-        configured = int(os.getenv("TURN_MAX_TOKENS", "") or 0)
-    except (TypeError, ValueError):
-        configured = 0
-    if configured > 0:
-        if budget > 0 and configured < budget + 300:
-            logger.warning(
-                "TURN_MAX_TOKENS=%s 小于思考预算 %s + 300，回答会被截断；按 %s 兜底",
-                configured, budget, budget + 300,
-            )
-            return budget + 300
-        return configured
-    return max(1200, budget + 900)
+    return turn_max_tokens(budget)
 
 
 def _parse_usage(usage: dict | None, finish_reason: str, budget: int) -> tuple[int, bool]:
@@ -92,6 +83,44 @@ def _parse_usage(usage: dict | None, finish_reason: str, budget: int) -> tuple[i
         reasoning_tokens = 0
     truncated = finish_reason == "length" or (budget > 0 and reasoning_tokens >= budget - 4)
     return reasoning_tokens, truncated
+
+
+def _parse_tokens(usage: dict | None) -> tuple[int, int]:
+    """→ (prompt_tokens, completion_tokens)。缺失/脏值一律 0，不影响主链。"""
+    usage = usage or {}
+
+    def _int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return _int(usage.get("prompt_tokens")), _int(usage.get("completion_tokens"))
+
+
+def _record_llm_call(reply: ReasoningReply, prompt: str) -> ReasoningReply:
+    """把这次 turn 调用记到当前 tracer（与 adapter 路径同一张 `observability.llm_call`）。
+
+    观测失败绝不影响主链：这里只打 debug 日志，原样返回 reply。
+    """
+    try:
+        from app.infra.trace.sdk import current_tracer
+        from app.observability.redaction import redact
+
+        tracer = current_tracer()
+        if tracer is None:
+            return reply
+        tracer.add_llm_call(
+            reply.model,
+            reply.prompt_tokens,
+            reply.completion_tokens,
+            reply.elapsed_ms,
+            input=redact(prompt),
+            output=redact(reply.content),
+        )
+    except Exception as exc:  # noqa: BLE001 - 记账是附赠品
+        logger.debug("turn llm trace failed: %s", exc)
+    return reply
 
 
 def _prepare(
@@ -168,6 +197,7 @@ def chat_with_reasoning(
     if on_delta:
         return _stream_chat(
             url, headers, body, chosen, budget, timeout or turn_timeout(), started, on_delta,
+            prompt,
         )
 
     try:
@@ -196,14 +226,17 @@ def chat_with_reasoning(
     reasoning_tokens, truncated = _parse_usage(
         payload.get("usage"), str(choice.get("finish_reason") or ""), budget,
     )
-    return ReasoningReply(
+    prompt_tokens, completion_tokens = _parse_tokens(payload.get("usage"))
+    return _record_llm_call(ReasoningReply(
         content=str(message.get("content") or ""),
         reasoning=str(message.get("reasoning_content") or ""),
         model=chosen,
         elapsed_ms=elapsed_ms,
         reasoning_tokens=reasoning_tokens,
         truncated=truncated,
-    )
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    ), prompt)
 
 
 def _stream_chat(
@@ -215,6 +248,7 @@ def _stream_chat(
     timeout: float,
     started: float,
     on_delta: DeltaCallback,
+    prompt: str = "",
 ) -> ReasoningReply | None:
     """流式收 delta（reasoning_content + content），边收边回调累计文本。
 
@@ -264,14 +298,17 @@ def _stream_chat(
         logger.warning("turn model stream interrupted after %s chars: %s", len(reasoning), exc)
 
     reasoning_tokens, truncated = _parse_usage(last_usage, finish_reason, budget)
-    return ReasoningReply(
+    prompt_tokens, completion_tokens = _parse_tokens(last_usage)
+    return _record_llm_call(ReasoningReply(
         content=content,
         reasoning=reasoning,
         model=model,
         elapsed_ms=int((time.monotonic() - started) * 1000),
         reasoning_tokens=reasoning_tokens,
         truncated=truncated,
-    )
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    ), prompt)
 
 
 def _safe_delta(on_delta: DeltaCallback, kind: str, text: str) -> None:
@@ -330,14 +367,17 @@ async def chat_with_reasoning_async(
                 reasoning_tokens, truncated = _parse_usage(
                     payload.get("usage"), str(choice.get("finish_reason") or ""), budget,
                 )
-                return ReasoningReply(
+                prompt_tokens, completion_tokens = _parse_tokens(payload.get("usage"))
+                return _record_llm_call(ReasoningReply(
                     content=str(message.get("content") or ""),
                     reasoning=str(message.get("reasoning_content") or ""),
                     model=chosen,
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                     reasoning_tokens=reasoning_tokens,
                     truncated=truncated,
-                )
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                ), prompt)
 
             reasoning = ""
             content = ""
@@ -379,11 +419,14 @@ async def chat_with_reasoning_async(
         return None
 
     reasoning_tokens, truncated = _parse_usage(last_usage, finish_reason, budget)
-    return ReasoningReply(
+    prompt_tokens, completion_tokens = _parse_tokens(last_usage)
+    return _record_llm_call(ReasoningReply(
         content=content,
         reasoning=reasoning,
         model=chosen,
         elapsed_ms=int((time.monotonic() - started) * 1000),
         reasoning_tokens=reasoning_tokens,
         truncated=truncated,
-    )
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    ), prompt)

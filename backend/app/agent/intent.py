@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from app.agent.prompts import build_intent_classify_prompt
-from app.llm import call_llm
+from app.llm import budgets, call_llm
 from app.utils.text import safe_json_parse
 
 
@@ -66,7 +66,7 @@ def classify_intent(user_query: str, dict_hit: bool = False) -> IntentResult:
 def _llm_classify(q: str) -> IntentResult:
     """Stage 3：LLM 语义分类。失败降级为 REPORT（保主流程）。"""
     prompt = build_intent_classify_prompt(q)
-    raw = call_llm(prompt, max_tokens=200)
+    raw = call_llm(prompt, max_tokens=budgets.max_tokens("intent"))
     parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(parsed, dict):
         parsed = {}

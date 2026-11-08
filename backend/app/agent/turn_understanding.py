@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any, Callable
 
 from app.agent.prompts.turn_plan_prompts import build_turn_plan_prompt
@@ -49,11 +50,41 @@ def turn_model() -> str | None:
 
 
 def fast_retry_timeout() -> float:
-    """「不思考」快速重试的超时（默认 45s）。"""
-    try:
-        return float(os.getenv("LLM_TURN_FAST_TIMEOUT", "45"))
-    except (TypeError, ValueError):
-        return 45.0
+    """「不思考」快速重试的超时（默认 30s）。委托 `app.llm.budgets.turn_fast_timeout`。"""
+    from app.llm.budgets import turn_fast_timeout
+
+    return turn_fast_timeout()
+
+
+# 2026-11-08（plan llm-budget-and-accounting D3）：单轮 request budget。
+#
+# 此前最坏耗时是「思考首轮 90s 超时 + 不思考重试 45s」= 135s，而且第二次也超时的话
+# 用户白等一场照样回落。改成：整轮共用一个 deadline（默认 120s），首次超时按剩余时间算，
+# 剩余不够就**不重试**——直接回落通用解析，把「卡住」的上界钉死。
+#
+# 20s 的来由：turn prompt 约 4k token，即便不思考也要十几秒才吐得出 JSON；
+# 低于 20s 的重试基本注定失败，只会把卡住再延长一段。
+_MIN_RETRY_SECONDS = 20.0
+
+
+def _remaining(deadline: float) -> float:
+    """距本轮 deadline 还剩多少秒（可能为负）。"""
+    return deadline - time.monotonic()
+
+
+def _first_timeout(deadline: float) -> float:
+    """首轮超时 = min(单次超时, 本轮剩余)；至少留 1s，避免 0/负数进 httpx。"""
+    from app.llm.budgets import turn_timeout
+
+    return max(1.0, min(turn_timeout(), _remaining(deadline)))
+
+
+def _retry_timeout(deadline: float) -> float | None:
+    """重试超时 = min(快速超时, 剩余-5)；剩余不够重试返回 None（不重试）。"""
+    remaining = _remaining(deadline) - 5.0
+    if remaining < _MIN_RETRY_SECONDS:
+        return None
+    return max(1.0, min(fast_retry_timeout(), remaining))
 
 
 def _finish_reply(
@@ -124,6 +155,7 @@ def understand_turn(
     **同步版本**（评测/CLI）。async 图节点用 `understand_turn_async`——同步调用会堵住
     事件循环，流式帧只能在结束后一起吐出（实测踩过）。
     """
+    from app.llm.budgets import turn_request_budget
     from app.llm.reasoning_client import chat_with_reasoning
 
     prompt = build_turn_plan_prompt(
@@ -131,24 +163,35 @@ def understand_turn(
     )
     chosen_model = model or turn_model()
     on_delta = _delta_forwarder(on_reasoning)
+    deadline = time.monotonic() + turn_request_budget()
 
     reply = chat_with_reasoning(
         prompt,
         model=chosen_model,
         enable_thinking=enable_thinking,
         thinking_budget=thinking_budget,
+        timeout=_first_timeout(deadline),
         on_delta=on_delta,
     )
     if reply is None and enable_thinking is not False:
-        logger.warning("turn understanding fell back to fast retry (thinking disabled)")
-        reply = chat_with_reasoning(
-            prompt,
-            model=chosen_model,
-            enable_thinking=False,
-            timeout=fast_retry_timeout(),
-        )
-        if reply is not None and meta is not None:
-            meta["retried_without_thinking"] = True
+        retry_timeout = _retry_timeout(deadline)
+        if retry_timeout is None:
+            logger.warning(
+                "turn understanding budget exhausted (%.1fs left), skip fast retry",
+                _remaining(deadline),
+            )
+            if meta is not None:
+                meta["retry_skipped"] = "budget"
+        else:
+            logger.warning("turn understanding fell back to fast retry (thinking disabled)")
+            reply = chat_with_reasoning(
+                prompt,
+                model=chosen_model,
+                enable_thinking=False,
+                timeout=retry_timeout,
+            )
+            if reply is not None and meta is not None:
+                meta["retried_without_thinking"] = True
     return _finish_reply(reply, meta)
 
 
@@ -165,6 +208,7 @@ async def understand_turn_async(
     on_reasoning: Callable[[str], None] | None = None,
 ) -> tuple[TurnPlan | None, str]:
     """`understand_turn` 的 async 版（图节点用；语义与回退策略完全一致）。"""
+    from app.llm.budgets import turn_request_budget
     from app.llm.reasoning_client import chat_with_reasoning_async
 
     prompt = build_turn_plan_prompt(
@@ -172,24 +216,35 @@ async def understand_turn_async(
     )
     chosen_model = model or turn_model()
     on_delta = _delta_forwarder(on_reasoning)
+    deadline = time.monotonic() + turn_request_budget()
 
     reply = await chat_with_reasoning_async(
         prompt,
         model=chosen_model,
         enable_thinking=enable_thinking,
         thinking_budget=thinking_budget,
+        timeout=_first_timeout(deadline),
         on_delta=on_delta,
     )
     if reply is None and enable_thinking is not False:
-        logger.warning("turn understanding fell back to fast retry (thinking disabled)")
-        reply = await chat_with_reasoning_async(
-            prompt,
-            model=chosen_model,
-            enable_thinking=False,
-            timeout=fast_retry_timeout(),
-        )
-        if reply is not None and meta is not None:
-            meta["retried_without_thinking"] = True
+        retry_timeout = _retry_timeout(deadline)
+        if retry_timeout is None:
+            logger.warning(
+                "turn understanding budget exhausted (%.1fs left), skip fast retry",
+                _remaining(deadline),
+            )
+            if meta is not None:
+                meta["retry_skipped"] = "budget"
+        else:
+            logger.warning("turn understanding fell back to fast retry (thinking disabled)")
+            reply = await chat_with_reasoning_async(
+                prompt,
+                model=chosen_model,
+                enable_thinking=False,
+                timeout=retry_timeout,
+            )
+            if reply is not None and meta is not None:
+                meta["retried_without_thinking"] = True
     return _finish_reply(reply, meta)
 
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from app.llm import call_llm
+from app.llm import budgets, call_llm
 from app.memory.manager import remember_conversation_facts
 from app.memory.prompts import build_conversation_summarize_prompt
 from app.utils.text import safe_json_parse
@@ -74,7 +74,7 @@ def compress_and_extract(old_digest: str | None, batch_messages: list[dict]) -> 
     summary 是**替换**旧摘要（不是追加），严格 ≤ L2_MAX_CHARS。
     """
     prompt = build_conversation_summarize_prompt(old_digest, batch_messages)
-    raw = call_llm(prompt, max_tokens=1000)
+    raw = call_llm(prompt, max_tokens=budgets.max_tokens("memory_summary"))
     result = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(result, dict):
         result = {}

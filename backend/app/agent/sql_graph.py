@@ -12,7 +12,7 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 from app.context import format_context_block
-from app.llm import _format_tools_for_prompt, call_llm
+from app.llm import _format_tools_for_prompt, budgets, call_llm
 from app.tools.registry import registry
 from app.models.contracts import ErrorDetail, QueryPlan, QueryResult, SchemaContext, TableSchema, ColumnSchema
 from app.utils.text import extract_sql, safe_json_parse
@@ -353,7 +353,7 @@ def _intent_analyze(state: SQLAgentState) -> dict:
         user_query=user_query,
         tools_block=tools_block,
     )
-    raw = call_llm(prompt, max_tokens=1500)
+    raw = call_llm(prompt, max_tokens=budgets.max_tokens("sql_plan"))
     parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(parsed, dict):
         parsed = {}
@@ -477,7 +477,7 @@ def _plan(state: SQLAgentState) -> dict:
     _ctx_injected = state.get("assembled_context") or state.get("conversation_context")
     if _ctx_injected:
         prompt = f"{format_context_block(_ctx_injected)}\n\n{prompt}"
-    raw = call_llm(prompt, max_tokens=1500)
+    raw = call_llm(prompt, max_tokens=budgets.max_tokens("sql_plan"))
     plan_dict = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(plan_dict, dict):
         plan_dict = {}
@@ -644,7 +644,10 @@ def _generate_sql(state: SQLAgentState) -> dict:
                 f"必须先用 WITH 子句聚合选出那一期（GROUP BY 期 + ORDER BY <指标> DESC LIMIT 1），"
                 f"再只取该期的数据；明细模式下外层不许聚合。不许把全区间汇总一遍。"
             )
-    sql = call_llm([{"role": "user", "content": prompt}], max_tokens=1500)
+    sql = call_llm(
+        [{"role": "user", "content": prompt}],
+        max_tokens=budgets.max_tokens("sql_repair" if repair_ctx else "sql_generate"),
+    )
     sql = extract_sql(sql)
     retry = state.get("retry_counters", {}) or {}
     retry = dict(retry)

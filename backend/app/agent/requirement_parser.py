@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from app.context import format_context_block
-from app.llm import call_llm
+from app.llm import budgets, call_llm
 from app.utils.text import safe_json_parse
 from app.models.contracts import SchemaContext
 from app.models.requirement import (
@@ -927,7 +927,7 @@ def _call_llm_for_parse(
     if injected:
         prompt = f"{format_context_block(injected)}\n\n{prompt}"
     try:
-        raw = call_llm(prompt, max_tokens=1500)
+        raw = call_llm(prompt, max_tokens=budgets.max_tokens("requirement_parse"))
     except Exception as exc:
         logger.warning("parse_requirement LLM failed: %s query=%r", exc, user_query)
         return {}

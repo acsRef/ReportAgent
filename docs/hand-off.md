@@ -82,6 +82,7 @@ Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
 | 15 | **真机 5 问收口**（plan `2026-11-05-live-session-issues.md`）：思考截断标注 / 超时快速重试 + 等待秒数 / schema 步骤文案拆四种 / 显式图表要求（「画饼图」→ pie，优先于记忆偏好） | 见 plan 落地记录 |
 | 16 | **思考链路实时可见**（plan `2026-11-05-streaming-reasoning.md`）：provider 流式收 `reasoning_content` → 节流 350ms 发既有 `trace` 帧 → 前端链路「边跑边长」+「正在输出…」；预算与总额成对可调（`TURN_MAX_TOKENS`）；图节点走 async 客户端（同步会堵事件循环，帧会挤在一起吐） | 见 plan 落地记录 |
 | 17 | **中断场景收口**（plan `2026-11-08-interruption-resilience.md`）：断流 / 停止 / F5 / 关浏览器各写**独立**用例（2 个测试文件 + 3 个探针）；`live` 缓冲同 step 只留最新帧 + 流式帧上限 600；**修 F5 卡死真 bug**（解析中刷新后不起轮询 → 永远停在「正在解析」） | 三探针全绿 |
+| 18 | **LLM 预算与记账收敛**（plan `2026-11-08-llm-budget-and-accounting.md`，用户拍板顺序 2→1→3）：①turn 直连调用补 usage 记账（`ReasoningReply.prompt_tokens/completion_tokens` + 三出口 `tracer.add_llm_call`，真机已验证 `observability.llm_call` 出现 `DeepSeek-V4-Flash` 那条：928/610/5469ms）②新建 `app/llm/budgets.py` 单一预算表，6 个 caller 的 7 处字面量全部改走 `budgets.max_tokens("<task>")`③`TURN_REQUEST_BUDGET=120` 贯穿重试（首轮 `min(90,剩余)`，剩余 <20s 不重试并标 `retry_skipped`），最坏耗时从 135s 收到 ≈120s | 48 例聚焦用例 + 真机探针 5/5 |
 
 ### 2026-11-04 做完的事
 
@@ -311,6 +312,16 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    （校验结论 → 执行错误 → 原始返回 → 固定兜底）。排查时优先看 `validation.error`。
 29. **`validate_sql` 的日志曾经只打 `sql[:60]`**：SQL 以换行/空格开头时日志里啥也看不到。
    现在压缩空白后打 160 字——以后看「top-period contract violated」时能直接读到 SQL。
+30. **改了后端代码先确认 uvicorn 真的重载了**（2026-11-08 踩过）：上一轮探针明明写着 PASS 可
+   `observability.llm_call` 一行不增，排查半小时发现进程还是 14:50 启动的——`--reload` 没开，
+   改的是磁盘上的文件，跑的是内存里的旧模块。判定方法：`Get-Process -Id <pid> | Select StartTime`
+   看启动时间是否晚于最后一次改动；日志里搜 `Started server process`。
+31. **`observability.llm_call` 只有 token 数，没有 input/output**：表结构是
+   `span_id/model/prompt_tokens/completion_tokens/latency_ms/cost`，prompt 与响应文本只进
+   Langfuse（`input`/`output` 字段）。想核对「turn 到底想了什么」得看 `turn_trace` 行或 Langfuse。
+32. **「记账」和「预算」是两件事，顺序不能反**：先能看见（每类调用都进 `llm_call`），
+   再收敛（`app/llm/budgets.py` 唯一预算表），最后才谈 deadline。反过来的话调预算永远在猜。
+   另外 turn 的 `max_tokens` 是**推算值**（思考预算 + 回答余量），不能写进表里当常量。
 
 ## 5. 文档地图
 

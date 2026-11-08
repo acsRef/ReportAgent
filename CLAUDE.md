@@ -351,7 +351,8 @@ Important root `.env` variables:
 | `MAX_SQL_REPAIR_RETRIES` / `MAX_PLAN_RETRIES` | `2` / `1`; SQL repair & replan budgets (P8), pinned against `reliability/retry.RETRY_BUDGETS` |
 | `TURN_THINKING_BUDGET` | `512`; 需求轮 Turn Understanding 的**思考预算**（token）。顶到预算后模型会收尾思维链去写 JSON，界面会标「思考预算用尽」 |
 | `TURN_MAX_TOKENS` | 未设时 = `max(1200, budget+900)`；思考与回答**共享**的总额。只调大预算不调总额会把回答挤掉（表现为「理解失败」） |
-| `LLM_TURN_TIMEOUT` / `LLM_TURN_FAST_TIMEOUT` | `90` / `45`；turn 模型超时 / 超时后「不思考」快速重试的超时 |
+| `LLM_TURN_TIMEOUT` / `LLM_TURN_FAST_TIMEOUT` | `90` / `30`；turn 模型单次超时 / 超时后「不思考」快速重试的超时（快速重试仅在剩余预算够时发生） |
+| `TURN_REQUEST_BUDGET` | `120`；**单轮总预算**（秒），贯穿首轮 + 重试。剩余 < 20s 就不再重试，直接回落通用解析，最坏耗时 ≈ 120s（不再有 90+45=135s） |
 | `TURN_REASONING_STREAM` / `TURN_STREAM_INTERVAL_MS` | `1` / `350`；思考链路**流式**推送开关与节流间隔（`trace` 帧 status=running，边跑边长） |
 
 > **P6 注记（2026-10-28 已落地）**：上表 provider 已切至 SiliconFlow（`LLM_API_KEY` / `LLM_MODEL=deepseek-ai/DeepSeek-V3` / `LLM_BASE_URL=https://api.siliconflow.cn/v1`），`MINIMAX_*` 仅作历史别名保留（`test_llm_adapter.py` 钉住回退行为）。Embedding 仍走同一 SiliconFlow key。
