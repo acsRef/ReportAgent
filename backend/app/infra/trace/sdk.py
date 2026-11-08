@@ -290,7 +290,10 @@ def traced_node(name: str, span_type: str = "NODE"):
                 try:
                     with tracer.span(name, span_type=span_type, input=_summarize_state(state)):
                         result = await func(state, **kwargs)
-                    _handle_output_span(tracer, result)
+                        # 2026-11-08（plan trace-inspector）：必须在 with 内调用——
+                        # 在外面调用时 span 栈已空，输出 span 挂在 root 上、名字退化成
+                        # `node_output`，于是「这个节点输出了什么」对不上任何节点。
+                        _handle_output_span(tracer, result)
                     return result
                 finally:
                     _current_tracer.reset(token)
@@ -304,7 +307,7 @@ def traced_node(name: str, span_type: str = "NODE"):
                 try:
                     with tracer.span(name, span_type=span_type, input=_summarize_state(state)):
                         result = func(state, **kwargs)
-                    _handle_output_span(tracer, result)
+                        _handle_output_span(tracer, result)   # 同上：必须在 with 内
                     return result
                 finally:
                     _current_tracer.reset(token)

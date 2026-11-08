@@ -700,6 +700,18 @@ export default function WorkbenchPage() {
           <button type="button" className="nav-btn" onClick={() => navigate('/templates')}>
             模板中心
           </button>
+          {/* 2026-11-08（plan trace-inspector D3）：带上当前会话，进去直接看这一轮的节点链路——
+              不用再让人去 /observability 里翻 trace_id。 */}
+          <button
+            type="button"
+            className="nav-btn"
+            title={activeSessionId ? '看当前会话每一轮的节点执行情况' : '看所有执行链路'}
+            onClick={() => navigate(
+              activeSessionId ? `/observability?session=${encodeURIComponent(activeSessionId)}` : '/observability',
+            )}
+          >
+            执行链路
+          </button>
           <button type="button" className="nav-btn" onClick={() => navigate('/observability')}>
             可观测
           </button>

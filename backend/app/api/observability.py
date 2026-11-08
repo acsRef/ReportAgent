@@ -48,6 +48,33 @@ async def list_traces(
     return {"traces": traces, "limit": limit, "offset": offset}
 
 
+def _merge_output_spans(spans: list[dict]) -> list[dict]:
+    """把 `xxx_output`（span_type=DATA）的内容合并进父节点的 `output`，并从列表里去掉。
+
+    2026-11-08（plan trace-inspector）：`@traced_node` 的 `_handle_output_span` 会为每个节点
+    再开一个 DATA span，把节点产出放在它的 **input** 里。于是页面上点开节点看到
+    「输出：空」——排查时最想看的恰恰是它；而且一轮 43 个 span 里一半是这种内部摘要。
+
+    合并后：节点数减半，每个节点都有自己的输出。
+    """
+    outputs: dict[str, list] = {}
+    kept: list[dict] = []
+    for span in spans:
+        if span.get("span_type") == "DATA" and span.get("parent_span_id"):
+            outputs.setdefault(str(span["parent_span_id"]), []).append(span.get("input"))
+            continue
+        kept.append(span)
+    for span in kept:
+        extra = outputs.get(str(span.get("span_id")))
+        if not extra:
+            continue
+        merged = extra[0] if len(extra) == 1 else extra
+        if span.get("output"):
+            merged = [span["output"], merged]
+        span["output"] = merged
+    return kept
+
+
 @router.get("/traces/{trace_id}")
 async def get_trace_detail(trace_id: str, user: dict = Depends(get_current_user)) -> dict:
     """trace 明细：trace 本体 + span 执行链路 + 关联的 LLM 调用。
@@ -59,4 +86,4 @@ async def get_trace_detail(trace_id: str, user: dict = Depends(get_current_user)
         raise HTTPException(status_code=404, detail="TRACE_NOT_FOUND")
     spans = await _repo.get_spans(trace_id)
     llm_calls = await _repo.get_llm_calls(trace_id)
-    return {"trace": trace, "spans": spans, "llm_calls": llm_calls}
+    return {"trace": trace, "spans": _merge_output_spans(spans), "llm_calls": llm_calls}

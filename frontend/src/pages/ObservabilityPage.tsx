@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Empty from '../components/atelier/Empty'
 import Spinner from '../components/atelier/Spinner'
 import Tag from '../components/atelier/Tag'
@@ -203,6 +203,10 @@ function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
 
 export default function ObservabilityPage() {
   const navigate = useNavigate()
+  // 2026-11-08（plan trace-inspector D2）：从工作台「执行链路」进来时带着 ?session=<sid>，
+  // 这里直接按会话筛——排查时手里只有「刚才那轮」，不该让人去复制 trace_id。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const sessionFilter = searchParams.get('session') ?? ''
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [traces, setTraces] = useState<TraceSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -215,7 +219,10 @@ export default function ObservabilityPage() {
     setLoading(true)
     setError(null)
     try {
-      const [m, t] = await Promise.all([fetchMetrics(), fetchTraces(50)])
+      const [m, t] = await Promise.all([
+        fetchMetrics(),
+        fetchTraces(50, 0, undefined, sessionFilter || undefined),
+      ])
       setMetrics(m)
       setTraces(t.traces)
     } catch (e) {
@@ -223,9 +230,15 @@ export default function ObservabilityPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [sessionFilter])
 
   useEffect(() => { load() }, [load])
+
+  const clearSessionFilter = () => {
+    setSelectedId(null)
+    setDetail(null)
+    setSearchParams({}, { replace: true })
+  }
 
   const selectTrace = async (id: string) => {
     if (selectedId === id) {
@@ -338,9 +351,33 @@ export default function ObservabilityPage() {
             </div>
 
             {/* Trace 列表 */}
-            <Text strong style={{ fontSize: 12, color: 'var(--muted)', letterSpacing: '0.08em', display: 'block', marginBottom: 12 }}>
-              最近 TRACE（{traces.length}）
-            </Text>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+              <Text strong style={{ fontSize: 12, color: 'var(--muted)', letterSpacing: '0.08em' }}>
+                最近 TRACE（{traces.length}）
+              </Text>
+              {sessionFilter && (
+                <>
+                  <Tag tone="ink">会话 {sessionFilter.slice(0, 8)}</Tag>
+                  <button
+                    type="button"
+                    className="obs-lift"
+                    onClick={clearSessionFilter}
+                    style={{
+                      border: '1px solid var(--row-line)', background: 'var(--paper)',
+                      color: 'var(--muted)', borderRadius: 6, padding: '2px 8px',
+                      fontSize: 11, cursor: 'pointer',
+                    }}
+                  >
+                    看全部
+                  </button>
+                </>
+              )}
+            </div>
+            {sessionFilter && traces.length === 0 && (
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                这个会话还没有 trace 记录（跑一轮问答后就会出现）。
+              </Text>
+            )}
             {traces.length === 0 ? (
               <Empty description={<span style={{ fontSize: 13, color: 'var(--muted)' }}>暂无 trace 记录</span>} style={{ marginTop: 40 }} />
             ) : (

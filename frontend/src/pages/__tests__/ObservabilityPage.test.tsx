@@ -85,4 +85,44 @@ describe('ObservabilityPage', () => {
     render(<MemoryRouter><ObservabilityPage /></MemoryRouter>)
     expect(await screen.findByText('暂无 trace 记录')).toBeTruthy()
   })
+
+  // 2026-11-08（plan trace-inspector D2/D3）：从工作台带 ?session= 进来，直接看这一轮。
+  it('带 session 参数时按会话筛，并显示「看全部」入口', async () => {
+    setup()
+    render(
+      <MemoryRouter initialEntries={['/observability?session=sess-1234567890']}>
+        <ObservabilityPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/会话 sess-123/)).toBeTruthy()
+    expect(screen.getByText('看全部')).toBeTruthy()
+    // 第四个参数就是 sessionId
+    expect(mTraces).toHaveBeenCalledWith(50, 0, undefined, 'sess-1234567890')
+  })
+
+  it('点「看全部」回到不带筛选', async () => {
+    setup()
+    render(
+      <MemoryRouter initialEntries={['/observability?session=sess-1234567890']}>
+        <ObservabilityPage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByText('看全部'))
+
+    await screen.findByText('2024年华东销售趋势')
+    expect(mTraces).toHaveBeenLastCalledWith(50, 0, undefined, undefined)
+  })
+
+  it('会话里没有 trace 时给一句人话', async () => {
+    mMetrics.mockResolvedValue(METRICS)
+    mTraces.mockResolvedValue({ traces: [], limit: 50, offset: 0 })
+    render(
+      <MemoryRouter initialEntries={['/observability?session=sess-empty']}>
+        <ObservabilityPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/这个会话还没有 trace 记录/)).toBeTruthy()
+  })
 })
