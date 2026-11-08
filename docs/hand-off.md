@@ -28,6 +28,15 @@ node   .e2elogs/probe_reasoning_ui.mjs       # 「已思考（用时 N 秒）」
 node   .e2elogs/probe_trace_persistence.mjs  # 思考链路落库：两行 turn_trace + F5 后仍能展开读原文（12 项判据）
 node   .e2elogs/probe_live_issues.mjs        # 「画饼图」出 pie + schema 步骤文案 + 等待秒数 + 截断标注（5 项判据）
 node   .e2elogs/probe_reasoning_stream.mjs   # 思考链路流式可见：边跑边长 + 「· Ns」+ 首个帧早于终局（8 项判据）
+
+# 中断场景（各自独立，别混在一起跑）
+node   .e2elogs/probe_interrupt_midstream.mjs   # 流式途中掐断连接：后台仍跑完、库里内容齐全（8 项判据）
+node   .e2elogs/probe_refresh_midturn.mjs       # 解析中 F5：重载后靠轮询恢复出确认条（7 项判据）
+node   .e2elogs/probe_close_page_midturn.mjs    # 跑到一半关浏览器：无前端在场也能跑完（7 项判据）
+
+# 中断相关聚焦用例（只跑这两个文件，别跑整套）
+pytest backend/tests/contracts/test_interruption_resilience.py -q
+cd frontend && npx vitest --run src/stores/__tests__/interruption.test.ts
 node   .e2elogs/probe_clean_two_turns.mjs    # 两轮：一份报告 / 一条助手消息 / 历史仍在
 node   .e2elogs/probe_hit_test.mjs           # 全页按钮命中测试（被遮挡元素应为 0）
 node   .e2elogs/probe_reasoning_models.py    # 推理模型直连探针（CoT / 延迟）
@@ -72,6 +81,7 @@ Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
 | 14 | **思考链路落库**（plan `2026-11-05-trace-persistence.md`）：`app.conversations` 加 `turn_trace` 行（entries + 时长 + 原文），两个 runner 顺手收集落库；前端按行序挂到该轮助手消息；顺带补闲聊 `assistant_text` | 见 plan 落地记录 |
 | 15 | **真机 5 问收口**（plan `2026-11-05-live-session-issues.md`）：思考截断标注 / 超时快速重试 + 等待秒数 / schema 步骤文案拆四种 / 显式图表要求（「画饼图」→ pie，优先于记忆偏好） | 见 plan 落地记录 |
 | 16 | **思考链路实时可见**（plan `2026-11-05-streaming-reasoning.md`）：provider 流式收 `reasoning_content` → 节流 350ms 发既有 `trace` 帧 → 前端链路「边跑边长」+「正在输出…」；预算与总额成对可调（`TURN_MAX_TOKENS`）；图节点走 async 客户端（同步会堵事件循环，帧会挤在一起吐） | 见 plan 落地记录 |
+| 17 | **中断场景收口**（plan `2026-11-08-interruption-resilience.md`）：断流 / 停止 / F5 / 关浏览器各写**独立**用例（2 个测试文件 + 3 个探针）；`live` 缓冲同 step 只留最新帧 + 流式帧上限 600；**修 F5 卡死真 bug**（解析中刷新后不起轮询 → 永远停在「正在解析」） | 三探针全绿 |
 
 ### 2026-11-04 做完的事
 
@@ -278,6 +288,13 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
     的 `turn model http failed`。
 23. **`app/agent/*` 不能 import `app.tools.rag_schema`**（P2 传输层边界钉子）：需要 schema 检索
     的失败原因走 `app.tools.data_tools.last_schema_error` 转发，别直连。
+24. **「会话还在忙吗」只有一个判定源**：`isBusyPhase`（parsing / generating / adjusting）。
+    `loadSessionSnapshot` 曾只认 generating/adjusting，于是**解析中按 F5 回来不会起轮询**，
+   界面永远停在「正在解析」、发送框永久禁用（2026-11-08 探针抓到）。别再手写 phase 列表。
+25. **流式帧会让缓冲变大**：订阅者一断（断流/F5/关页面），`registry.publish` 还在往里塞。
+   现在 `live` 里同一 step 只留最新一帧、流式帧总量上限 600（超了只停过程帧，终态照发）。
+26. **验证中断场景别用「看截图」**：判据是「断开后库里 phase 是否收敛 + 行是否齐」，
+   再补一次 UI 复核；三个探针（interrupt / refresh / close-page）各自独立跑，别混。
 
 ## 5. 文档地图
 

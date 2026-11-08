@@ -61,6 +61,22 @@ describe('loadSessionSnapshot', () => {
     expect(busy).toBe(true)
   })
 
+  // 2026-11-08（plan interruption-resilience）：解析中按 F5 回来必须起轮询，
+  // 否则界面永远停在「正在解析」、发送框一直禁用（真机 probe_refresh_midturn 抓到）。
+  it('resume parsing 也返回 busy=true（否则刷新后永远卡在解析中）', async () => {
+    fetchSessionMock.mockResolvedValue(snapshot('parsing'))
+    const busy = await loadSessionSnapshot('s1', noopToast)
+    expect(busy).toBe(true)
+    expect(useAnalysisStore.getState().phase).toBe('parsing')
+  })
+
+  it('resume 稳定态（awaiting_* / report_ready）返回 busy=false', async () => {
+    for (const phase of ['awaiting_confirm', 'awaiting_missing', 'report_ready']) {
+      fetchSessionMock.mockResolvedValue(snapshot(phase))
+      expect(await loadSessionSnapshot('s1', noopToast)).toBe(false)
+    }
+  })
+
   it('resume error 返回 busy=false 且 phase=error', async () => {
     fetchSessionMock.mockResolvedValue(snapshot('error'))
     const busy = await loadSessionSnapshot('s1', noopToast)

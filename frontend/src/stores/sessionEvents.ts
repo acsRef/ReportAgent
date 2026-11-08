@@ -12,6 +12,7 @@ import type { ToastApi } from '../api/confirmStream'
 import type { ReportVersionStatus } from '../types/analysis'
 import type { TimelineEntry } from '../types/report'
 import { useAnalysisStore } from './analysisStore'
+import { isBusyPhase } from './analysisReducer'
 
 export interface StreamEventCtx {
   msgApi: ToastApi
@@ -104,7 +105,11 @@ function toReportVersion(
  * 会话快照恢复（session resume）。P11 F6：恢复 requirement + 版本列表后，
  * 以快照 phase 覆写（report/received 的 report_ready 副作用不掩盖真实状态）。
  *
- * @returns true = 会话仍在后台忙（generating/adjusting）——调用方据此恢复轮询。
+ * @returns true = 会话仍在后台忙（`parsing` / `generating` / `adjusting`）——调用方据此恢复轮询。
+ *
+ * 2026-11-08（plan interruption-resilience）：这里此前只认 generating/adjusting，
+ * 于是**解析中按 F5** 回来后不会起轮询 → 界面永远停在「正在解析」（发送框一直禁用），
+ * 而库里那一轮其实已经跑完。判定统一走 `isBusyPhase`（与轮询完成判定 `isSettledPhase` 同一张表）。
  */
 export async function loadSessionSnapshot(
   sessionId: string,
@@ -126,10 +131,12 @@ export async function loadSessionSnapshot(
     for (const v of snap.session?.report_versions ?? []) {
       dispatch({ type: 'report/received', report: toReportVersion(v, sessionId) })
     }
-    if (isAnalysisPhase(snap.session.phase)) {
-      dispatch({ type: 'phase/received', phase: snap.session.phase })
+    const phase = snap.session.phase
+    if (isAnalysisPhase(phase)) {
+      dispatch({ type: 'phase/received', phase })
+      return isBusyPhase(phase)
     }
-    return snap.session.phase === 'generating' || snap.session.phase === 'adjusting'
+    return false
   } catch (err) {
     msgApi.error(`加载会话失败：${String(err).slice(0, 100)}`)
     return false

@@ -173,30 +173,40 @@ export const CLOSE_NOTE: Record<TimelineCloseReason, string | null> = {
 }
 
 /**
- * 一轮结束：把还挂在「进行中」的步骤按原因定性。
+ * 一轮结束：把还挂在「进行中」的步骤按原因定性，并同步**消息自身**的状态。
  *
- *   done → success（最后一步只是没来得及发 success 帧）
- *   stopped → pending（用户停止观看，后台还在跑）
- *   interrupted / error → error（真的断在这里）
+ *   done → success（最后一步只是没来得及发 success 帧）+ 消息 done
+ *   stopped → pending（用户停止观看，后台还在跑）+ 消息保持 streaming（轮询会补终态）
+ *   interrupted / error → error（真的断在这里）+ 消息 error
+ *
+ * 2026-11-08（plan interruption-resilience）：消息 status 必须跟着收尾原因走——
+ * 否则断流后那条助手消息永远停在 streaming，`ChatTurn.status` 一辈子是「进行中」。
  */
 export function closeTrace(
   messages: ChatMessage[],
   reason: TimelineCloseReason,
 ): ChatMessage[] {
-  const status: TimelineEntry['status'] =
+  const stepStatus: TimelineEntry['status'] =
     reason === 'done' ? 'success' : reason === 'stopped' ? 'pending' : 'error'
+  const messageStatus: ChatStatus | null =
+    reason === 'stopped' ? null : reason === 'done' ? 'done' : 'error'
   const index = liveAssistantIndex(messages)
   if (index < 0) return messages
   const message = messages[index]
   const trace = message.trace.map((entry) =>
-    entry.status === 'running' ? { ...entry, status } : entry,
+    entry.status === 'running' ? { ...entry, status: stepStatus } : entry,
   )
   const note =
     reason === 'done' && trace.every((entry) => entry.status !== 'running')
       ? null
       : CLOSE_NOTE[reason]
   const next = [...messages]
-  next[index] = { ...message, trace, traceNote: note }
+  next[index] = {
+    ...message,
+    trace,
+    traceNote: note,
+    ...(messageStatus ? { status: messageStatus } : {}),
+  }
   return next
 }
 

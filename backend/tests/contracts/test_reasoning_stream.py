@@ -31,6 +31,11 @@ class TestTokenBudgets:
         monkeypatch.setenv("TURN_MAX_TOKENS", "4000")
         assert reasoning_client.resolve_max_tokens(512) == 4000
 
+    def test_总额低于预算时兜底(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 配错（总额 ≤ 预算）→ 回答一个 token 都拿不到，必须兜底而不是静默生效
+        monkeypatch.setenv("TURN_MAX_TOKENS", "600")
+        assert reasoning_client.resolve_max_tokens(1024) == 1324
+
     def test_预算可被_env_覆盖(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TURN_THINKING_BUDGET", "1024")
         assert reasoning_client.resolve_thinking_budget() == 1024

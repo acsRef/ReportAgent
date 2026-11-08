@@ -63,12 +63,22 @@ def resolve_thinking_budget(override: int | None = None) -> int:
 
 
 def resolve_max_tokens(budget: int) -> int:
-    """总额（思考 + 回答共享）。默认 = 预算 + 900，保证回答那部分不会被预算吃掉。"""
+    """总额（思考 + 回答共享）。默认 = 预算 + 900，保证回答那部分不会被预算吃掉。
+
+    2026-11-05：`TURN_MAX_TOKENS` 若被配成 ≤ 预算（手滑/复制粘贴），回答一个 token 都拿不到
+    → JSON 截断 → 表现成「理解失败」。这里兜底抬到 `预算 + 300` 并告警，不让配置错误静默生效。
+    """
     try:
         configured = int(os.getenv("TURN_MAX_TOKENS", "") or 0)
     except (TypeError, ValueError):
         configured = 0
     if configured > 0:
+        if budget > 0 and configured < budget + 300:
+            logger.warning(
+                "TURN_MAX_TOKENS=%s 小于思考预算 %s + 300，回答会被截断；按 %s 兜底",
+                configured, budget, budget + 300,
+            )
+            return budget + 300
         return configured
     return max(1200, budget + 900)
 
