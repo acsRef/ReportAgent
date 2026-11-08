@@ -105,6 +105,11 @@ def _finish_reply(
         return None, ""
 
     raw, reasoning = reply.content, reply.reasoning
+    # 2026-11-08（用户批评：评测从不知道有没有被截断）：
+    # 把用量与截断记进 meta，评测/步骤文案都能看见「这次是不是顶到预算了」。
+    if meta is not None:
+        meta["reasoning_tokens"] = reply.reasoning_tokens
+        meta["truncated"] = bool(reply.truncated)
     if reply.truncated and reasoning:
         # 预算用尽：原文停在半句。加一行标注，别让用户以为界面把内容吃了。
         reasoning = f"{reasoning.rstrip()}\n\n{REASONING_TRUNCATED_MARKER}"
@@ -146,6 +151,7 @@ def understand_turn(
     *,
     task: ActiveAnalysisTask | None = None,
     history: list[str] | None = None,
+    context_block: str = "",
     schema_digest: str = "",
     model: str | None = None,
     enable_thinking: bool | None = None,
@@ -173,7 +179,8 @@ def understand_turn(
     from app.llm.reasoning_client import chat_with_reasoning
 
     prompt = build_turn_plan_prompt(
-        user_query, task=task, history=history, schema_digest=schema_digest,
+        user_query, task=task, history=history,
+        context_block=context_block, schema_digest=schema_digest,
     )
     chosen_model = model or turn_model()
     on_delta = _delta_forwarder(on_reasoning)
@@ -214,6 +221,7 @@ async def understand_turn_async(
     *,
     task: ActiveAnalysisTask | None = None,
     history: list[str] | None = None,
+    context_block: str = "",
     schema_digest: str = "",
     model: str | None = None,
     enable_thinking: bool | None = None,
@@ -226,7 +234,8 @@ async def understand_turn_async(
     from app.llm.reasoning_client import chat_with_reasoning_async
 
     prompt = build_turn_plan_prompt(
-        user_query, task=task, history=history, schema_digest=schema_digest,
+        user_query, task=task, history=history,
+        context_block=context_block, schema_digest=schema_digest,
     )
     chosen_model = model or turn_model()
     on_delta = _delta_forwarder(on_reasoning)

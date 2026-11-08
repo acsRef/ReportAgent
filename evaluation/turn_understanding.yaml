@@ -130,3 +130,54 @@ cases:
       cleared: []
       updated: []
       needs_clarification: true
+
+  # --- 2026-11-08 追加：真机里最常出现的一类——「接着上一轮问一句」 -------------
+  #
+  # 用户截图：第二轮「然后标注一下 总的销售额是多少，以及增长率是多少」，
+  # 界面显示「思考预算用尽」。此前评测集 8 条里没有一条是这种简单追问，
+  # 所以「预算被撑爆」这件事从来没被测出来。
+
+  - id: t9_simple_followup_growth
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      granularity: "week"
+      goals: [{type: trend}, {type: anomaly}]
+    query: "然后标注一下 总的销售额是多少，以及增长率是多少"
+    expect:
+      act: follow_up
+      goals: null
+      preserve: [time_range, scope, metrics]
+      cleared: []
+      updated: []
+
+  - id: t10_switch_scope
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      granularity: "week"
+      goals: [{type: trend}]
+    query: "那看华南的呢"
+    expect:
+      act: modify_task
+      goals: null
+      preserve: [time_range, metrics]
+      cleared: []
+      updated: [scope]
+
+  - id: t11_add_category
+    task:
+      time_range: "2024年"
+      scope: ["华东"]
+      metrics: ["销售额"]
+      granularity: "month"
+      goals: [{type: trend}]
+    query: "按品类再细分一下"
+    expect:
+      act: follow_up
+      goals: [compare]
+      preserve: [time_range, scope, metrics]
+      cleared: []
+      updated: [goals]

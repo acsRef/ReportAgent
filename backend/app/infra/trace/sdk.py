@@ -316,7 +316,10 @@ def traced_node(name: str, span_type: str = "NODE"):
 
 
 def _handle_output_span(tracer: Tracer, result: Any):
-    if not result:
+    # 2026-11-08：节点返回值不一定是 dict（被 memoize/直传的函数可能返回 str/list）。
+    # 之前这里直接 `r.keys()`，一旦有非 dict 返回值整个节点就抛 AttributeError——
+    # 而异常发生在 trace 包装层，表现出来是「节点莫名失败 + 模型调用没记账」。
+    if not result or not isinstance(result, dict):
         return
     r = deepcopy(result)
     for k in list(r.keys()):

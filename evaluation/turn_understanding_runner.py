@@ -57,7 +57,7 @@ def _task(raw: dict | None) -> ActiveAnalysisTask | None:
     return ActiveAnalysisTask.model_validate(raw)
 
 
-def _score_case(case: dict, plan, reasoning: str, elapsed: float) -> dict:
+def _score_case(case: dict, plan, reasoning: str, elapsed: float, meta: dict | None = None) -> dict:
     expect = case.get("expect") or {}
     plan_ok = plan is not None
     act_ok = None
@@ -112,6 +112,9 @@ def _score_case(case: dict, plan, reasoning: str, elapsed: float) -> dict:
         "elapsed": elapsed,
         "has_reasoning": bool(reasoning),
         "verdict": (reportability.verdict if reportability else None),
+        # 2026-11-08（用户批评「思考用尽」没被评测发现）：把用量与截断纳入评分数据。
+        "reasoning_tokens": (meta or {}).get("reasoning_tokens"),
+        "truncated": (meta or {}).get("truncated"),
     }
 
 
@@ -127,17 +130,21 @@ def run_model(model: str, cases: list[dict], *, thinking: bool, budget: int) -> 
     reasons: list[str] = []
     for case in cases:
         started = time.monotonic()
+        meta: dict = {}
         plan, reasoning = understand_turn(
             case["query"],
             task=_task(case.get("task")),
             model=model,
             enable_thinking=thinking,
             thinking_budget=budget,
+            meta=meta,
         )
         elapsed = time.monotonic() - started
         if reasoning:
             reasons.append(case["id"])
-        rows.append(_score_case(case, plan, reasoning, elapsed))
+        rows.append(_score_case(case, plan, reasoning, elapsed, meta))
+        if meta.get("truncated"):
+            print(f"    !! {case['id']} 思考预算用尽（{meta.get('reasoning_tokens')} tokens）")
         print(
             f"  [{model}] {case['id']:<20} json={rows[-1]['json_ok']} "
             f"act={rows[-1]['act_ok']} goals={rows[-1]['goals_ok']} "
@@ -156,6 +163,11 @@ def run_model(model: str, cases: list[dict], *, thinking: bool, budget: int) -> 
         "updated": _rate(rows, "updated_ok"),
         "median_s": round(statistics.median(latencies), 1) if latencies else 0.0,
         "reasoning_cases": len(reasons),
+        # 截断率：0/N 才好。用户界面上「思考预算用尽」就是这个指标 > 0。
+        "truncated": _rate(rows, "truncated"),
+        "reasoning_tokens_max": max(
+            (row["reasoning_tokens"] or 0 for row in rows), default=0,
+        ),
         "rows": rows,
     }
 
@@ -165,7 +177,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", nargs="*", default=None)
     parser.add_argument("--no-thinking", action="store_true")
-    parser.add_argument("--budget", type=int, default=1024)
+    parser.add_argument("--budget", type=int, default=1536)  # 与 budgets.thinking_budget 默认一致
     parser.add_argument("--json-out", default="")
     args = parser.parse_args()
 
@@ -185,7 +197,10 @@ def main() -> None:
             results.append({"model": model, "error": str(exc)[:200]})
 
     print("\n=== summary ===")
-    header = f"{'model':<32} {'json':<6} {'act':<7} {'goals':<7} {'extreme':<8} {'inherit':<8} {'upd':<6} {'median':<7} {'CoT'}"
+    header = (
+        f"{'model':<32} {'json':<6} {'act':<7} {'goals':<7} {'extreme':<8} "
+        f"{'inherit':<8} {'upd':<6} {'median':<7} {'trunc':<7} {'maxTok':<7} {'CoT'}"
+    )
     print(header)
     for row in results:
         if row.get("error"):
@@ -194,8 +209,11 @@ def main() -> None:
         print(
             f"{row['model']:<32} {row['json']:<6} {row['act']:<7} {row['goals']:<7} "
             f"{row['extremes']:<8} {row['inherit']:<8} {row['updated']:<6} "
-            f"{row['median_s']:<7} {row['reasoning_cases']}/{len(cases)}"
+            f"{row['median_s']:<7} {row.get('truncated', '—'):<7} "
+            f"{row.get('reasoning_tokens_max', 0):<7} {row['reasoning_cases']}/{len(cases)}"
         )
+    if any(r.get("truncated") and r["truncated"] != "0/0" for r in results if not r.get("error")):
+        print("\n注意：trunc 不是 0/N —— 有轮次的思维链被思考预算截断（界面会显示「跑满预算」）。")
 
     if args.json_out:
         Path(args.json_out).write_text(

@@ -530,6 +530,48 @@ def turn_understanding_enabled() -> bool:
     return (os.getenv("TURN_UNDERSTANDING") or "").strip() in ("1", "true", "on", "yes")
 
 
+async def _turn_context_block(state: RequirementAnalysisState, *, has_prior: bool) -> str:
+    """这一轮 Turn Understanding 的**对话上下文**（Context Runtime 唯一入口）。
+
+    2026-11-08（真机 + 用户质疑）：这里一直传 `history=None`，模型只有上一轮归并后的
+    几个字段（249 字），看不到用户到底说了什么——「然后标注一下…」里的「然后」「标注」
+    全靠它推理，25 秒预算就是这么烧掉的。
+
+    设计（复用 P3/P4c 的 Context Runtime，不自拼字符串）：
+    - agent 名用 `turn_understanding`，resolver 对未知 agent → **REQUIREMENT 档**
+      （保守 fallback，语义正好：需求理解只吃用户原话）；
+    - REQUIREMENT 档刻意**排除** L2 摘要 / 上一轮 SQL 参考帧 / query memory——
+      那些会把旧口径顺着散文逐轮固化，是「追问越走越偏」的真实通道；
+    - 失败就当没有上下文（不阻塞这一轮）：`fail-open`。
+    """
+    session_id = str(state.get("session_id") or "")
+    user_id = state.get("user_id")
+    if not session_id or not user_id:
+        return ""
+    try:
+        from app.context.runtime import context_runtime
+
+        bundle = await context_runtime.build(
+            session_id=session_id,
+            user_id=int(user_id),
+            query=str(state.get("user_query") or ""),
+            agent="turn_understanding",
+            state_dict={
+                "user_query": state.get("user_query"),
+                "has_prior_task": has_prior,
+            },
+            # 它判断的就是「这一轮相对上一轮是什么」，对话上下文是刚需，不走词表启发式。
+            force_conversation=True,
+        )
+        block = str(bundle.get("conversation_context") or "").strip()
+        if block:
+            logger.info("turn understanding context: %s chars", len(block))
+        return block
+    except Exception as exc:  # noqa: BLE001 - 上下文拿不到不该挡住理解
+        logger.warning("turn understanding context failed: %s", exc)
+        return ""
+
+
 @traced_node("turn_understand")
 async def _turn_understand(state: RequirementAnalysisState) -> dict:
     """强模型理解这一轮（一次调用），产出 TurnPlan；失败返回空计划 → 回落旧解析。
@@ -549,13 +591,19 @@ async def _turn_understand(state: RequirementAnalysisState) -> dict:
 
     digest = _schema_digest(state.get("schema_context"))
     meta: dict = {}
+    # 2026-11-08（用户拍板「每次都要有总的上下文」）：这一轮必须拿到**对话上下文**，
+    # 否则模型只看到上一轮归并后的几个字段，得靠推理猜「然后」「标注」指向什么。
+    # 走 Context Runtime（宪法 §2：Agent 不得自拼 Context），REQUIREMENT 档给的是
+    # 用户原话脉络（刻意不含模型写的散文，防口径被逐轮固化）。
+    context_block = await _turn_context_block(state, has_prior=prior is not None)
     # 2026-11-05（plan streaming-reasoning）：边跑边把累计思维链发成 trace 帧，
     # 前端思考块随之增长（sink 由 `_run_requirement_graph` 安装；没装就静默跳过）。
     # 必须走 async 版：同步 httpx 会把事件循环堵住，帧只能在结束后一起吐出。
     from app.infra.execution import reasoning_stream
 
     plan, reasoning = await understand_turn_async(
-        state.get("user_query", ""), task=prior, history=None, schema_digest=digest,
+        state.get("user_query", ""), task=prior, context_block=context_block,
+        schema_digest=digest,
         meta=meta, on_reasoning=reasoning_stream.emit,
     )
     # 2026-11-05（plan live-session-issues D1/D2）：把「这一次到底发生了什么」如实写进

@@ -53,6 +53,7 @@ class ContextRuntime:
         agent: str,
         state_dict: dict | None = None,
         remaining_token_budget: int | None = None,  # P4c post-review F2: 透传给 assembler
+        force_conversation: bool = False,
     ) -> ContextBundle:
         # Step 1：解析 agent_policy
         agent_policy: AgentContextPolicy = self._resolver.resolve(agent)
@@ -64,8 +65,14 @@ class ContextRuntime:
         )
         # Step 3：conversation context（F11：SelectiveRecallPolicy.decision.conversation
         # 不再是死字段；False 时跳过——纯闲聊 / 已完整 query 等场景不浪费一次 DB 往返）。
+        #
+        # 2026-11-08（真机）：`force_conversation` 给「专门判断轮次关系的 agent」用。
+        # Turn Understanding 的职责就是回答「这一轮相对上一轮是什么」，它的对话上下文
+        # 不该由 `_HISTORY_REF` 词表决定——用户说「**然后**标注一下」，「然后」不在词表里，
+        # 于是被判成「不延续历史」，对话上下文给空，模型只能靠推理猜「然后」「标注」指什么，
+        # 25 秒预算就是这么烧掉的。词表是对「是否需要历史」的**启发式**，不适用于它。
         conversation_context = ""
-        if decision.conversation:
+        if force_conversation or decision.conversation:
             if agent_policy == AgentContextPolicy.REQUIREMENT:
                 # 2026-11-04（plan 2026-11-04-requirement-slot-contract Phase 3）：
                 # 需求解析只吃**用户原话**，不吃 L2 摘要/L2.5 脉络——那些是模型写的
