@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>ReportAgent 场景测试报告 · 2026-11-08 20:28</title>
+<style>
+:root{--ink:#1d2321;--muted:#6b7671;--line:#e3e6e2;--paper:#fff;--canvas:#f6f7f4;
+--teal:#0f6f5c;--red:#b4232a;--green:#1f7a45;--amber:#a9650a;--mono:ui-monospace,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);
+font:14px/1.6 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;padding:28px}
+h1{font-size:22px;margin:0 0 6px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+.summary{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+.kpi{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:12px 18px;min-width:120px}
+.kpi b{display:block;font-size:22px;line-height:1.2}
+.kpi span{color:var(--muted);font-size:12px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
+.card>header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.card>header h2{font-size:15px;margin:0}
+.id{font:600 12px var(--mono);color:var(--muted)}
+.why{color:var(--muted);font-size:12px;flex-basis:100%;margin-top:4px}
+.badge{font-size:12px;padding:2px 9px;border-radius:999px;border:1px solid}
+.badge.ok{color:var(--green);border-color:#bfe0cc;background:#f1f9f4}
+.badge.bad{color:var(--red);border-color:#f0c8ca;background:#fdf3f3}
+.body{padding:14px 18px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:11.5px;letter-spacing:.04em}
+code,pre{font-family:var(--mono);font-size:11.5px}
+pre{background:#f8faf8;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:220px;margin:6px 0 0}
+.checks{display:flex;flex-direction:column;gap:4px;margin-top:10px}
+.chk{font-size:12.5px}
+.chk .ok{color:var(--green)}
+.chk .bad{color:var(--red)}
+.q{font-family:var(--mono);background:#eef2ef;padding:1px 6px;border-radius:4px;font-size:12px}
+details{margin-top:8px}
+summary{cursor:pointer;color:var(--muted);font-size:12px}
+.note{color:var(--amber);font-size:12px;margin-top:8px}
+</style></head><body>
+<h1>ReportAgent 场景测试报告</h1>
+<div class="sub">生成时间 2026-11-08 20:28:06 ｜ 问法故意含糊，模拟真人说话 ｜ 每轮都是真 LLM + 真数据库</div>
+<div class="summary">
+  <div class="kpi"><b>12/12</b><span>场景通过</span></div>
+  <div class="kpi"><b>19</b><span>总轮次</span></div>
+  <div class="kpi"><b>19.6s</b><span>单轮平均耗时</span></div>
+</div>
+
+<h2 style="font-size:15px;margin:0 0 10px">逐轮明细（每一轮用户说了什么、卡片变成什么）</h2>
+<div class="card"><div class="body"><table><thead><tr><th>#</th><th>问法</th><th>口径</th><th>时间</th><th>范围</th><th>明细</th><th>待确认</th><th>可报告性</th><th>耗时</th></tr></thead><tbody><tr><td>S1-1</td><td><span class='q'>最近卖得咋样</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>7.1s</td></tr><tr><td>S2-1</td><td><span class='q'>华东那边情况看看</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>14.3s</td></tr><tr><td>S3-1</td><td><span class='q'>上个月卖了多少</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>13.2s</td></tr><tr><td>S4-1</td><td><span class='q'>把订单列出来看看</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>detail</td><td>metric:用哪个指标？</td><td>—</td><td>13.6s</td></tr><tr><td>S5-1</td><td><span class='q'>2023年11月的单子列出来</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>detail</td><td>metric:用哪个指标？</td><td>—</td><td>4.5s</td></tr><tr><td>S6-1</td><td><span class='q'>分析下 2024 年华东销售</span><br><small>new</small></td><td>—</td><td>2024年</td><td>华东</td><td>—</td><td>metric:用哪个指标？, analysis_intent:想看哪种分析？</td><td>—</td><td>26.1s</td></tr><tr><td>S6-2</td><td><span class='q'>再按品类细分</span><br><small>supplement</small></td><td>—</td><td>2024年</td><td>华东</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>11.5s</td></tr><tr><td>S7-1</td><td><span class='q'>2024年华东各区域销售额</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>57.6s</td></tr><tr><td>S7-2</td><td><span class='q'>那华南呢</span><br><small>supplement</small></td><td>—</td><td>—</td><td>华南</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>25.6s</td></tr><tr><td>S8-1</td><td><span class='q'>2024年各区域销售额</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>8.8s</td></tr><tr><td>S8-2</td><td><span class='q'>画个饼图看看</span><br><small>supplement</small></td><td>—</td><td>—</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>5.1s</td></tr><tr><td>S9-1</td><td><span class='q'>2024年各区域销售额</span><br><small>new</small></td><td>—</td><td>2024年</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>7.9s</td></tr><tr><td>S9-2</td><td><span class='q'>画个饼图看看</span><br><small>supplement</small></td><td>—</td><td>2024年</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>7.5s</td></tr><tr><td>S9-3</td><td><span class='q'>换成柱状图</span><br><small>supplement</small></td><td>—</td><td>2024年</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>24.3s</td></tr><tr><td>S10-1</td><td><span class='q'>2024年华东各品类销售额</span><br><small>new</small></td><td>—</td><td>2024年</td><td>华东</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>29.2s</td></tr><tr><td>S10-2</td><td><span class='q'>那再细一点</span><br><small>supplement</small></td><td>净销售额</td><td>2024年</td><td>华东</td><td>—</td><td>—</td><td>—</td><td>62.2s</td></tr><tr><td>S11-1</td><td><span class='q'>2024年销售额最高的是哪个月</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>3.0s</td></tr><tr><td>S11-2</td><td><span class='q'>那个月的明细呢</span><br><small>supplement</small></td><td>—</td><td>—</td><td>—</td><td>detail</td><td>metric:用哪个指标？</td><td>—</td><td>38.5s</td></tr><tr><td>S12-1</td><td><span class='q'>随便看看数据</span><br><small>new</small></td><td>—</td><td>—</td><td>—</td><td>—</td><td>metric:用哪个指标？</td><td>—</td><td>12.0s</td></tr></tbody></table></div></div>
+
+<h2 style="font-size:15px;margin:22px 0 10px">分场景结果</h2>
+
+<section class="card">
+  <header>
+    <span class="id">S1</span>
+    <h2>单问 · 含糊（没有时间、没有口径）</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s1-b9e4</span>
+    <div class="why">用户只说「最近卖得咋样」，看系统是追问还是自己给默认口径</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>1</td>
+        <td>done</td>
+        <td>1</td>
+        <td>1</td>
+        <td>table</td>
+        <td>净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 口径已确定或正确追问 <small>— 口径=[]｜追问了口径</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT SUM(fact_orders.order_amount) - COALESCE(SUM(refund.refund_amount), 0) AS 净销售额
+FROM fact_orders
+LEFT JOIN (
+    SELECT order_id, SUM(payment_amount) AS refund_amount
+    FROM fact_payments 
+    WHERE status = &#x27;REFUNDED&#x27; 
+    GROUP BY order_id
+) refund ON refund.order_id = fact_orders.order_id</pre>
+      <pre>**结论**：近期净销售额达8.97亿元
+- 净销售额合计8.97亿元
+- 数据仅包含合计值，无法判断结构分布
+**可能原因**：数据不足以判断原因
+**建议下一步**：按品类拆分净销售额结构；获取环比数据观察趋势变化</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S2</span>
+    <h2>单问 · 只给范围（缺时间）</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s2-9763</span>
+    <div class="why">「华东那边情况看看」——只说范围，看是否补齐时间/口径</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>1</td>
+        <td>done</td>
+        <td>1</td>
+        <td>1</td>
+        <td>table</td>
+        <td>净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 口径已确定或正确追问 <small>— 口径=[]｜追问了口径</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT SUM(fact_orders.order_amount) - COALESCE(SUM(refund.refund_amount), 0) AS 净销售额
+FROM fact_orders
+LEFT JOIN (
+    SELECT order_id, SUM(payment_amount) AS refund_amount
+    FROM fact_payments 
+    WHERE status = &#x27;REFUNDED&#x27; 
+    GROUP BY order_id
+) refund ON refund.order_id = fact_orders.order_id</pre>
+      <pre>**结论**：华东地区净销售额达8.97亿元
+- 净销售额合计8.97亿元
+- 数据仅包含合计值，无法判断结构分布
+**可能原因**：数据不足以判断原因
+**建议下一步**：按城市/品类下钻分析贡献结构；补充时间维度查看趋势变化</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S3</span>
+    <h2>单问 · 相对时间（上月）</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s3-76dd</span>
+    <div class="why">「上个月卖了多少」——相对时间能不能落成具体区间</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>1</td>
+        <td>done</td>
+        <td>1</td>
+        <td>1</td>
+        <td>table</td>
+        <td>净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 报告出得来 <small>— status=done 行数=1</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT SUM(fact_orders.order_amount) - COALESCE(SUM(refund.refund_amount), 0) AS 净销售额
+FROM fact_orders
+LEFT JOIN (
+    SELECT order_id, SUM(payment_amount) AS refund_amount
+    FROM fact_payments 
+    WHERE status = &#x27;REFUNDED&#x27; 
+    GROUP BY order_id
+) refund ON refund.order_id = fact_orders.order_id</pre>
+      <pre>**结论**：上个月净销售额达8.97亿元
+- 净销售额合计8.97亿元
+- 数据仅显示总量，无结构分布明细
+**可能原因**：数据不足以判断原因
+**建议下一步**：按品类拆解净销售额构成；比对环比数据确认趋势</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S4</span>
+    <h2>明细 · 最直白的说法</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s4-7768</span>
+    <div class="why">「把订单列出来看看」——此前退化成一行总额</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>1</td>
+        <td>done</td>
+        <td>200</td>
+        <td>6</td>
+        <td>bar</td>
+        <td>日期, 区域, 品类, 订单金额, 支付金额, 支付状态</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 报告出得来 <small>— status=done 行数=200</small></div><div class='chk'><span class='ok>✓</span> 明细列数 ≥ 3 <small>— 列数=6</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT 
+  dim_date.full_date AS 日期,
+  dim_store.region AS 区域,
+  dim_product.category AS 品类,
+  fact_orders.order_amount AS 订单金额,
+  fact_payments.payment_amount AS 支付金额,
+  fact_payments.status AS 支付状态
+FROM fact_orders
+LEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date
+LEFT JOIN dim_store ON dim_store.store_id = fact_orders.store_id
+LEFT JOIN dim_product ON dim_product.product_id = fact_orders.product_id
+LEFT JOIN fact_payments ON fact_payments.order_id = fact_orders.order_id
+ORDER BY fact_orders.order_date DESC
+LIMIT 200</pre>
+      <pre>**结论**：订单金额合计 679,790.32，其中 日期=2026-10-31 最高（38,239.63），共 200 组
+- 订单金额最大38,239.63元（平板品类），最小25.44元（配件品类），平均3,398.95元
+- 支付状态异常订单共2笔：手机6,114.80元（待支付）和配件25.44元（待支付）
+**可能原因**：数据不足以判断华北区平板订单金额高的具体原因
+**建议下一步**：下钻分析平板品类高订单金额的集中区域和客户特征；排查支付状态异常订单的具体原因</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S5</span>
+    <h2>明细 · 带时间</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s5-8c16</span>
+    <div class="why">「2023年11月的单子列出来」——明细 + 明确时间</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>1</td>
+        <td>done</td>
+        <td>200</td>
+        <td>6</td>
+        <td>bar</td>
+        <td>日期, 区域, 品类, 订单金额, 支付金额, 支付状态</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 报告出得来 <small>— status=done 行数=200</small></div><div class='chk'><span class='ok>✓</span> 明细列数 ≥ 3 <small>— 列数=6</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT 
+  dim_date.full_date AS 日期,
+  dim_store.region AS 区域,
+  dim_product.category AS 品类,
+  fact_orders.order_amount AS 订单金额,
+  fact_payments.payment_amount AS 支付金额,
+  fact_payments.status AS 支付状态
+FROM fact_orders
+LEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date
+LEFT JOIN dim_store ON dim_store.store_id = fact_orders.store_id
+LEFT JOIN dim_product ON dim_product.product_id = fact_orders.product_id
+LEFT JOIN fact_payments ON fact_payments.order_id = fact_orders.order_id
+ORDER BY fact_orders.order_date DESC
+LIMIT 200</pre>
+      <pre>**结论**：订单金额合计 679,790.32，其中 日期=2026-10-31 最高（38,239.63），共 200 组
+- 单笔订单金额差异显著：最大38,239.63元（平板品类），最小25.44元（配件品类）
+- 支付状态异常订单占比10%：含1笔待支付（6,114.80元）和1笔已退款（4,718.27元）
+**可能原因**：数据不足以判断单日订单集中及金额悬殊的具体原因
+**建议下一步**：下钻分析平板品类在华北区域的高额订单（20,208.53元）成因；核对2026-10-30与10-31日的支付成功率差异（43,420.83元 vs 636,369.49元）</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S6</span>
+    <h2>连续追问 · 加维度</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s6-9db4</span>
+    <div class="why">先看趋势，再「再按品类细分」，看是否继承时间/范围</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>2</td>
+        <td>done</td>
+        <td>6</td>
+        <td>2</td>
+        <td>pie</td>
+        <td>品类, 净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 报告出得来 <small>— status=done 行数=6</small></div><div class='chk'><span class='ok>✓</span> 继承了时间范围 <small>— 上一轮=2024年 本轮=2024年</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额；想看哪种分析？ → 总体情况；第2轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT 
+    dim_product.category AS 品类,
+    SUM(fact_orders.order_amount) - COALESCE(SUM(fact_payments.payment_amount), 0) AS 净销售额
+FROM 
+    fact_orders
+LEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date
+LEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id
+LEFT JOIN dim_product ON fact_orders.product_id = dim_product.product_id
+LEFT JOIN fact_payments ON fact_payments.order_id = fact_orders.order_id AND fact_payments.status = &#x27;REFUNDED&#x27;
+WHERE 
+    dim_date.year = 2024
+    AND dim_store.region = &#x27;华东&#x27;
+GROUP BY 
+    dim_product.category</pre>
+      <pre>**结论**：手机品类净销售额最高达2481万元，配件品类最低仅415万元
+- 净销售额前两名：手机（2481万元）、智能手表（1961万元）；最后一名：配件（415万元）
+**可能原因**：数据不足以判断各品类净销售额差异的具体原因
+**建议下一步**：按月份下钻分析手机与智能手表的高净销售额是否集中在特定时段；对比各品类退货率或折扣率，排查配件品类净销售额偏低的原因</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S7</span>
+    <h2>连续追问 · 换范围</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s7-72fc</span>
+    <div class="why">看完华东，「那华南呢」，看范围是不是真的换了</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>2</td>
+        <td>done</td>
+        <td>1</td>
+        <td>2</td>
+        <td>table</td>
+        <td>区域, 净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 报告出得来 <small>— status=done 行数=1</small></div><div class='chk'><span class='ok>✓</span> 继承了时间范围 <small>— 上一轮=None 本轮=None</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额；第2轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT 
+    dim_store.region AS 区域,
+    SUM(fact_orders.order_amount) - COALESCE(SUM(refund.refund_amount), 0) AS 净销售额
+FROM 
+    fact_orders
+LEFT JOIN 
+    dim_store ON fact_orders.store_id = dim_store.store_id
+LEFT JOIN (
+    SELECT order_id, SUM(payment_amount) AS refund_amount
+    FROM fact_payments WHERE status = &#x27;REFUNDED&#x27; GROUP BY order_id
+) refund ON refund.order_id = fact_orders.order_id
+WHERE 
+    dim_store.region = &#x27;华南&#x27;
+GROUP BY 
+    dim_store.region</pre>
+      <pre>**结论**：华南区域净销售额达1.77亿元
+- 华南区域净销售额为176,615,468.71元
+- 当前数据仅包含华南区域，无法进行跨区域对比
+**可能原因**：数据不足以判断原因
+**建议下一步**：补充其他区域数据以进行横向对比；按时间维度分析华南区域销售趋势</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S8</span>
+    <h2>出结果后改图 · 饼图</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s8-fdd6</span>
+    <div class="why">先出各区域销售额，再说「画个饼图」，看图表类型是否变 pie</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>2</td>
+        <td>done</td>
+        <td>6</td>
+        <td>2</td>
+        <td>pie</td>
+        <td>区域, 净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 图表是饼图 <small>— chart=pie</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额；第2轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT 
+    dim_store.region AS 区域,
+    SUM(fact_orders.order_amount) - COALESCE(SUM(refund.refund_amount), 0) AS 净销售额
+FROM 
+    fact_orders
+LEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id
+LEFT JOIN (
+    SELECT order_id, SUM(payment_amount) AS refund_amount
+    FROM fact_payments WHERE status = &#x27;REFUNDED&#x27; GROUP BY order_id
+) refund ON refund.order_id = fact_orders.order_id
+GROUP BY 
+    dim_store.region</pre>
+      <pre>**结论**：净销售额合计 896,936,127.46，其中 华东 最高（326,102,457.72），共 6 组
+- 净销售额前两名：华东3.26亿元、华北2.31亿元；最低为西北2557万元
+**可能原因**：数据不足以判断区域差异原因
+**建议下一步**：下钻分析华东区域高净销售额的品类构成；对比各区域历史同期数据观察稳定性</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S9</span>
+    <h2>出结果后改图 · 换柱状图</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s9-b917</span>
+    <div class="why">上一轮饼图，这一轮「换成柱状图」</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>3</td>
+        <td>done</td>
+        <td>6</td>
+        <td>2</td>
+        <td>bar</td>
+        <td>区域, 净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 图表是柱状图 <small>— chart=bar</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额；第2轮：用哪个指标？ → 净销售额；第3轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT 
+    dim_store.region AS 区域,
+    SUM(fact_orders.order_amount) - COALESCE(SUM(fact_payments.payment_amount), 0) AS 净销售额
+FROM 
+    fact_orders
+LEFT JOIN 
+    dim_date ON dim_date.full_date = fact_orders.order_date
+LEFT JOIN 
+    dim_store ON fact_orders.store_id = dim_store.store_id
+LEFT JOIN 
+    fact_payments ON fact_payments.order_id = fact_orders.order_id AND fact_payments.status = &#x27;REFUNDED&#x27;
+WHERE 
+    dim_date.year = 2024
+GROUP BY 
+    dim_store.region</pre>
+      <pre>**结论**：净销售额合计 251,034,971.85，其中 华东 最高（91,953,094.90），共 6 组
+- 净销售额前两名：华东9195万、华北6396万，最低为西北657万
+**可能原因**：数据不足以判断区域差异原因
+**建议下一步**：下钻分析华东区域高净销售额的品类构成；对比各区域历史同期数据看趋势</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S10</span>
+    <h2>含糊追问 · 指代上一轮</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s10-c0e9</span>
+    <div class="why">「那再细一点」——典型含糊指代，看会不会答非所问</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>2</td>
+        <td>done</td>
+        <td>6</td>
+        <td>2</td>
+        <td>pie</td>
+        <td>品类, 净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT 
+    dim_product.category AS 品类,
+    SUM(fact_orders.order_amount) - COALESCE(SUM(fact_payments.payment_amount), 0) AS 净销售额
+FROM 
+    fact_orders
+LEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date
+LEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id
+LEFT JOIN dim_product ON fact_orders.product_id = dim_product.product_id
+LEFT JOIN fact_payments ON fact_orders.order_id = fact_payments.order_id AND fact_payments.status = &#x27;REFUNDED&#x27;
+WHERE 
+    dim_date.year = 2024
+    AND dim_store.region = &#x27;华东&#x27;
+GROUP BY 
+    dim_product.category</pre>
+      <pre>**结论**：2024年华东地区手机品类净销售额最高，达2481万元，配件品类最低仅415万元
+- 手机品类净销售额2481万元排名第一，是配件品类415万元的6倍
+**可能原因**：数据不足以判断各品类销售额差异的具体原因
+**建议下一步**：下钻分析手机和智能手表高销售额的具体省市贡献；对比去年同期数据判断增长趋势</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S11</span>
+    <h2>极值追问 · 明细</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s11-7132</span>
+    <div class="why">「销售额最高的是哪个月」→「那个月的明细呢」，选期 + 明细</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>2</td>
+        <td>done</td>
+        <td>200</td>
+        <td>6</td>
+        <td>bar</td>
+        <td>日期, 区域, 品类, 订单金额, 支付金额, 支付状态</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div><div class='chk'><span class='ok>✓</span> 报告出得来 <small>— status=done 行数=200</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额；第2轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT 
+  dim_date.full_date AS 日期,
+  dim_store.region AS 区域,
+  dim_product.category AS 品类,
+  fact_orders.order_amount AS 订单金额,
+  fact_payments.payment_amount AS 支付金额,
+  fact_payments.status AS 支付状态
+FROM fact_orders
+LEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date
+LEFT JOIN dim_store ON dim_store.store_id = fact_orders.store_id
+LEFT JOIN dim_product ON dim_product.product_id = fact_orders.product_id
+LEFT JOIN fact_payments ON fact_payments.order_id = fact_orders.order_id
+ORDER BY fact_orders.order_date DESC
+LIMIT 200</pre>
+      <pre>**结论**：订单金额合计 679,790.32，其中 日期=2026-10-31 最高（38,239.63），共 200 组
+- 最大单笔订单金额为38,239.63元（平板品类），最小为25.44元（配件品类）
+- 华北区域单笔订单金额最高达20,208.53元（平板品类），华南区域有6,114.80元手机订单处于待支付状态
+**可能原因**：数据不足以判断单日集中爆发原因，可能与大促活动或系统批量下单有关
+**建议下一步**：重点核查10月31日异常高额订单（如20,208.53元平板订单）的合理性；对比10月30日43,420.83元的订单结构差异</pre>
+    </details>
+  </div>
+</section>
+<section class="card">
+  <header>
+    <span class="id">S12</span>
+    <h2>含糊单问 · 只给动作</h2>
+    <span class='badge ok'>PASS</span>
+    <span class="id">session scn-s12-cba1</span>
+    <div class="why">「随便看看数据」——最含糊，看会不会乱猜</div>
+  </header>
+  <div class="body">
+    <table><thead><tr>
+      <th>轮次</th><th>状态</th><th>行数</th><th>列数</th><th>图表</th><th>列名</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>1</td>
+        <td>done</td>
+        <td>1</td>
+        <td>1</td>
+        <td>table</td>
+        <td>净销售额</td>
+      </tr>
+    </tbody></table>
+    <div class="checks"><div class='chk'><span class='ok>✓</span> 没有「指标未注册」误判 <small>— 所有轮次都正常</small></div></div>
+    <div class='note'>缺项被自动选了第一个：第1轮：用哪个指标？ → 净销售额</div>
+    <details><summary>看 SQL 与报告摘要</summary>
+      <pre>SELECT SUM(fact_orders.order_amount) - COALESCE(SUM(refund.refund_amount), 0) AS 净销售额
+FROM fact_orders
+LEFT JOIN (
+    SELECT order_id, SUM(payment_amount) AS refund_amount
+    FROM fact_payments 
+    WHERE status = &#x27;REFUNDED&#x27; 
+    GROUP BY order_id
+) refund ON refund.order_id = fact_orders.order_id</pre>
+      <pre>**结论**：净销售额总计8.97亿元
+- 净销售额合计为896,936,127.46元
+- 数据仅包含单一行记录，无法分析结构分布
+**可能原因**：数据不足以判断原因
+**建议下一步**：按品类下钻分析贡献结构；补充时间维度查看趋势变化</pre>
+    </details>
+  </div>
+</section>
+</body></html>
