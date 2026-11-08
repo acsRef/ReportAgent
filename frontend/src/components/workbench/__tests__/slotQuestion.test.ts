@@ -204,4 +204,18 @@ describe('topPeriodText — 「最高的那一期」要让人看见（plan top-p
     }))
     expect(chips.map((c) => c.text)).toContain('销售额最高的月')
   })
+
+  // 2026-11-08（plan top-period-annotate-and-timeout-copy）：标注 ≠ 只看。
+  // 不标出来的话，用户说「标注一下」却拿到只有那两期/全量的数据，没法判断我们听懂没有。
+  it('annotate → 明说是「全量标注」', () => {
+    expect(topPeriodText(card({
+      top_period: { direction: 'max', unit: 'month', metric: '销售额', purpose: 'annotate' },
+    }))).toBe('销售额最高的月（全量标注）')
+  })
+
+  it('select（或不传 purpose）→ 保持原文案', () => {
+    expect(topPeriodText(card({
+      top_period: { direction: 'max', unit: 'month', metric: '销售额', purpose: 'select' },
+    }))).toBe('销售额最高的月')
+  })
 })

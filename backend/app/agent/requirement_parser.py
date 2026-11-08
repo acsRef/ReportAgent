@@ -389,7 +389,11 @@ def _apply_deterministic_intent(
 
         unit = str(spec.get("unit") or "month")
         direction = str(spec.get("direction") or "max")
-        card.top_period = RequirementTopPeriod(direction=direction, unit=unit)  # type: ignore[arg-type]
+        # 「标注」还是「只看」：spec 没给（例如上游只传了 direction/unit）就用原话判一次
+        purpose = str(spec.get("purpose") or _top_period_purpose(query))
+        card.top_period = RequirementTopPeriod(  # type: ignore[arg-type]
+            direction=direction, unit=unit, purpose=purpose,
+        )
         # 选期本身就是「按这个单位聚合一次」，所以粒度必须落下来（否则 SQL 会按年分组）。
         card.granularity = unit  # type: ignore[assignment]
         # 选期 = 一次取极值，没有任何既有方法与之对应；继承上一轮的 anomaly_detection
@@ -502,12 +506,24 @@ _TOP_PERIOD_MIN_WORDS = (
 # 此前整句落空——只认一个方向，且要求单位紧跟极值词，于是意图被丢掉，退化成
 # 「2024年华东销售额按周 + 逐条明细 + 异常检测」这种四不像）
 _TOP_PERIOD_BOTH_WORDS = ("和", "与", "还有", "以及", "分别", "各自", "同时")
+# 2026-11-08（plan top-period-annotate-and-timeout-copy）：「标注」≠「只看」。
+# 用户说「最高的那两个月，标注一下」时，他要的是**全量 + 把这两期标出来**；
+# 只取两期的话，「标注」这个词压根不需要出现。命中这些词 → purpose=annotate。
+_TOP_PERIOD_ANNOTATE_WORDS = (
+    "标注", "标记", "标明", "注明", "标一下", "标出来", "打标", "标出",
+)
 # 出现这些词 → 是「按维度比大小」，不是「取时间上的极值期」
 _TOP_PERIOD_DIMENSION_WORDS = (
     "品类", "产品", "品牌", "类别", "区域", "地区", "省份", "城市", "门店", "客户", "渠道",
 )
 # 极值词之后最多隔多少个非标点字符再找单位（「最多的那个月」= 4 个字符）
 _TOP_PERIOD_WINDOW = 8
+
+
+def _top_period_purpose(user_query: str) -> str:
+    """「标注」还是「只看」——纯词表判定，模型猜的不算数。"""
+    text = str(user_query or "")
+    return "annotate" if any(word in text for word in _TOP_PERIOD_ANNOTATE_WORDS) else "select"
 
 
 def _top_period_from_query(user_query: str) -> dict | None:
@@ -538,7 +554,7 @@ def _top_period_from_query(user_query: str) -> dict | None:
             if candidate in text:
                 unit = _TOP_PERIOD_UNITS[candidate]
                 break
-        return {"direction": "both", "unit": unit or "month"}
+        return {"direction": "both", "unit": unit or "month", "purpose": _top_period_purpose(text)}
 
     candidates: list[tuple[int, str, str]] = []   # (位置, 方向, 单位)
 
@@ -577,7 +593,7 @@ def _top_period_from_query(user_query: str) -> dict | None:
         return None
     candidates.sort(key=lambda item: item[0])
     _, direction, unit = candidates[0]
-    return {"direction": direction, "unit": unit}
+    return {"direction": direction, "unit": unit, "purpose": _top_period_purpose(text)}
 
     return None
 

@@ -69,6 +69,11 @@ export interface RequirementTopPeriod {
   direction: 'max' | 'min' | 'both'
   unit: RequirementGranularity
   metric?: string | null
+  /**
+   * 2026-11-08（plan top-period-annotate-and-timeout-copy）：
+   * select = 只看极值那几期（默认）；annotate = 全量数据 + 标出哪几期是极值期。
+   */
+  purpose?: 'select' | 'annotate'
 }
 
 export interface RequirementCard {

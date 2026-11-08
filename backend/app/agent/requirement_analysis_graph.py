@@ -336,6 +336,7 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
         prior_card=prior_card,
     )
     card = _normalize_card_scope(card)
+    card = _normalize_card_top_period(card, state.get("user_query", ""))
     # 过程帧内容：这一段解析出的结论（时间/口径/待确认），让「解析需求」不只是四个字
     pending = "、".join(str(getattr(mf, "label", "") or "") for mf in (card.missing_fields or []))
     _progress_detail(
@@ -654,6 +655,44 @@ def _normalize_card_scope(card):
     return card.model_copy(update={"scope": canonical})
 
 
+def _normalize_card_top_period(card, user_query: str = ""):
+    """「标注」还是「只看」按**原话**定（2026-11-08，plan top-period-annotate-and-timeout-copy）。
+
+    模型只会说「用户要最高那一期」，它不区分「只取那期」和「全量里标出那期」——
+    但这两件事的 SQL 形态、契约校验、用户预期完全不同。所以和 `_normalize_card_scope`
+    同一手法：产卡之后用确定性词表覆盖一次，模型给什么都不算数。
+
+    2026-11-08 真机追加：同一句「2023年销售额最高的那两个月的明细，标注一下」两次跑，
+    一次进 `extreme_period` 一次什么都不给（采样波动）。所以模型没给时**按原话补建**——
+    确定性识别本就比模型可靠，不该因为一次采样漂移就丢掉整个诉求。
+    """
+    if card is None:
+        return card
+    from app.agent.requirement_parser import _top_period_purpose, _top_period_from_query
+
+    top = getattr(card, "top_period", None)
+    if top is None:
+        spec = _top_period_from_query(user_query)
+        if not spec:
+            return card
+        from app.models.requirement import RequirementTopPeriod
+
+        metric = next(iter(getattr(card, "target_metrics", None) or []), None)
+        logger.info("top_period rebuilt from query: %s", spec)
+        return card.model_copy(update={"top_period": RequirementTopPeriod(
+            direction=spec["direction"],  # type: ignore[arg-type]
+            unit=spec["unit"],  # type: ignore[arg-type]
+            metric=metric,
+            purpose=spec.get("purpose") or "select",  # type: ignore[arg-type]
+        )})
+
+    purpose = _top_period_purpose(user_query)
+    if getattr(top, "purpose", "select") == purpose:
+        return card
+    logger.info("top_period purpose normalized: %s → %s", getattr(top, "purpose", ""), purpose)
+    return card.model_copy(update={"top_period": top.model_copy(update={"purpose": purpose})})
+
+
 @traced_node("requirement_project")
 def _requirement_project(state: RequirementAnalysisState) -> dict:
     """ActiveAnalysisTask → RequirementCard（唯一执行契约），不再二次调模型。"""
@@ -668,6 +707,7 @@ def _requirement_project(state: RequirementAnalysisState) -> dict:
         summary=state.get("user_query", ""),
     )
     card = _normalize_card_scope(card)
+    card = _normalize_card_top_period(card, state.get("user_query", ""))
     pending = "、".join(mf.label for mf in (card.missing_fields or []))
     _progress_detail(
         "投影需求卡",

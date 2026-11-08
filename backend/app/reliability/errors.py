@@ -202,6 +202,13 @@ _USER_MESSAGES: dict[str, str] = {
     "other":      "查询执行失败,请稍后重试或调整需求",
 }
 
+# runtime code → 专用文案（覆盖 kind 表）。只在「同一个 kind 下真因不同」时用：
+# timeout 既可能是 SQL 慢，也可能是模型慢，对用户的建议完全相反。
+_CODE_MESSAGES: dict[str, str] = {
+    "LLM_TIMEOUT": "模型响应超时,请稍后重试;把问题拆小一点也有帮助",
+    "MCP_TIMEOUT": "数据字典检索超时,请稍后重试",
+}
+
 _USER_CODES: dict[str, str] = {
     "timeout":    "QUERY_TIMEOUT",
     "connection": "QUERY_CONNECTION",
@@ -216,7 +223,18 @@ _USER_CODES: dict[str, str] = {
 }
 
 
-def user_message(kind: Optional[str]) -> str:
+def user_message(kind: Optional[str], code: Optional[str] = None) -> str:
+    """用户可见文案。`code` 可选：同一 kind 下不同来源要说不同的人话。
+
+    2026-11-08（plan top-period-annotate-and-timeout-copy A2）：`classify_llm_exception`
+    把 LLM 超时也归成 `kind="timeout"`，而 6-kind 文案表给的是「查询超时，请缩小时间范围」
+    ——真因是模型响应慢，这句建议**白试**（缩小时间范围不会让模型更快）。所以按 runtime
+    code 做一层覆盖：命中 `_CODE_MESSAGES` 用专用文案，否则仍走 kind 表（`QUERY_*` 契约不变）。
+    """
+    if code:
+        override = _CODE_MESSAGES.get(code)
+        if override:
+            return override
     return _USER_MESSAGES[normalize_kind(kind)]
 
 

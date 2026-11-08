@@ -17,10 +17,16 @@ pytestmark = pytest.mark.graphs
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
-        ("我只要2024年份中最多月份的那个月数据详细图", {"direction": "max", "unit": "month"}),
-        ("那最多那一周为什么销售额这么多呢？帮我分析一下", {"direction": "max", "unit": "week"}),
-        ("2024年销售额最低的月份是哪个月", {"direction": "min", "unit": "month"}),
-        ("看下最高那天的流水", {"direction": "max", "unit": "day"}),
+        # 2026-11-08（plan top-period-annotate-and-timeout-copy）：返回体多一个
+        # `purpose`（select/annotate）——「标注」不等于「只看」，见 test_top_period_annotate.py
+        ("我只要2024年份中最多月份的那个月数据详细图",
+         {"direction": "max", "unit": "month", "purpose": "select"}),
+        ("那最多那一周为什么销售额这么多呢？帮我分析一下",
+         {"direction": "max", "unit": "week", "purpose": "select"}),
+        ("2024年销售额最低的月份是哪个月",
+         {"direction": "min", "unit": "month", "purpose": "select"}),
+        ("看下最高那天的流水",
+         {"direction": "max", "unit": "day", "purpose": "select"}),
         # 没有「期」的说法 → 不认（只要一个数，不是选期）
         ("2024年销售额最高的数值是多少", None),
         ("帮我分析一下销量", None),
@@ -258,14 +264,24 @@ def test_build_top_period_sql_shape() -> None:
     assert "dim_store.region IN ('华东')" in sql
 
 
-def test_build_top_period_sql_fail_open_on_unknown_range() -> None:
+def test_build_top_period_sql_without_time_range_covers_all_data() -> None:
+    """没给时间范围 → 不加任何日期边界（覆盖全部数据），而不是 fail-open 返回 None。
+
+    2026-11-08 修正：这条断言原本写的是 `is None`，但 `e8493f8`（2026-11-05，both 支持）
+    已把行为改成「没说时间就覆盖全部数据」——演示库是 2024 数据，默认「今年」会查出空。
+    测试没跟着改，一直红着（pre-existing red，与本次「标注」改动无关）。
+    """
     from app.knowledge import registry as knowledge
     from app.services.metric_preview_service import build_top_period_sql
 
     metric = next(m for m in knowledge.all_metrics() if m.name == "销售额")
-    assert build_top_period_sql(
-        metric, unit="month", direction="max", time_range=None,
-    ) is None
+    built = build_top_period_sql(metric, unit="month", direction="max", time_range=None)
+
+    assert built is not None
+    sql, bucket = built
+    assert bucket  # 期列必须给出来（下游要拿它写过滤条件）
+    assert "WHERE" not in sql            # 没有任何附加过滤
+    assert ">=" not in sql and "< '" not in sql  # 也就没有日期边界
 
 
 def test_resolved_top_period_requires_period_filter_in_sql() -> None:

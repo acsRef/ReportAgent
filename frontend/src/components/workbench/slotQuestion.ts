@@ -178,7 +178,10 @@ export function topPeriodText(card: RequirementCard | null): string | null {
     return metric ? `${metric}最高的${bare}和最低的${bare}` : `最高和最低的${bare}`
   }
   const word = top.direction === 'min' ? '最低' : '最高'
-  return metric ? `${metric}${word}的${bare}` : `${word}的${unit}`
+  const base = metric ? `${metric}${word}的${bare}` : `${word}的${unit}`
+  // 2026-11-08（plan top-period-annotate-and-timeout-copy）：标注 ≠ 只看。
+  // 不区分的话，用户说「标注一下」却拿到「只有那两期」的数据，会以为被裁掉了。
+  return top.purpose === 'annotate' ? `${base}（全量标注）` : base
 }
 
 export function confirmChips(card: RequirementCard | null): ConfirmChip[] {

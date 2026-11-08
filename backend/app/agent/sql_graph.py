@@ -629,7 +629,26 @@ def _generate_sql(state: SQLAgentState) -> dict:
         unit = str(top_period.get("unit") or "month")
         unit_label = _GRANULARITY_DIM_LABELS.get(unit, unit)
         word = "最高" if str(top_period.get("direction") or "max") == "max" else "最低"
-        if top_period.get("resolved"):
+        if str(top_period.get("purpose") or "select") == "annotate":
+            # 2026-11-08（plan top-period-annotate-and-timeout-copy）：**标注** ≠ **只看**。
+            # 全区间照常取数，另加一列指出哪几期是极值期；用极值条件过滤数据就是做错了。
+            period_column = str(top_period.get("period_column") or unit)
+            flag = f"是否{word}期"
+            values = [str(v) for v in (top_period.get("period_values") or []) if str(v)]
+            condition = " AND ".join(list(top_period.get("filters") or [])) or (
+                f"{period_column} IN ({', '.join(values)})" if values
+                else f"{period_column} = {top_period.get('period_value') or ''}"
+            )
+            prompt += (
+                f"\n\n【标注模式】{top_period.get('metric') or '指标'}{word}的{unit_label}"
+                f"由系统算出：{top_period.get('label') or condition}。"
+                f"**不要**用它过滤数据——必须返回**全区间**的数据，"
+                f"并新增一列标记：`CASE WHEN {condition} THEN '是' ELSE '否' END AS \"{flag}\"`，"
+                f"该列放最后一列；禁止只返回该期。"
+                f"排序仍按时间倒序，**不要**按标记列排序"
+                f"（否则「是」的行会挤满前 200 行，用户看不到其余区间）。"
+            )
+        elif top_period.get("resolved"):
             filters = " AND ".join(top_period.get("filters") or []) or (
                 f"{top_period.get('period_column') or unit} = {top_period.get('period_value')}"
             )
@@ -756,6 +775,8 @@ def _top_period_contract_violation(sql: str, top_period: dict | None = None) -> 
     """
     text = sql or ""
     spec = top_period or {}
+    if str(spec.get("purpose") or "select") == "annotate":
+        return _top_period_annotate_violation(text, spec)
     if spec.get("resolved"):
         column = str(spec.get("period_column") or "")
         label = str(spec.get("label") or "")
@@ -787,6 +808,35 @@ def _top_period_contract_violation(sql: str, top_period: dict | None = None) -> 
             "再只取该期的数据；不许把全区间再汇总一遍"
         )
     return None
+
+
+def _top_period_annotate_violation(sql: str, spec: dict) -> str | None:
+    """标注模式的契约（2026-11-08，plan top-period-annotate-and-timeout-copy）。
+
+    「标注」和「只看」的 SQL 形态相反，所以校验也相反：
+
+    - **必须**有标记列（`是否最高期` 一类的别名）；
+    - **不许**退化成「只取那一期」——有标记列又没有把数据裁到那一期的迹象才算过。
+    """
+    word = "最高" if str(spec.get("direction") or "max") == "max" else "最低"
+    flag = f"是否{word}期"
+    lowered = sql.lower()
+    if flag in sql:
+        return None
+    # 宽容一点：只要求「是否…期」这个形状（列名可能被模型换接近说法）
+    if re.search(rf"是否\s*{word}\s*期", sql) or re.search(r"as\s+[\"']?是否", sql):
+        return None
+    if "case when" in lowered and "then" in lowered and "else" in lowered:
+        # 有 CASE WHEN 但别名不标准：多半是模型自起了列名，前端会显示成随机列
+        return (
+            f"标注列名不合约定：标记列必须命名为「{flag}」（AS \"{flag}\"），"
+            f"否则用户看不出这一列是在标什么"
+        )
+    return (
+        f"缺少「标注哪几期是{word}期」的标记列："
+        f"必须新增 `CASE WHEN <期条件> THEN '是' ELSE '否' END AS \"{flag}\"`，"
+        f"并保留全区间数据（不要只取那一期）"
+    )
 
 
 def _detail_contract_violation(sql: str, *, allow_cte_aggregate: bool = False) -> str | None:

@@ -342,7 +342,7 @@ async def _run_confirmed_graph(
                 "code": envelope.code,
                 # P9-5：泛化异常原文（原生 SDK/provider trace）不得直达用户——
                 # 一律走 user_message 稳定文案；原始异常只落 trace。
-                "message": user_message(envelope.kind),
+                "message": user_message(envelope.kind, envelope.code),
                 "recoverable": envelope.recoverable,
                 "failed_action": failed_action,
             }, ensure_ascii=False),
@@ -886,7 +886,7 @@ async def _run_requirement_graph(
             "data": json.dumps({
                 "code": envelope.code,
                 # P9-5：原始异常不进用户可见文案，只落 trace。
-                "message": user_message(envelope.kind),
+                "message": user_message(envelope.kind, envelope.code),
                 "recoverable": envelope.recoverable,
                 "failed_action": mode,
             }, ensure_ascii=False),

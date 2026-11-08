@@ -64,6 +64,11 @@ _CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 _YEAR_MONTH = re.compile(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月(?:\s*[-~至到]\s*(\d{1,2})\s*月)?")
 _YEAR = re.compile(r"((?:19|20)\d{2})\s*年")
+# 2026-11-08（真机，plan top-period-annotate-and-timeout-copy）：卡上的 time_range 会被
+# 规范化成**纯年份**（「2023年」→「2023」），而 _YEAR 要求带「年」字 → 解析失败 → 返回 None
+# → 选期按「全库」算：用户问 2023 年最高的那个月，SQL 里标出的是 `year = 2024 AND month = 6`。
+# 这里只兜「整串就是一个四位年份」这一种形状，不会误吃「2023-11」这类区间写法。
+_YEAR_BARE = re.compile(r"^\s*((?:19|20)\d{2})\s*$")
 _ISO_RANGE = re.compile(r"(\d{4}-\d{2}-\d{2})\s*[至~-]\s*(\d{4}-\d{2}-\d{2})")
 _RECENT = re.compile(r"(?:最近|近|过去)\s*(\d{1,3}|[一二三四五六七八九十]{1,3})\s*(天|日|周|个?月|年)")
 
@@ -134,7 +139,7 @@ def resolve_period_bounds(
     if "去年" in text:
         return (datetime.date(now.year - 1, 1, 1), datetime.date(now.year, 1, 1))
 
-    m = _YEAR.search(text)
+    m = _YEAR.search(text) or _YEAR_BARE.search(text)
     if m:
         year = int(m.group(1))
         return (datetime.date(year, 1, 1), datetime.date(year + 1, 1, 1))

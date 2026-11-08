@@ -83,6 +83,7 @@ Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
 | 16 | **思考链路实时可见**（plan `2026-11-05-streaming-reasoning.md`）：provider 流式收 `reasoning_content` → 节流 350ms 发既有 `trace` 帧 → 前端链路「边跑边长」+「正在输出…」；预算与总额成对可调（`TURN_MAX_TOKENS`）；图节点走 async 客户端（同步会堵事件循环，帧会挤在一起吐） | 见 plan 落地记录 |
 | 17 | **中断场景收口**（plan `2026-11-08-interruption-resilience.md`）：断流 / 停止 / F5 / 关浏览器各写**独立**用例（2 个测试文件 + 3 个探针）；`live` 缓冲同 step 只留最新帧 + 流式帧上限 600；**修 F5 卡死真 bug**（解析中刷新后不起轮询 → 永远停在「正在解析」） | 三探针全绿 |
 | 18 | **LLM 预算与记账收敛**（plan `2026-11-08-llm-budget-and-accounting.md`，用户拍板顺序 2→1→3）：①turn 直连调用补 usage 记账（`ReasoningReply.prompt_tokens/completion_tokens` + 三出口 `tracer.add_llm_call`，真机已验证 `observability.llm_call` 出现 `DeepSeek-V4-Flash` 那条：928/610/5469ms）②新建 `app/llm/budgets.py` 单一预算表，6 个 caller 的 7 处字面量全部改走 `budgets.max_tokens("<task>")`③`TURN_REQUEST_BUDGET=120` 贯穿重试（首轮 `min(90,剩余)`，剩余 <20s 不重试并标 `retry_skipped`），最坏耗时从 135s 收到 ≈120s | 48 例聚焦用例 + 真机探针 5/5 |
+| 19 | **「标注」不再被当成「只看」+ 模型超时不再说成查询超时**（plan `2026-11-08-top-period-annotate-and-timeout-copy.md`）：①`RequirementTopPeriod.purpose: select\|annotate`（默认 select 零迁移），词表判定 + 产卡后原话归一（模型漏给时按原话补建）；annotate = 全区间 + `CASE WHEN ... AS 是否最高期`，契约校验反向（必须有标记列、不许退化）②`user_message(kind, code)` 加 code 覆盖层，`LLM_TIMEOUT` 说「模型响应超时」不再叫用户去缩时间范围 | 后端 122 passed / 前端 24 + tsc；真机 `probe_top_period_annotate.py` ALL PASS（5 列 200 行、SQL 全区间带标记） |
 
 ### 2026-11-04 做完的事
 
@@ -322,6 +323,19 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
 32. **「记账」和「预算」是两件事，顺序不能反**：先能看见（每类调用都进 `llm_call`），
    再收敛（`app/llm/budgets.py` 唯一预算表），最后才谈 deadline。反过来的话调预算永远在猜。
    另外 turn 的 `max_tokens` 是**推算值**（思考预算 + 回答余量），不能写进表里当常量。
+33. **卡上的 `time_range` 会被规范化成纯年份**（`2023年` → `2023`），而
+   `metric_preview_service._YEAR` 正则要求带「年」字 → 解析失败返回 None → 选期按**全库**算。
+   2026-11-08 真机表现：用户问「2023年最高的那个月」，SQL 里标出的是 `year = 2024 AND month = 6`。
+   已加 `_YEAR_BARE` 兜「整串就是一个四位年份」（`2023-11` 这种半残写法仍不认）。
+34. **`_drop_constant_columns` 会删掉「整列恒定」的列**（2026-11-03 为藏掉 scope 过滤后的
+   `地区=华东` 加的）。用户**点名要的列**必须豁免：明细按时间倒序只取最近 200 条，
+   若全在同一月，「是否最高期」整列恒定 → 被删 → 界面上根本看不到标注。
+   改法 `_drop_constant_columns(..., keep=...)`，且 keep 要**双来源**（state + 列名形状 `是否…期`）。
+35. **LangGraph 会丢掉 TypedDict 里没声明的 state 键**：`top_period` 原先只写进子图 state，
+   `ConfirmedExecutionState` 没这个字段 → 报告节点永远读到 None（豁免静默失效）。
+   加字段前先确认它在 TypedDict 里，不然「算出来了」和「传下去了」是两回事。
+36. **排序本身也会制造 bug**：想「把标为『是』的行排前面」→ 前 200 行全变「是」→
+   标记列又成常量、又被删。标注的正确排序是**照旧按时间倒序**（LIMIT 截断才是客观限制）。
 
 ## 5. 文档地图
 

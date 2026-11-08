@@ -71,6 +71,11 @@ class ConfirmedExecutionState(TypedDict, total=False):
     # Used by the SSE error helper so the user sees the query that
     # actually ran when execution fails.
     sql: Optional[str]
+    # 2026-11-08（plan top-period-annotate-and-timeout-copy）：选期/标注规格。
+    # `_confirmed_sql_agent` 算出后写回 state，报告层用它决定「哪些列不许当常量列删掉」。
+    # 没有这个字段时 LangGraph 会把这个键丢掉（TypedDict 未声明 → 无 channel），
+    # 报告层永远读到 None，于是「是否最高期」被当成无信息列删掉。
+    top_period: Optional[dict]
     # P15 e2e T4 fault seam: main 从 X-E2E-Fault header 解析（REPORTAGENT_E2E=1 双 gate），
     # 经此透传到 sql_graph._evaluate（确定性 fail/repair e2e 用；生产恒 None）。
     fault_override: Optional[dict]
@@ -309,6 +314,9 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
             "direction": str(getattr(_top, "direction", "") or "max"),
             "unit": str(getattr(_top, "unit", "") or "month"),
             "metric": metric_name or None,
+            # 2026-11-08（plan top-period-annotate-and-timeout-copy）：
+            # select = 只取极值那几期；annotate = 全区间 + 标出哪几期是极值期
+            "purpose": str(getattr(_top, "purpose", "") or "select"),
             "resolved": bool(top_resolved is not None and top_resolved.ok),
             "label": getattr(top_resolved, "label", "") if top_resolved else "",
             "period_column": getattr(top_resolved, "period_column", "") if top_resolved else "",
@@ -578,6 +586,14 @@ def _top_period_hint(card, top_resolved=None) -> str | None:
         else "只返回该期的汇总/对比结果，不要再按期分组"
     )
 
+    # 2026-11-08（plan top-period-annotate-and-timeout-copy A1）：「标注」是另一回事——
+    # 保留全区间，只在结果里多加一列指出哪几期是极值期。绝不能走下面的「只取那一期」路径。
+    if str(getattr(top, "purpose", "") or "select") == "annotate":
+        return _top_period_annotate_hint(
+            card, top_resolved, unit=unit, unit_label=unit_label,
+            word=word, is_detail=is_detail,
+        )
+
     # 「最多和最小」两个方向一起要（2026-11-05）：输出**两行**，每期一行
     if direction == "both" and top_resolved is not None and getattr(top_resolved, "ok", False):
         entries = list(getattr(top_resolved, "entries", ()) or ())
@@ -635,6 +651,59 @@ def _top_period_hint(card, top_resolved=None) -> str | None:
         f"2) {final_shape}\n"
         f"   —— 必须 JOIN/过滤 top_period（例如 `{period_column} = (SELECT 期 FROM top_period)`）；\n"
         f"   —— 少这一步就是把全区间又汇总了一遍，用户要的「{word}的那一{unit_label}」根本没出现。"
+    )
+
+
+def _top_period_annotate_hint(
+    card, top_resolved, *, unit: str, unit_label: str, word: str, is_detail: bool,
+) -> str:
+    """标注模式的确定性指令：「全区间 + 一列标记」，不是「只看那一期」。
+
+    用户说「最高的那两个月，标注一下」——只取那两期的话「标注」这个词就没意义了。
+    所以这里反过来：**禁止**用极值条件过滤数据，只许用它生成标记列。
+    """
+    from app.knowledge import registry as knowledge
+
+    flag = f"是否{word}期"
+    period_column = knowledge.time_bucket_column(unit) or unit
+    shape = (
+        "逐条明细（不聚合、不 GROUP BY），按时间倒序、LIMIT 200"
+        if is_detail
+        else f"按{unit_label}分组的一行汇总（每个{unit_label}一行）"
+    )
+
+    if top_resolved is not None and getattr(top_resolved, "ok", False):
+        label = getattr(top_resolved, "label", "") or f"{word}的{unit_label}"
+        filters = " AND ".join(list(getattr(top_resolved, "filters", ()) or ()))
+        values = [
+            str(entry.period) for entry in (getattr(top_resolved, "entries", ()) or ())
+        ] or [str(getattr(top_resolved, "period_value", "") or "")]
+        condition = filters or f"{period_column} IN ({', '.join(v for v in values if v)})"
+        return (
+            f"【标注模式（确定性，系统已算出极值期）】{label}\n"
+            f"标记条件：{condition}\n"
+            f"—— **不要**用它过滤数据：必须返回**全区间**的{shape}，不许只返回该期；\n"
+            f"—— 必须新增一列标记（列名固定）：\n"
+            f"   CASE WHEN {condition} THEN '是' ELSE '否' END AS \"{flag}\"\n"
+            f"—— 列顺序：业务列在前，\"{flag}\" 放最后一列；"
+            f"也就是「全量数据 + 一眼看出哪几{unit_label}是{word}期」。\n"
+            f"—— 排序：仍按**时间倒序**，**不要**按标记列排序"
+            f"（否则标为「是」的行会挤满前 N 行，用户反而看不到其余区间）。"
+        )
+
+    order = "DESC" if word == "最高" else "ASC"
+    return (
+        f"【标注模式（必须照此拆成两步）】{word}的{unit_label}由系统算不出来，"
+        f"请先用 CTE 选出它，再**回到全区间**打标：\n"
+        f"1) WITH top_period AS (\n"
+        f"     SELECT {period_column} AS 期 FROM ... GROUP BY {period_column}\n"
+        f"     ORDER BY SUM(<指标列>) {order} LIMIT 1\n"
+        f"   )\n"
+        f"2) 主查询**不 JOIN 过滤**，只做标记：返回全区间的{shape}，并加一列\n"
+        f"   CASE WHEN {period_column} IN (SELECT 期 FROM top_period) THEN '是' ELSE '否' END"
+        f" AS \"{flag}\"\n"
+        f"   —— 少这一列就是把「标注」做成了没标注；用 top_period 过滤数据则是另一件事"
+        f"（用户要的是全量里标出来）。"
     )
 
 
@@ -833,7 +902,11 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
         table, label_map = build_display_table(qr_columns, rows)
         # 2026-11-03：去掉「全表恒定」的列（scope 过滤后的 地区=华东 这类）。
         # 这类列不携带信息，却占掉表格一列、还会把图表维度带偏。
-        table["columns"] = _drop_constant_columns(table["columns"], rows)
+        # 2026-11-08：标注模式的标记列例外——它是用户点名要的，恒定也不能删。
+        table["columns"] = _drop_constant_columns(
+            table["columns"], rows,
+            keep=_annotation_columns(state, table["columns"]),
+        )
         insight_text = rs.get("insight") or None
         chart_cfg = localize_chart(rs.get("chart_config") or None, label_map)
         # P10 三层 Validator：校验 ReportSpec → QueryResult 映射（结构/数值/禁止
@@ -892,19 +965,48 @@ async def _confirmed_report_agent(state: ConfirmedExecutionState, config: Option
 
 _MAX_TITLE_CHARS = 24
 
+# 标注列的固定形状（「是否最高期」/「是否最低期」），用于在 state 透传断掉时兜底识别。
+_FLAG_COLUMN_RE = re.compile(r"^是否.*期$")
 
-def _drop_constant_columns(columns: list[dict], rows: list[dict]) -> list[dict]:
+
+def _annotation_columns(
+    state: ConfirmedExecutionState, columns: list[dict] | None = None,
+) -> set[str]:
+    """标注模式下必须保留的列名（空集 = 没有标注需求）。
+
+    两条来源取并集：①state 里的选期规格（`_confirmed_sql_agent` 算出）；②列名形状
+    `是否…期`。只靠 ① 不够——state 透传一旦断掉，标注列就被当常量删了（2026-11-08 踩过）。
+    """
+    keep: set[str] = {str(c["key"]) for c in (columns or []) if _FLAG_COLUMN_RE.match(str(c["key"]))}
+    top = state.get("top_period") or {}
+    if str(top.get("purpose") or "select") != "annotate":
+        return keep
+    word = "最高" if str(top.get("direction") or "max") == "max" else "最低"
+    keep.add(f"是否{word}期")
+    return keep
+
+
+def _drop_constant_columns(
+    columns: list[dict], rows: list[dict], keep: set[str] | None = None,
+) -> list[dict]:
     """隐藏「所有行都相同」的列（2026-11-03）。
 
     实测：「分析2024年华东销售趋势」的表格里带着一列 `地区=华东`——因为 scope
     已经把它过滤成常量。它不提供信息，却占掉一列宽度，也会让图表误以为有分类维度。
     仅在还有其它列可显示时才隐藏（单列结果不能删空）。
+
+    2026-11-08（plan top-period-annotate-and-timeout-copy）：`keep` 里的列**永不删**。
+    真机踩到：用户要「全量 + 标注哪两个月最高」，而明细按时间倒序只取最近 200 条，
+    这 200 条里一条「是」都没有 → 整个「是否最高期」列被当成常量删掉，
+    用户在界面上**完全看不到**自己要的标注。标注列恒定也是信息（「这批都不是」），
+    何况它是用户点名要的语义，不能交给「有没有信息量」的启发式决定。
     """
+    keep = keep or set()
     if len(rows) <= 1 or len(columns) <= 1:
         return columns
     kept = [
         col for col in columns
-        if len({str(row.get(col["key"])) for row in rows}) > 1
+        if col["key"] in keep or len({str(row.get(col["key"])) for row in rows}) > 1
     ]
     return kept or columns
 

@@ -75,6 +75,11 @@ class RequirementTopPeriod(BaseModel):
     unit: RequirementGranularity
     # 用哪个指标取极值（None = 注册表默认口径）
     metric: str | None = None
+    # 2026-11-08（plan top-period-annotate-and-timeout-copy）：「标注」与「只看」是两件事。
+    # select   = 只取极值那几期（默认，历史行为）
+    # annotate = 保留全区间，另加一列标出哪几期是极值期
+    # 用户说「最高的那两个月，标注一下」= annotate——如果只取那两期，「标注」这个词就没意义了。
+    purpose: Literal["select", "annotate"] = "select"
 
 
 class RequirementCard(BaseModel):
