@@ -90,7 +90,7 @@ npx vitest --run src/pages/__tests__/ObservabilityPage.test.tsx src/pages/__test
 
 ### 真机卡住的点（重要）
 
-云端 **OTLP 写入一直 5s 超时、整批丢弃**：
+云端 **OTLP 写入每次 5s 超时、整批丢弃**：
 
 ```text
 [ERROR] opentelemetry.exporter.otlp.proto.http.trace_exporter:
@@ -98,16 +98,23 @@ Failed to export span batch ... Read timed out. (read timeout=5.0)
 ```
 
 - 读 API 正常（`/api/public/projects` 200，health 往返 235ms），**写不进去**；
-- 最后一次成功写入 17:46，之后 4~5 轮全丢；
 - `OTEL_EXPORTER_OTLP_TIMEOUT=15000` 与 `OTEL_BSP_MAX_EXPORT_BATCH_SIZE=50` 设了都不生效
-  （SDK 内部固定 5s），所以「调大超时」走不通。
+  （SDK 内部固定 5s），所以「调大超时」走不通；
+- **PG sink 一直正常**（`trace pg sink done`，几十毫秒）。中途一度误判「本地也没落库」，
+  真因是 `start_time` 写的是宿主本地时间、`created_at` 是容器 UTC，用 `start_time` 做
+  「最近 N 分钟」过滤自然查不到——**已于本次一并修成 UTC**。
 
-结论：**这台机器 / 这个网络下，Langfuse Cloud 的写入不可靠**。后续二选一：
-① 自托管 Langfuse（localhost，不经公网）；② 把本地 `/observability` 做成够直观的排查界面
-（数据在 `observability.*` 三张表，已可靠落库）。D2 的 `?session=` 前端入口与 D3 的
-「工作台一键跳转」还没做。
+### 采样：本地全量 / 云端精选 ✅
+
+Langfuse 按 observation 计费，而一轮完整流程实测 **57 个 span**。`LANGFUSE_TRACE_LEVEL`
+默认 `essential`：只发 12 个人能看懂的阶段节点（理解/解析/投影/规划/生成/校验/执行/评估/
+修复/报告 + 两个容器），**失败节点无条件发**，其余确定性内部步骤只在本地表里。实测
+`57 → 18`（含失败节点），可切 `full` 回全量。metadata 里记 `reported_nodes` / `skip_nodes` /
+`trace_level`，一眼看出是不是被过滤了。
 
 ### 验证
 
-`test_langfuse_humanize.py` **18 passed**（命名 / 中文节点名 / 截断 / PII 仍脱敏）。
+- `test_langfuse_humanize.py` **44 passed**（命名 / 中文节点名 / 截断 / PII / 采样过滤）、
+  `test_trace_timestamps.py` **7 passed**（UTC 口径）、`test_interruption_resilience.py` 零回归。
+
 

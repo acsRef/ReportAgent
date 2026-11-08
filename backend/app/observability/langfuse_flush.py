@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from app.observability.langfuse_client import get_langfuse_client
@@ -56,6 +57,37 @@ def _bounded(value: Any) -> Any:
     if len(text) <= _OBS_PAYLOAD_CHARS:
         return redacted
     return f"{text[:_OBS_PAYLOAD_CHARS]}…（截断，原 {len(text)} 字符）"
+
+
+# 2026-11-08（plan trace-inspector）：Langfuse 按 observation 计费，而一轮完整流程会产生
+# 二十几个 traced_node（再叠 DATA span 能到五十几）。全部上报既烧额度，又让上报包变大
+# 撞满云端 5s 超时。所以分两层：
+#   - 本地 `observability.*` 三张表：**全量**（自建、免费、排查要细节）；
+#   - Langfuse：**只发人能看懂的阶段节点 + 失败节点 + LLM 调用**。
+# env `LANGFUSE_TRACE_LEVEL=essential|full` 可切回全量。
+_LANGFUSE_LEVEL_ENV = "LANGFUSE_TRACE_LEVEL"
+_ESSENTIAL_NODES = frozenset({
+    # 需求阶段
+    "turn_understand", "requirement_parse", "requirement_project",
+    # 执行阶段（容器 + 具体步骤）
+    "confirmed_sql_agent", "sql_plan", "sql_generate", "sql_validate",
+    "sql_execute", "sql_evaluate", "sql_diagnose",
+    # 报告阶段
+    "confirmed_report_agent", "report_build_output",
+})
+
+
+def _should_report(span_name: str, status: str, level: str) -> bool:
+    """这个节点要不要发到 Langfuse。
+
+    失败节点**无条件发**——排查时最有价值的就是第一个红掉的环节，
+    哪怕它平时只是个不起眼的内部步骤。
+    """
+    if str(status or "").upper() == "FAILED":
+        return True
+    if level == "full":
+        return True
+    return span_name in _ESSENTIAL_NODES
 
 
 def _root_name(tracer: "Tracer") -> str:
@@ -197,6 +229,20 @@ async def flush_to_langfuse(
                 continue
             node_spans.append(span)
 
+        # 2026-11-08：只把「人能看懂的阶段 + 失败节点」发给 Langfuse（本地表仍全量）。
+        trace_level = (os.getenv(_LANGFUSE_LEVEL_ENV) or "essential").strip().lower()
+        reported_spans = [
+            span for span in node_spans
+            if _should_report(span.span_name, getattr(span, "status", ""), trace_level)
+        ]
+        # 把「本地采了多少 / 云端发了多少」写进 trace metadata：排查时别以为节点丢了。
+        # （下面 root_md 建好之后再落这两项——2026-11-08 第一版写在这里，直接 NameError。）
+        root_md_extra = {
+            "reported_nodes": len(reported_spans),
+            "skip_nodes": len(getattr(tracer, "_spans", ()) or ()) - len(reported_spans),
+            "trace_level": trace_level,
+        }
+
         # 根 observation：trace_context 钉住 trace_id，metadata 保留原始 UUID 反查
         # + 整 trace 业务总耗时（与 PG traces.total_duration_ms 对账）
         trace_obj = getattr(tracer, "_trace", None)
@@ -210,6 +256,7 @@ async def flush_to_langfuse(
             "node_count": len(getattr(tracer, "_spans", ()) or ()),
         }
         root_md = {k: v for k, v in root_md.items() if v not in (None, "")}
+        root_md.update(root_md_extra)
         root_md.update(_timing_fields(
             getattr(trace_obj, "total_duration_ms", None),
             getattr(trace_obj, "start_time", None),
@@ -241,7 +288,7 @@ async def flush_to_langfuse(
                     pass
 
             # 每个 traced_node span → observation；同 span 的 decisions / pv 聚合到 metadata
-            for span in node_spans:
+            for span in reported_spans:
                 span_md: dict[str, Any] = {}
                 # 2026-11-08（plan trace-inspector）：UI 上直接给中文节点名（「生成 SQL」），
                 # 技术名留在 metadata.node 里，方便和 PG spans.span_name 对账。

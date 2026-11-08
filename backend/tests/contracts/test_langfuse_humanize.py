@@ -62,6 +62,36 @@ class TestNodeHumanName:
         assert kind == ""
 
 
+class TestNodeFilter:
+    """Langfuse 按 observation 计费：只发人能看懂的阶段 + 失败节点（本地表仍全量）。"""
+
+    @pytest.mark.parametrize("node", [
+        "turn_understand", "requirement_parse", "requirement_project",
+        "sql_plan", "sql_generate", "sql_validate", "sql_execute", "sql_evaluate",
+        "sql_diagnose", "confirmed_sql_agent", "confirmed_report_agent", "report_build_output",
+    ])
+    def test_关键阶段要发(self, node: str) -> None:
+        assert f._should_report(node, "SUCCESS", "essential") is True
+
+    @pytest.mark.parametrize("node", [
+        "security_guard", "confirmed_security_guard", "classify", "task_reduce",
+        "reportability", "requirement_persist_draft", "sql_gate", "data_agent",
+        "confirmed_idempotency_guard", "persist_report", "intent_analyze",
+    ])
+    def test_确定性内部步骤不发(self, node: str) -> None:
+        assert f._should_report(node, "SUCCESS", "essential") is False
+
+    def test_失败节点无条件发(self) -> None:
+        """最容易漏、也最该看的是「平时不起眼、这次红了」的节点。"""
+        assert f._should_report("security_guard", "FAILED", "essential") is True
+
+    def test_full_档全发(self) -> None:
+        assert f._should_report("security_guard", "SUCCESS", "full") is True
+
+    def test_未知档位按_essential_处理(self) -> None:
+        assert f._should_report("security_guard", "SUCCESS", "weird") is False
+
+
 class TestBoundedPayload:
     def test_小对象原样(self) -> None:
         assert f._bounded({"a": 1}) == {"a": 1}

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import functools
@@ -37,6 +37,17 @@ def current_tracer() -> Optional["Tracer"]:
     return _current_tracer.get()
 
 
+def _utc_now() -> datetime:
+    """写入用 UTC（列是 `timestamp without time zone`，与 `created_at DEFAULT NOW()` 对齐）。
+
+    2026-11-08（真机排查）：这里一直用 `datetime.now()`（宿主本地时间），而 `created_at`
+    由 `NOW()`（容器 UTC）写——同一行两个时间差 8 小时。用 `start_time` 做「最近 N 分钟」
+    过滤会直接查不到刚跑的那一轮（我因此误判成「trace 没落库」）。
+    与 `agent.session` 的 `NOW()` 修复同一口径：**写入统一 UTC，读出走 utc_iso()**。
+    """
+    return datetime.utcnow()
+
+
 def record_prompt_version(name: str, version: int | str) -> None:
     """P7 D3 + P13：build_xxx_prompt 出口统一记录 prompt 版本到当前 tracer。
 
@@ -61,7 +72,7 @@ class Tracer:
         # `self.user_query is None` 判定，不能把 None 当作 "" 短路掉回填。
         self.user_query = redact_user_query(user_query) if user_query is not None else None
         self.user_id = user_id
-        self._start_time = datetime.now()
+        self._start_time = _utc_now()
         self._trace = Trace(
             trace_id=trace_id,
             session_id=session_id,
@@ -95,7 +106,7 @@ class Tracer:
         pass
 
     def end(self, status: str = "SUCCESS"):
-        end_time = datetime.now()
+        end_time = _utc_now()
         self._trace.status = status
         self._trace.end_time = end_time
         self._trace.total_duration_ms = int((end_time - self._start_time).total_seconds() * 1000)
@@ -109,18 +120,18 @@ class Tracer:
             parent_span_id=self._current_span_id(),
             span_name=name,
             span_type=span_type,
-            start_time=datetime.now(),
+            start_time=_utc_now(),
             input=input,
         )
         self._stack.append(span)
         try:
             yield span
             span.status = "SUCCESS"
-            span.end_time = datetime.now()
+            span.end_time = _utc_now()
             span.duration_ms = int((span.end_time - span.start_time).total_seconds() * 1000)
         except Exception as e:
             span.status = "FAILED"
-            span.end_time = datetime.now()
+            span.end_time = _utc_now()
             span.duration_ms = int((span.end_time - span.start_time).total_seconds() * 1000)
             span.error = str(e)
             raise
@@ -207,8 +218,16 @@ class Tracer:
 
     async def _flush(self):
         """双 sink 内部入口：PG 与 Langfuse 独立 best-effort，互不阻塞。"""
+        # 2026-11-08（真机排查）：trace 没落库时，日志里只有「total 超时」一行，
+        # 分不清是 PG 没写还是 Langfuse 拖死。这里把两条 sink 的进度打出来
+        # （INFO：正常轮次也能看到「这次到底写没写」）。
+        logger.info(
+            "trace flush start trace_id=%s spans=%s llm_calls=%s",
+            self.trace_id, len(self._spans), len(self._llm_calls),
+        )
         try:
             await _flush_pg(self)
+            logger.info("trace pg sink done trace_id=%s", self.trace_id)
         except Exception as exc:
             # _flush_pg 对单操作已 catch，这里的兜底防 repo 构造等意外错误。
             logger.warning("trace pg sink failed for trace_id=%s: %s", self.trace_id, exc)
