@@ -270,7 +270,23 @@ def _normalize_plan_dict(parsed: dict) -> dict:
         data["analysis_goals"] = [goals]
     if not isinstance(data.get("analysis_goals"), list):
         data["analysis_goals"] = []
-    data["analysis_goals"] = data["analysis_goals"][:_MAX_GOALS]
+    # 2026-11-08（真机截图）：模型偶尔会给出两个完全相同的目标（`overview` + `overview`），
+    # 下游会当成「要做两遍同样的分析」。按 (type, direction, unit, dimension, metric) 去重。
+    deduped: list[dict] = []
+    seen_goals: set[tuple] = set()
+    for goal in data["analysis_goals"]:
+        if not isinstance(goal, dict):
+            continue
+        key = (
+            goal.get("type"), goal.get("direction"), goal.get("unit"),
+            goal.get("dimension"), goal.get("metric"),
+        )
+        if key in seen_goals:
+            logger.info("turn plan: drop duplicate goal %s", key)
+            continue
+        seen_goals.add(key)
+        deduped.append(goal)
+    data["analysis_goals"] = deduped[:_MAX_GOALS]
     for key in ("preserve_fields", "clear_fields", "evidence"):
         value = data.get(key)
         if isinstance(value, str):

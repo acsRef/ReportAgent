@@ -105,10 +105,15 @@ def _env_int(name: str, default: int) -> int:
 
 
 def thinking_budget(override: int | None = None) -> int:
-    """思考预算（token）：思考阶段最多花多少（`TURN_THINKING_BUDGET`，默认 512）。"""
+    """思考预算（token）：思考阶段最多花多少（`TURN_THINKING_BUDGET`，默认 1536）。
+
+    2026-11-08 真机：512 在多轮追问里**每次都顶满**（实测 508/1020/2044 tokens 三档都撞线），
+    界面上永远是「思考预算用尽，原文在此截断」——用户会以为功能坏了。
+    512 → 1536 后典型轮次能自然收尾；再往上（4096）只买延迟（实测 68s）。
+    """
     if override is not None:
         return max(1, int(override))
-    return max(1, _env_int("TURN_THINKING_BUDGET", 512))
+    return max(1, _env_int("TURN_THINKING_BUDGET", 1536))
 
 
 def turn_max_tokens(budget: int) -> int:

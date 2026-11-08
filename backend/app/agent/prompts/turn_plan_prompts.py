@@ -39,6 +39,8 @@ C. preserve_fields / update_fields / clear_fields —— 字段变更计划：
      除非它显然已经过时（例如换了新任务）；
    - 用户说「不看X了」「不要X」→ 放进 clear_fields；
    - 用户说了新的值 → 放进 update_fields。
+   - **`goals` 只从 `analysis_goals` 表达**（这一轮要什么目标就写在 analysis_goals 里），
+     `update_fields` / `clear_fields` 里**不要再出现 goals**——两处都能放会让判断打架。
 D. uncertainties —— 还不确定、会阻塞分析的内容（缺指标 / 缺时间 / 极值缺单位…）。
    每条给 field + question + options（2-4 个），blocking=true 表示不先问就没法做。
 E. evidence —— 每条关键判断对应的**用户原话片段**（照抄，不要改写成结论）。
@@ -52,6 +54,8 @@ E. evidence —— 每条关键判断对应的**用户原话片段**（照抄，
    仍没有就按月（month），并把它写进 goals 的 unit。
 4. 不要在 JSON 里输出 confidence / 置信度 / 解释性文字。
 5. 只输出一个 JSON 对象，字段齐全（没有内容就给空数组/空对象）。
+6. **不要在思考里反复推演输出格式或字段该放哪里**——按上面几条一次判断完就够了；
+   拿不准的判断直接写进 uncertainties（让用户选），不要自己反复权衡。
 
 【输出 JSON】
 {
@@ -61,7 +65,7 @@ E. evidence —— 每条关键判断对应的**用户原话片段**（照抄，
     {"type": "extreme_period", "direction": "min", "unit": "month", "dimension": null, "metric": "销售额"}
   ],
   "preserve_fields": ["time_range", "scope", "metrics"],
-  "update_fields": {"granularity": "month", "goals": []},
+  "update_fields": {"granularity": "month"},
   "clear_fields": ["detail_level"],
   "uncertainties": [],
   "evidence": ["销售额最多和最小", "具体情况"]

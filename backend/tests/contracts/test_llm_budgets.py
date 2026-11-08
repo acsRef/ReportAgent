@@ -52,10 +52,11 @@ class TestBudgetTable:
 class TestTurnKnobs:
     def test_思考预算默认与环境覆盖(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("TURN_THINKING_BUDGET", raising=False)
-        assert budgets.thinking_budget() == 512
-        monkeypatch.setenv("TURN_THINKING_BUDGET", "1024")
-        assert budgets.thinking_budget() == 1024
-        assert budgets.thinking_budget(2048) == 2048
+        # 2026-11-08：512 在多轮追问里每次都顶满（界面上永远「预算用尽」），默认抬到 1536
+        assert budgets.thinking_budget() == 1536
+        monkeypatch.setenv("TURN_THINKING_BUDGET", "2048")
+        assert budgets.thinking_budget() == 2048
+        assert budgets.thinking_budget(1024) == 1024
 
     def test_总额跟随预算(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("TURN_MAX_TOKENS", raising=False)
@@ -96,7 +97,7 @@ class TestTurnKnobs:
         monkeypatch.setenv("LLM_TURN_TIMEOUT", bad)
         assert budgets.turn_timeout() == 90.0
         monkeypatch.setenv("TURN_THINKING_BUDGET", bad)
-        assert budgets.thinking_budget() == 512
+        assert budgets.thinking_budget() == 1536
 
 
 class TestNoScatteredLiterals:

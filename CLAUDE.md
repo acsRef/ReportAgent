@@ -349,7 +349,7 @@ Important root `.env` variables:
 | `MEM0_ENABLED` | Optional mem0-based L3 fact extraction (default `false` → pure LLM extraction) |
 | `MAX_TASK_DURATION` | `600`; background confirm/adjust task total budget (P9); on expiry → FAILED persist + `TASK_TIMEOUT` SSE error |
 | `MAX_SQL_REPAIR_RETRIES` / `MAX_PLAN_RETRIES` | `2` / `1`; SQL repair & replan budgets (P8), pinned against `reliability/retry.RETRY_BUDGETS` |
-| `TURN_THINKING_BUDGET` | `512`; 需求轮 Turn Understanding 的**思考预算**（token）。顶到预算后模型会收尾思维链去写 JSON，界面会标「思考预算用尽」 |
+| `TURN_THINKING_BUDGET` | `1536`; 需求轮 Turn Understanding 的**思考预算**（token）。512 在多轮追问里每次顶满（界面永远「思考预算用尽」），1536 实测典型轮次自然收尾（449/1381/345 tokens）；再往上只买延迟（4096 实测 68s）。顶到预算时模型会收尾思维链去写 JSON，界面会标「思考预算用尽」 |
 | `TURN_MAX_TOKENS` | 未设时 = `max(1200, budget+900)`；思考与回答**共享**的总额。只调大预算不调总额会把回答挤掉（表现为「理解失败」） |
 | `LLM_TURN_TIMEOUT` / `LLM_TURN_FAST_TIMEOUT` | `90` / `30`；turn 模型单次超时 / 超时后「不思考」快速重试的超时（快速重试仅在剩余预算够时发生） |
 | `TURN_REQUEST_BUDGET` | `120`；**单轮总预算**（秒），贯穿首轮 + 重试。剩余 < 20s 就不再重试，直接回落通用解析，最坏耗时 ≈ 120s（不再有 90+45=135s） |

@@ -163,6 +163,47 @@ class TestPriority:
         assert task.time_range == "2024年" and task.scope == ["华东"]
 
 
+class TestDuplicateGoals:
+    """模型偶尔给两个一模一样的 target（真机截图：`overview` + `overview`）。"""
+
+    def test_完全相同的目标去重(self) -> None:
+        from app.agent.turn_understanding import _normalize_plan_dict
+
+        data = _normalize_plan_dict({
+            "conversation_act": "follow_up",
+            "analysis_goals": [
+                {"type": "overview", "metric": "销售额"},
+                {"type": "overview", "metric": "销售额"},
+            ],
+        })
+
+        assert data["analysis_goals"] == [{"type": "overview", "metric": "销售额"}]
+
+    def test_类型相同但参数不同的保留(self) -> None:
+        from app.agent.turn_understanding import _normalize_plan_dict
+
+        data = _normalize_plan_dict({
+            "conversation_act": "follow_up",
+            "analysis_goals": [
+                {"type": "extreme_period", "direction": "max", "unit": "month"},
+                {"type": "extreme_period", "direction": "min", "unit": "month"},
+                {"type": "trend"},
+            ],
+        })
+
+        assert len(data["analysis_goals"]) == 3
+
+    def test_非字典目标被丢掉(self) -> None:
+        from app.agent.turn_understanding import _normalize_plan_dict
+
+        data = _normalize_plan_dict({
+            "conversation_act": "new_task",
+            "analysis_goals": ["trend", {"type": "trend"}],
+        })
+
+        assert data["analysis_goals"] == [{"type": "trend"}]
+
+
 class TestDecisionHappensBeforeReturn:
     """裁决必须在 `understand_turn` 返回前生效。
 
