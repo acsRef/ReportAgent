@@ -370,6 +370,17 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    （默认问注册表），`known_metrics` 只用于给候选选项。**别再用集合做语义判断**。
 44. **卡片缺项时不能还说「要我现在生成报告吗」**：`ConfirmBar` 原来不看 `missing_fields`，
    永远问这句话并给可点的生成按钮——文案与状态自相矛盾。现在缺项时改说「还差 N 项」并禁用按钮。
+45. **对话上下文「始终给」，用预算 + compact 控制长度**（2026-11-08 用户拍板）：之前
+   `prepare_user_utterances_context` 是「取最近 5 条 + 超 400 字硬砍头部」，等于把早期对话和数字
+   一起丢掉；`SelectiveRecallPolicy` 又用 `_HISTORY_REF` 词表判「是否给历史」——「然后」不在词表里，
+   于是「然后标注一下…」被判定不延续历史、上下文为空，模型只能靠推理猜。
+   现在的规则：**历史始终给**（`turn_understanding` 走 `force_conversation=True`），
+   超预算时 compact——最近 N 条原样、更早的压成「骨架 + 数据」，
+   **日期/金额/百分比/编号一律原样**（`_PROTECTED_PATTERNS`），宁可超预算也不丢数据。
+46. **`@traced_node` 装饰器必须紧贴节点函数**（2026-11-08 我自己踩的）：在装饰器和函数之间插入
+   另一个函数，会把装饰器套到新函数上——被 trace 的函数返回 `str` → `_handle_output_span`
+   `r.keys()` 崩 → 节点失败 + 模型调用不记账（`llm_calls=0`），表现只是「卡片字段全空」。
+   `_handle_output_span` 现在对非 dict 返回值免疫。
 
 ## 5. 文档地图
 

@@ -25,8 +25,16 @@ class TestPromptCarriesContext:
             context_block="user: 分析 2024 年华东销售趋势和异常",
         )
 
-        assert "【对话上下文（用户原话）】" in prompt
+        # 2026-11-08：prompt 改成 Anthropic 建议的 XML 分块，对话在 <dialogue> 里
+        assert "<dialogue>" in prompt
         assert "分析 2024 年华东销售趋势和异常" in prompt
+
+    def test_问题在最后(self) -> None:
+        """长内容在前、问题在后——长上下文里靠后的指令更容易被遵循。"""
+        prompt = build_turn_plan_prompt("那看华南的呢", context_block="user: 看华东")
+
+        assert prompt.index("<question>") > prompt.index("<dialogue>")
+        assert prompt.rstrip().endswith("只输出 JSON。")
 
     def test_没有块时回落_history(self) -> None:
         prompt = build_turn_plan_prompt("那看华南的呢", history=["用户：看华东", "助手：好"])

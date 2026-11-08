@@ -14,6 +14,7 @@ P4b 议题（本模块不动）：写入时机从「读路径顺手写」移到�
 from __future__ import annotations
 
 import logging
+import re
 
 from app.llm import budgets, call_llm
 from app.memory.manager import remember_conversation_facts
@@ -177,8 +178,56 @@ async def prepare_conversation_context(session_id: str, user_id: int | str) -> s
     return context
 
 
-USER_UTTERANCE_LIMIT = 5
-USER_UTTERANCE_MAX_CHARS = 400
+# 2026-11-08（用户拍板）：对话上下文**始终给**，用预算 + compact 控制长度，
+# 不再用「关键词命中才给历史」那种启发式（「然后」不在词表里 → 模型只能瞎猜）。
+# 预算按字符算（1 token ≈ 3 chars，与 assembler 同口径）。
+USER_UTTERANCE_LIMIT = 40            # 最多取多少条，交给 compact 决定实际保留量
+USER_UTTERANCE_BUDGET_CHARS = 1800   # ≈ 600 tokens
+USER_UTTERANCE_KEEP_RECENT = 4       # 最近 4 条**原样**保留（不压缩）
+
+# 绝不能压缩的片段——用户明确要求「数字那些数据要保留原样」。
+# 只认三类完整语义单元（顺序即优先级）：
+#   1) 年月/日期，含「月/日」后缀——否则 `2024年11月` 会被截成 `2024年11`；
+#   2) 金额/百分比（带单位）；
+#   3) 长编号（订单号）。
+# 刻意**不**单独匹配裸数字：它会和上面几条互相切碎（`2024年11月` 里抠出个 `11`），
+# 而裸数字对「指代消解」没有价值。
+_PROTECTED_PATTERNS = (
+    re.compile(r"\d{4}\s*[-/年]\s*\d{1,2}\s*月?(?:\s*\d{1,2}\s*[日号])?"),
+    re.compile(r"\d+(?:\.\d+)?\s*(?:%|％|万元|亿元|万|亿|元)"),
+    re.compile(r"(?<!\d)\d{5,}(?!\d)"),
+)
+
+
+def _protected_fragments(text: str) -> list[str]:
+    """抽出一条文本里**必须原样保留**的片段（去重保序）。
+
+    只认「数值类」：日期 / 金额 / 百分比 / 编号。业务实体名（区域、品类）由结构化字段
+    承载（上一轮卡），不在这里重复抽——文本里出现几次都一样，压掉不影响正确性。
+    """
+    seen: list[str] = []
+    for pattern in _PROTECTED_PATTERNS:
+        for match in pattern.finditer(text or ""):
+            piece = match.group(0).strip()
+            if piece and piece not in seen:
+                seen.append(piece)
+    return seen
+
+
+def _compact_utterance(text: str, *, keep_head: int) -> str:
+    """把一条历史压成「骨架 + 全部数据原样」。
+
+    用户原话（question）比助手确认句信息量大，所以 user 保留更长的头；
+    但**两者的数字一律原样**——数字被压掉等于篡改事实。
+    """
+    flat = " ".join(str(text or "").split())
+    if not flat:
+        return ""
+    head = flat[:keep_head].rstrip()
+    fragments = _protected_fragments(flat)
+    if not fragments:
+        return f"{head}…"
+    return f"{head}…（数据：{'、'.join(fragments)}）"
 
 
 async def prepare_user_utterances_context(
@@ -186,18 +235,21 @@ async def prepare_user_utterances_context(
     user_id: int | str,
     *,
     limit: int = USER_UTTERANCE_LIMIT,
-    max_chars: int = USER_UTTERANCE_MAX_CHARS,
+    max_chars: int = USER_UTTERANCE_BUDGET_CHARS,
+    keep_recent: int = USER_UTTERANCE_KEEP_RECENT,
 ) -> str:
-    """需求解析专用的**用户原话**上下文（2026-11-04，slot-contract Phase 3）。
+    """需求解析用的**对话上下文**（2026-11-04 初版；2026-11-08 按用户要求重做 compact）。
 
-    只保留最近 N 条 `role=user` 的原话，去掉：
-    - assistant/system 行（本仓库里 assistant 内容为空，但通用性上也不该进）；
-    - L2 压缩摘要与 L2.5 长期脉络（**模型写的散文**——口径猜测就是从这里被逐轮
-      固化的：「上一轮说按实收口径」这种句子会诱导下一轮继续用实收口径）；
-    - 触发压缩与 L3 写入的副作用（需求解析不该有记忆写副作用）。
+    历史**始终给**，不再靠关键词命中决定给不给；超过 `max_chars` 预算时做 compact：
 
-    用途仅限**指代消解**（「这两个月」「再按品类看」指回哪个对象），
-    口径的权威来源永远是上一轮卡的结构化槽位（`_format_prior_block`）。
+    - 最近 `keep_recent` 条**原样**保留（用户这一轮的直接上文）；
+    - 更早的压成「骨架 + 数据」——骨架截断，但**日期/金额/百分比/编号原样保留**；
+    - 仍然超预算时，**宁可超也不丢数据**（只告警），因为数字被压掉等于篡改事实。
+
+    仍然只取 `user` 与 `assistant_text` 两类行：
+    - 不取 L2 摘要 / L2.5 脉络（模型写的散文——口径猜测就是从这里被逐轮固化的）；
+    - 不取 `turn_trace`（过程记录，不是对话内容）；
+    - 助手回复要保留，因为用户下一轮的「标注」「那个」指的就是它的确认句。
     """
     from app.infra.conversation.repository import get_messages
 
@@ -207,14 +259,46 @@ async def prepare_user_utterances_context(
         logger.warning("user utterance context failed: %s", exc)
         return ""
 
-    utterances = [
-        (m.get("content") or "").strip()
-        for m in messages
-        if m.get("role") == "user" and (m.get("content") or "").strip()
-    ][-limit:]
-    if not utterances:
+    lines: list[str] = []
+    for message in messages:
+        message_type = str(message.get("message_type") or "")
+        if message_type not in ("text", "assistant_text"):
+            continue
+        content = (message.get("content") or "").strip()
+        if not content:
+            continue
+        who = "user" if message_type == "text" else "assistant"
+        lines.append(f"{who}: {content}")
+    lines = lines[-limit:]
+    if not lines:
         return ""
-    text = "\n".join(f"user: {u}" for u in utterances)
+
+    recent = lines[-keep_recent:]
+    older = lines[:-keep_recent]
+    # 用户原话比助手确认句信息量大：user 多留头部，assistant 压得更狠（它的数字照样保留）。
+    compacted = [
+        f"user: {_compact_utterance(line[len('user: '):], keep_head=24)}"
+        if line.startswith("user: ")
+        else f"assistant: {_compact_utterance(line[len('assistant: '):], keep_head=12)}"
+        for line in older
+    ]
+    text = "\n".join(compacted + recent)
+    if len(text) <= max_chars:
+        return text
+
+    # 还超预算：把早期压成**一行纯数据**（数字一条不丢），只保留最近的原文。
+    fragments: list[str] = []
+    for line in older:
+        for piece in _protected_fragments(line):
+            if piece not in fragments:
+                fragments.append(piece)
+    header = f"（更早 {len(older)} 轮已压缩"
+    header += f"，保留数据：{'、'.join(fragments)}）" if fragments else "）"
+    text = "\n".join([header] + recent)
     if len(text) > max_chars:
-        text = text[-max_chars:]
+        # 用户明确要求：数据不能压缩。超预算就超，只告警——宁可多花 token，也不能丢事实。
+        logger.warning(
+            "dialogue context %s chars over budget %s (data kept verbatim)",
+            len(text), max_chars,
+        )
     return text
