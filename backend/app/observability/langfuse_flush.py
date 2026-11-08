@@ -91,10 +91,15 @@ def _should_report(span_name: str, status: str, level: str) -> bool:
 
 
 def _root_name(tracer: "Tracer") -> str:
-    """根 observation / trace 的人话名字：用户这一轮问的是什么。"""
+    """根 observation / trace 的人话名字：用户这一轮问的是什么。
+
+    2026-11-08：这里**必须再 redact 一次**——`Tracer.__init__` 虽然会脱敏，
+    但 observation 名会直接展示在 UI 上，不能假设上游一定脱过（测试里就有未脱敏的 tracer）。
+    """
     question = " ".join(str(getattr(tracer, "user_query", "") or "").split())
     if not question:
         return _ROOT_NAME
+    question = str(redact(question))
     if len(question) <= _ROOT_QUESTION_CHARS:
         return question
     return f"{question[:_ROOT_QUESTION_CHARS]}…"

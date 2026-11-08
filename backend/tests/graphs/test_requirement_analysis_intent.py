@@ -14,6 +14,15 @@ from app.agent.intent import IntentKind, IntentResult
 from app.agent.requirement_analysis_graph import build_requirement_analysis_graph
 
 pytestmark = pytest.mark.graphs
+@pytest.fixture(autouse=True)
+def _disable_turn_understanding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """本文件测的是**旧解析路径**（`requirement_parse` 节点）。
+
+    `TURN_UNDERSTANDING=1` 在本地 `.env` 里是开着的，会让图改走 `turn_understand`，
+    于是这些断言（节点调用顺序 / dictionary_context）在本机永远红、在 CI（无 .env）却是绿的——
+    典型的「本地红 CI 绿」，最容易误判。这里显式关掉，两边一致。
+    """
+    monkeypatch.setenv("TURN_UNDERSTANDING", "0")
 
 
 def _build_graph(monkeypatch: pytest.MonkeyPatch, intent: IntentKind, spy=None):

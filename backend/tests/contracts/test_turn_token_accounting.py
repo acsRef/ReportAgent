@@ -174,6 +174,8 @@ class TestStreamAccounting:
         )
         reply = reasoning_client.chat_with_reasoning(
             _PROMPT, model="turn-model", on_delta=lambda kind, text: None,
+            # 显式给 512：默认预算 2026-11-08 已抬到 1536，这里要测的是「顶到预算」的判定
+            thinking_budget=512,
         )
 
         assert reply is not None

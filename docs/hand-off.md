@@ -386,6 +386,22 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    **指标被清空** → 系统重新问「用哪个口径？」；再说「换成柱状图」又问一遍，报告也出不来。
    修法：有上一轮任务时，含「画/换成/改成/饼图/柱状图/折线/表格…」的措辞一律改成 `follow_up`
    （`_refine_act_by_wording`）。这类「在既有结果上改」的指令，不该由模型自行判断成新话题。
+48. **CI 长期红有 5 个互不相关的原因**（2026-11-08 排查，14 failed → 1626 passed）：别把它当成
+   「今天改坏的」一次性问题：
+   - `test_requirement_slots` 2 例：`5337f3a`（11-04 23:19，plan `clarify-default-instead-of-ask`）
+     把「没点名口径就追问」改成「落默认口径」，**同一天 18:20 的测试没跟着改** → 从那刻起一直红；
+   - `test_progress_frames` 1 例：`alert` 的 `live` 快照加「同 step 只留最新帧」后，
+     `task.result` 只剩最终状态（没 running 帧），测试还按两帧写；
+   - `test_langfuse_flush` 7 例：root 名改成用户原话 / 节点名改中文 / 加采样（`essential` 档）/
+     `metadata.node` 承载技术名——都是当天有意改的，测试需要跟上；
+   - `test_turn_token_accounting` 1 例：`TURN_THINKING_BUDGET` 默认 512 → 1536，截断断言要显式传预算；
+   - `test_requirement_analysis_*` 3 例：**本地 `.env` 的 `TURN_UNDERSTANDING=1`** 让图走新路径，
+     而这些用例测的是旧解析路径 → 本地永远红、CI（无 `.env`）却是绿的。已加 autouse fixture
+     显式 `TURN_UNDERSTANDING=0`。
+   教训：**实验开关必须在测试里显式钉住**；「本地红 CI 绿」比「CI 红」更难发现。
+49. **PII 不能只靠上游脱敏**：`_root_name` 把 `tracer.user_query` 当 observation 名时，虽然有
+   `Tracer.__init__` 的 redact，但测试/未来调用方可能传未脱敏对象 → 名字里直接出现身份证号。
+   现在 `_root_name` 内部**再 redact 一次**，因为 observation 名会直接展示在 UI 上。
 
 ## 5. 文档地图
 

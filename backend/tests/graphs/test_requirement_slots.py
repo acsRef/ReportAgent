@@ -174,22 +174,39 @@ def test_parse_requirement_forces_user_named_metric(monkeypatch) -> None:
     assert not [mf for mf in card.missing_fields if mf.key == "metric"]
 
 
-def test_parse_requirement_asks_when_metric_is_ambiguous(monkeypatch) -> None:
+def test_parse_requirement_defaults_metric_when_user_named_none(monkeypatch) -> None:
+    """没点名口径 → 按注册表默认口径前进 + 一条已接受假设（不拦下来问选择题）。
+
+    2026-11-04 23:19 的 `5337f3a`（plan `clarify-default-instead-of-ask`）把设计从
+    「一律问」改成「有默认就不问」，但当时的两个测试没跟着改——它们从此一直红着，
+    也是 CI 长期红的根因之一。这里按最终设计钉住行为。
+    """
+    _patch_parse(monkeypatch, _payload(["实收金额"]))
+
+    card = rp.parse_requirement(user_query="2024年各区域表现", schema_context=None)
+
+    assert card.target_metrics == ["销售额"], "应落到注册表默认口径"
+    assert not [mf for mf in card.missing_fields if mf.key == "metric"]
+    assert any(
+        a.key.startswith("metric_default:") and a.accepted is True for a in card.assumptions
+    ), "必须留一条已接受的默认口径假设，用户随时能改"
+    assert card.slot_states["metric"] == "ambiguous", "状态仍记为『用户没点名』"
+
+
+def test_parse_requirement_asks_when_registry_has_no_default(monkeypatch) -> None:
+    """只有注册表连默认口径都没有时，才退回「问用户」。"""
+    monkeypatch.setattr(rp, "_default_registry_metric", lambda: None)
     _patch_parse(monkeypatch, _payload(["实收金额"]))
 
     card = rp.parse_requirement(user_query="2024年各区域表现", schema_context=None)
 
     metric_fields = [mf for mf in card.missing_fields if mf.key == "metric"]
-    assert metric_fields, "口径歧义必须变成澄清项"
+    assert metric_fields, "没有默认口径时必须问"
     field = metric_fields[0]
     assert field.state == "ambiguous"
-    values = [o.value for o in field.options]
-    assert values[:2] == ["metric:实收金额", "metric:销售额"], "value 必须稳定为 metric:<name>"
-    assert len(values) <= 3
-    assert all(o.hint for o in field.options), "选项必须带差异说明（Phase 2 再补数值）"
+    assert all(o.value.startswith("metric:") for o in field.options)
+    assert len(field.options) <= 3
     assert card.status == "missing"
-    assert card.slot_states["metric"] == "ambiguous"
-    assert card.slot_order[0] == "metric"
 
 
 def test_parse_requirement_no_metric_clarification_when_user_named_it(monkeypatch) -> None:
@@ -199,20 +216,6 @@ def test_parse_requirement_no_metric_clarification_when_user_named_it(monkeypatc
 
     assert card.target_metrics == ["销售额"]
     assert not [mf for mf in card.missing_fields if mf.key == "metric"]
-
-
-def test_parse_requirement_asks_when_user_named_no_metric(monkeypatch) -> None:
-    """「表现」这类没点名口径的问法必须问（即使用模型猜的正好是默认口径）。"""
-    _patch_parse(monkeypatch, _payload(["销售额"]))
-
-    card = rp.parse_requirement(user_query="2024年各区域表现", schema_context=None)
-
-    metric_fields = [mf for mf in card.missing_fields if mf.key == "metric"]
-    assert metric_fields, "没点名口径必须澄清"
-    assert [o.value for o in metric_fields[0].options] == [
-        "metric:销售额", "metric:净销售额", "metric:实收金额",
-    ]
-    assert card.slot_states["metric"] == "ambiguous"
 
 
 def test_parse_requirement_slots_survive_deterministic_intent(monkeypatch) -> None:

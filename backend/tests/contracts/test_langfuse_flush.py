@@ -10,6 +10,18 @@ pytestmark = pytest.mark.contracts
 
 from app.infra.trace.models import LLMCall, Span, Trace
 from app.observability.langfuse_flush import flush_to_langfuse
+from app.observability.redaction import redact
+
+
+@pytest.fixture(autouse=True)
+def _full_trace_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    """本文件测 flush 的转换逻辑，用 `full` 档把所有节点都发出去。
+
+    默认档是 `essential`（只发 12 个人能看懂的阶段节点；2026-11-08 加的采样，
+    见 `test_langfuse_humanize.py::TestNodeFilter`）。这里的 span 名是 `intent` 之类
+    测试夹具，不在白名单里会被过滤，断言自然对不上。
+    """
+    monkeypatch.setenv("LANGFUSE_TRACE_LEVEL", "full")
 
 # langfuse_config mock：enabled=True + flush_timeout 数值（wait_for 需要真实 float）。
 _CFG = SimpleNamespace(enabled=True, flush_timeout=5.0)
@@ -88,7 +100,7 @@ async def test_flush_to_langfuse_writes_spans_and_metadata(monkeypatch):
     assert mock_langfuse.start_as_current_observation.called
     # 第一次调用是根 observation；call_args 只回最后一次调用（子 span）。
     root_call = mock_langfuse.start_as_current_observation.call_args_list[0].kwargs
-    assert root_call.get("name") == "report_agent_run"
+    assert root_call.get("name") == redact("查询 id_card 110101199001011234 的销售")
     assert root_call.get("trace_context") == {"trace_id": "t-1"}  # trace_id 与 PG 一致
     assert mock_langfuse.flush.called
 
@@ -249,7 +261,7 @@ async def test_flush_llm_call_attached_under_parent_span(monkeypatch):
 
     names = [c.kwargs.get("name") for c in mock_langfuse.start_as_current_observation.call_args_list]
     # 顺序：report_agent_run (root) → intent (span) → llm_call (nested)
-    assert names[0] == "report_agent_run"
+    assert names[0] == redact("查询 id_card 110101199001011234 的销售")
     assert names.index("llm_call") > names.index("intent"), (
         f"llm_call 应嵌套于 span 'intent' 之后，但调用顺序是 {names}"
     )
@@ -290,7 +302,9 @@ async def test_flush_multiple_decisions_aggregated_and_redacted(monkeypatch):
 
     span_calls = [
         c for c in mock_langfuse.start_as_current_observation.call_args_list
-        if c.kwargs.get("name") == "sql_agent"
+        # 2026-11-08：observation 名改成中文了（「执行 SQL 分析」），
+        # 技术名留在 metadata.node 里——按它找才稳定。
+        if (c.kwargs.get("metadata") or {}).get("node") == "sql_agent"
     ]
     assert span_calls
     md = span_calls[0].kwargs.get("metadata") or {}

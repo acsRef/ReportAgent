@@ -146,7 +146,10 @@ async def test_runner_wires_handler_progress_frames(monkeypatch):
     assert graph.seen_config is not None
     assert len(graph.seen_config.get("callbacks") or []) == 1
     events = [e["event"] for e in task.result]
-    assert events == ["trace", "trace", "report", "done"]
+    # 2026-11-08（plan interruption-resilience）：`task.result` = `live` 快照 + final，
+    # 而 `live` 里**同一 step 只保留最新一帧**（迟到订阅者重放不要上千个中间帧）。
+    # 所以这里看到的是该节点的最终状态 success，而不是 running + success 两帧。
+    assert events == ["trace", "report", "done"]
     first = json.loads(task.result[0]["data"])
     assert first["kind"] == "sql"
-    assert first["status"] == "running"
+    assert first["status"] == "success"
