@@ -281,8 +281,14 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
     `requirement_card` 是 **dict**（父图 model_dump），`getattr(dict, "summary")` 恒为空——
     2026-11-05 饼图第一次没生效就是这个。
 21. **思考链路会被 `TURN_THINKING_BUDGET`（默认 512 tokens）截断**，`finish_reason` 仍是 `stop`，
-    只能靠 `usage.completion_tokens_details.reasoning_tokens` 判断。现在截断会标注；
-    想要完整链路就调大预算（代价是每轮更慢，也更容易撞 `LLM_TURN_TIMEOUT=90`）。
+    只能靠 `usage.completion_tokens_details.reasoning_tokens` 判断。现在截断会标注。
+    **别指望「拉满预算 = 想完整」**（2026-11-08 实测，同一句输入的 4 次采样）：
+    `512 → 508/13s`、`1024 → 1020/23s`、`2048 → 2044/30s`（都顶格截断）、
+    `4096 → 839/15s（自然收尾）或 4092/68s（顶格截断）`——**思考长度本身在 839~4092 token 抖动**，
+    预算只是「最多让它想多久」的保险丝，抬高它换来的是**最坏耗时变长**，不是保证完整。
+    结论：默认 512（快）或 1024–1536（略完整，需把 `LLM_TURN_TIMEOUT` 提到 150）；
+    **不建议 ≥4096**（实测有 68s 样本，撞到 90s 超时反而退化成「不思考重试」，连链路都没了）。
+    答案质量与预算无关：四档采样里 TurnPlan JSON 全部可解析。
 22. **turn 模型超时会回落到通用解析**：现在超时后先自动用「不思考」模式重试一次
     （`LLM_TURN_FAST_TIMEOUT`，默认 45s），两次都失败才回落——排查「理解失败」先看后端日志
     的 `turn model http failed`。
