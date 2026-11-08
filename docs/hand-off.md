@@ -86,6 +86,7 @@ Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
 | 19 | **「标注」不再被当成「只看」+ 模型超时不再说成查询超时**（plan `2026-11-08-top-period-annotate-and-timeout-copy.md`）：①`RequirementTopPeriod.purpose: select\|annotate`（默认 select 零迁移），词表判定 + 产卡后原话归一（模型漏给时按原话补建）；annotate = 全区间 + `CASE WHEN ... AS 是否最高期`，契约校验反向（必须有标记列、不许退化）②`user_message(kind, code)` 加 code 覆盖层，`LLM_TIMEOUT` 说「模型响应超时」不再叫用户去缩时间范围 | 后端 122 passed / 前端 24 + tsc；真机 `probe_top_period_annotate.py` ALL PASS（5 列 200 行、SQL 全区间带标记） |
 | 20 | **Turn Understanding 目标分类收口**（plan `2026-11-08-turn-goal-wording-rules.md`）：`_VETO_GOALS` 只删不补导致「详细**列出来**」被判成不是明细；新增 `_refine_goals_by_wording` 三条确定性规则（明细到位→单 `detail_rows`、维度细分→`compare`、极值双向兜底），**裁决前移到 `_finish_reply`**（只在 reduce 里做则评测看不见） | 真 LLM 8 例 `goals 2/4 → 4/4`（act 7/7 / extreme 1/1 / inherit 5/5 / upd 8/8 / json 8/8）；聚焦 28 + 相关 66 passed |
 | 21 | **澄清选项前缀 + 明细列数**（plan `2026-11-08-clarification-option-prefixes.md`）：①`project_card` 曾把所有澄清选项 value 一律拼成 `metric:<中文>` → 「想看哪种分析：逐条明细」回传成 `metric:逐条明细`，**指标被写坏、detail_level 一个字段没设**；改按 blocker.key 发前缀（`intent:` 分派后端早就有了）+ 补 `granularity:` 接收分支与 `_apply_intent(extreme)`②明细契约加列数下限 3（日期+维度列+指标列），prompt 列清单要求至少 4 列③PATCH 后的 `metric:` 只认注册表口径 | 真机 `probe_detail_columns.py`：「把订单列出来看看」1 行总额 → **200 行 7 列（含订单编号）**；订单明细 4→5 列。新用例 33+9，受影响面 150 passed |
+| 22 | **对比基线 / 重复列 / 确认后状态**（plan `2026-11-08-analysis-quality-cleanup.md`）：①「销售额同比怎么样」的 SQL 里一点同比都没有 → 需求层 `_ensure_comparison_slot`（同比/环比落标签、只说「对比」就问基线）+ `comparison_baseline` 透传到 sql 子图 + **契约拦截**（prompt 治不住采样，「按月趋势+同比」连跑两次都不做）②重复列的行键也从 rows 裁掉③`phase=generating/adjusting` 即把卡标 locked，后端 `payload.status` 跟随草稿行 | 真机：问出基线并出 `当期/去年同期/同比变化率` 三列；后端 26 + 133 passed、前端 8 + 76、tsc 干净 |
 
 ### 2026-11-04 做完的事
 
@@ -353,6 +354,14 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
 39. **探针「一律选第一个选项」会掩盖 bug**（2026-11-08）：`probe_detail_columns.py` 原来对
    `analysis_intent` 总选「总体情况」，于是永远测出「一个总额」——看起来是判据设计问题，
    实际掩盖了「点了明细却拿不到明细」。探针的选择策略要模拟**用户真实选择**，不是最省事的选择。
+40. **需求层加了规则，别忘了 TURN_UNDERSTANDING 那条路径**（2026-11-08）：对比基线第一版只写在
+   `parse_requirement` 里，而 `TURN_UNDERSTANDING=1` 时根本不过它——真机跑完一点变化都没有。
+   两条前置路径（`_requirement_parse` / `_requirement_project`）都要归一，和 `_normalize_card_scope` 同一位置。
+41. **prompt 写清楚 ≠ 模型照做**（2026-11-08）：「同比」在 prompt 里明写「必须含当期/基准/变化率」，
+   「按月趋势 + 同比」连跑两次都只给月度序列，而「区域对比 + 同比」一次就对。这类**形状型要求**
+   要靠契约拦（`_comparison_contract_violation` → repair），不能只靠 prompt。
+42. **写「已说基线」的正则时别把裸「比」算进去**：「对**比**一下各区域」会被自己的「比」判成
+   「已说基线」，于是永远不问基线。用「和/与/跟 + 词」「相比」「同期/去年/上期」这类线索。
 
 ## 5. 文档地图
 

@@ -292,6 +292,10 @@ class SQLAgentState(TypedDict, total=False):
     # 最高/最低的那一期（2026-11-04）：{direction: max|min, unit: day|week|month|...,
     # metric: 口径名}。为空 = 普通全区间查询。由父图从需求卡透传。
     top_period: Optional[dict]
+    # 对比基线（2026-11-08，plan analysis-quality-cleanup D1）：需求卡 dimensions 里的
+    # 「对比:同比 / 对比:环比 / 对比:指定基线」→ 一句话（如「同比（今年与去年同期同月份比）」）。
+    # 为空 = 用户没要对比。由父图透传，生成阶段据此要求 当期值 + 基准值 + 变化率 三列。
+    comparison_baseline: Optional[str]
     # 指标白名单渲染结果（2026-11-03）：需求卡解析出的指标表达式，只渲染这些。
     # 为空时退回全量注册表（无卡片场景）。
     metric_hints: Optional[str]
@@ -664,6 +668,17 @@ def _generate_sql(state: SQLAgentState) -> dict:
                 f"必须先用 WITH 子句聚合选出那一期（GROUP BY 期 + ORDER BY <指标> DESC LIMIT 1），"
                 f"再只取该期的数据；明细模式下外层不许聚合。不许把全区间汇总一遍。"
             )
+    # 2026-11-08（plan analysis-quality-cleanup D1）：对比基线必须体现在 SQL 里。
+    # 实测「销售额同比怎么样」只出了 12 个月的量，卡上还写着 trend_analysis——
+    # 用户要的同比一个数都没有。
+    baseline = _comparison_baseline(state, plan)
+    if baseline:
+        prompt += (
+            f"\n\n【对比基线（确定性）】用户要的是{baseline}："
+            "结果必须同时包含 **当期值、基准值、变化率** 三列"
+            "（变化率列名里带「同比」或「环比」，形如 `(当期-基准)/基准`），"
+            "**不许**只给当期序列让它看起来像趋势。"
+        )
     sql = call_llm(
         [{"role": "user", "content": prompt}],
         max_tokens=budgets.max_tokens("sql_repair" if repair_ctx else "sql_generate"),
@@ -765,6 +780,34 @@ def _failure_detail(
     return ErrorDetail(code="EXECUTION_ERROR", message=detail, kind=kind)
 
 
+def _comparison_baseline(state: "SQLAgentState", plan) -> str | None:
+    """对比基线的一句话（没有对比需求返回 None）。
+
+    优先读父图透传的 `comparison_baseline`（2026-11-08，plan analysis-quality-cleanup D1：
+    子图 state 里没有需求卡，靠 `plan.dimensions` 猜不可靠），再退回卡/计划里的维度标签。
+    """
+    declared = state.get("comparison_baseline")
+    if declared:
+        return str(declared)
+    card = state.get("requirement_card")
+    dims: list = []
+    if card is not None:
+        dims = list(getattr(card, "dimensions", None) or (
+            card.get("dimensions") if isinstance(card, dict) else None
+        ) or [])
+    if not dims and plan is not None:
+        dims = list(getattr(plan, "dimensions", None) or [])
+    for dim in dims:
+        text = str(dim)
+        if "同比" in text:
+            return "同比（今年与去年同期同月份比）"
+        if "环比" in text:
+            return "环比（本期与上一期比）"
+        if "指定基线" in text:
+            return "与指定基线对比"
+    return None
+
+
 def _top_period_contract_violation(sql: str, top_period: dict | None = None) -> str | None:
     """最高/最低期的确定性契约（2026-11-04，plan top-period-detail-intent）。
 
@@ -840,6 +883,32 @@ def _top_period_annotate_violation(sql: str, spec: dict) -> str | None:
         f"缺少「标注哪几期是{word}期」的标记列："
         f"必须新增 `CASE WHEN <期条件> THEN '是' ELSE '否' END AS \"{flag}\"`，"
         f"并保留全区间数据（不要只取那一期）"
+    )
+
+
+_COMPARISON_SQL_RE = re.compile(
+    r"同比|环比|last_year|last_month|prev(ious)?_|lag\s*\(|shift\s*\(",
+    re.IGNORECASE,
+)
+
+
+def _comparison_contract_violation(sql: str, baseline: str | None) -> str | None:
+    """对比基线契约（2026-11-08，plan analysis-quality-cleanup D1）。
+
+    用户说了「同比/环比」，SQL 就必须真的算出来：要么 JOIN 去年同期，要么窗口函数
+    （`LAG(..., 12)`）。只给当期序列的话，用户看到的是一张趋势图，而不是同比。
+
+    判据刻意宽松（认「同比/环比/last_year/LAG」任一线索）——目的是**拦住完全不做的**，
+    不是限制写法；具体列名与算法仍交给模型。
+    """
+    if not baseline:
+        return None
+    if _COMPARISON_SQL_RE.search(sql or ""):
+        return None
+    return (
+        f"缺少{baseline}的计算：结果必须同时包含 当期值、基准值、变化率 三列"
+        "（可用去年同期 JOIN 或窗口函数 LAG/ROW_NUMBER 取上一期），"
+        "变化率列名里要带「同比」或「环比」；不许只给当期序列"
     )
 
 
@@ -986,6 +1055,14 @@ def _validate(state: SQLAgentState) -> dict:
             violation = _top_period_contract_violation(sql, top_period)
             if violation:
                 logger.warning("top-period contract violated, routing to repair: %s", violation)
+                validation = {"valid": False, "error": violation, "error_kind": "syntax"}
+        # 2026-11-08（plan analysis-quality-cleanup D1）：说了同比/环比就必须真算。
+        # 实测同一条 prompt 下「区域对比 + 同比」模型会照做，「按月趋势 + 同比」两次都只给
+        # 月度序列——prompt 治不住采样，所以按既有契约模式拦一道，交给 repair 重写。
+        if validation.get("valid") and state.get("comparison_baseline"):
+            violation = _comparison_contract_violation(sql, state.get("comparison_baseline"))
+            if violation:
+                logger.warning("comparison contract violated, routing to repair: %s", violation)
                 validation = {"valid": False, "error": violation, "error_kind": "syntax"}
     return {"validation_result": validation}
 

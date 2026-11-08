@@ -708,6 +708,14 @@ def _requirement_project(state: RequirementAnalysisState) -> dict:
     )
     card = _normalize_card_scope(card)
     card = _normalize_card_top_period(card, state.get("user_query", ""))
+    # 2026-11-08（plan analysis-quality-cleanup D1）：TURN_UNDERSTANDING 路径不经过
+    # parse_requirement，对比基线也得在这里归一——否则「销售额同比怎么样」卡上只有
+    # 「时间」一个维度，执行层拿不到任何对比线索（实测 SQL 只出 12 个月的量）。
+    from app.agent.requirement_parser import _ensure_comparison_slot
+
+    _ensure_comparison_slot(card, state.get("user_query", ""))
+    if card.missing_fields and card.status == "complete":
+        card.status = "missing"
     pending = "、".join(mf.label for mf in (card.missing_fields or []))
     _progress_detail(
         "投影需求卡",

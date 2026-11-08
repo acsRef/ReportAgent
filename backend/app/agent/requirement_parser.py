@@ -179,6 +179,54 @@ def _dim_kind(dim: str) -> str:
     return "base"
 
 
+# 2026-11-08（plan analysis-quality-cleanup D1）：对比类必须带出「和谁比」。
+_COMPARE_WORDS = ("对比", "比较", "相比", "对比下", "比一下")
+_YOY_WORDS = ("同比", "去年同")
+_MOM_WORDS = ("环比", "上一期", "上个月比")
+
+# 已经说清基线的不再追问（「和华南比」「比去年」「去年同期」「上期」）。
+# 注意不能把裸「比」当线索——「对**比**一下各区域」里的「比」会把自己判成「已说基线」。
+_BASELINE_HINT_RE = re.compile(
+    r"(?:和|与|跟)\s*[\u4e00-\u9fa5A-Za-z0-9]{1,10}"
+    r"|相比|比起来|相比较"
+    r"|同期|去年|上期|上月|上一期|上一?个月",
+)
+
+
+def _ensure_comparison_slot(card: "RequirementCard", user_query: str) -> None:
+    """对比类必须落基线（2026-11-08，plan analysis-quality-cleanup D1）。
+
+    真机实测：用户说「销售额同比怎么样」，卡上 `dimensions=['时间']`、SQL 只是
+    12 个月的量——**一点同比都没有**；说「对比一下各区域的销售额」，出的也只是
+    分组求和（横截面互比，没有基线差异）。
+
+    所以「同比/环比」直接落 comparison 标签（这一轮已经说清跟谁比）；
+    只说了「对比」没说跟谁比 → 补一条 comparison 待确认（选项里含「不对比」，
+    不会强迫用户选）。
+    """
+    text = str(user_query or "")
+    if not text:
+        return
+    has_yoy = any(word in text for word in _YOY_WORDS)
+    has_mom = any(word in text for word in _MOM_WORDS)
+    has_compare = any(word in text for word in _COMPARE_WORDS)
+    if not (has_yoy or has_mom or has_compare):
+        return
+    if any(_dim_kind(d) == "comparison" for d in card.dimensions):
+        return
+    if has_yoy:
+        card.dimensions.append("对比:同比")
+        return
+    if has_mom:
+        card.dimensions.append("对比:环比")
+        return
+    # 只说了「对比」，但原话里没有任何基线线索 → 问出来
+    if _BASELINE_HINT_RE.search(text):
+        return
+    if not any(mf.key == "comparison" for mf in card.missing_fields):
+        card.missing_fields.append(opts.build_missing_field(key="comparison"))
+
+
 _GRANULARITY_ALIASES: dict[str, str] = {
     "day": "day", "日": "day", "每日": "day", "按日": "day", "天": "day",
     "week": "week", "周": "week", "每周": "week", "按周": "week",
@@ -1160,6 +1208,8 @@ def parse_requirement(
     if prior_card is not None and prior_card.target_metrics:
         prior_metric = str(prior_card.target_metrics[0])
     slot = _apply_slot_resolutions(card, user_query, prior_metric=prior_metric)
+    # 2026-11-08（plan analysis-quality-cleanup D1）：对比类没带基线 → 落标签或问出来。
+    _ensure_comparison_slot(card, user_query)
 
     # 最高期用的口径跟卡体最终一致（口径可能刚被槽位落位/默认改写，
     # 所以必须放在槽位处理之后——否则 chip 会显示模型原始词 sales）。

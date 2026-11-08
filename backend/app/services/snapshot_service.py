@@ -85,6 +85,12 @@ def _decode_requirement(row: dict | None) -> dict | None:
     payload = row["payload"]
     if isinstance(payload, str):
         payload = json.loads(payload)
+    # 2026-11-08（plan analysis-quality-cleanup D3）：草稿行的 status 才是真状态。
+    # payload 里的 status 是「产卡那一刻」的值（complete），confirm 之后行变 locked，
+    # 而前端拿 payload 当卡用 → 刷新回来 pill 又显示「信息完整 · 待确认」，
+    # 与「已按这份需求在跑」矛盾。这里以行为准覆盖 payload.status。
+    if isinstance(payload, dict) and row.get("status") and payload.get("status") != row["status"]:
+        payload = {**payload, "status": row["status"]}
     return {
         "id": row["id"],
         "session_id": row["session_id"],

@@ -120,6 +120,14 @@ def _is_known_metric(name: str) -> bool:
         return True
 
 
+# 对比基线的选项 value → 卡上的中文标签（`_dim_kind` 靠「对比/同比/环比」认 kind）。
+# 空字符串 = 用户选了「不对比」，不落标签。
+_COMPARISON_LABELS: dict[str, str] = {
+    "yoy": "同比",
+    "mom": "环比",
+    "vs_baseline": "指定基线",
+}
+
 _GRANULARITY_ALIASES: dict[str, str] = {
     "按天": "day", "按日": "day", "天": "day", "日": "day", "day": "day",
     "按周": "week", "按星期": "week", "周": "week", "week": "week",
@@ -260,9 +268,14 @@ async def patch_requirement(
             # （标签只能给 LLM 看，结构化字段才能进 _format_confirmed_requirement）。
             card_dict["granularity"] = sel if isinstance(sel, str) else None
         elif key == "comparison":
-            card_dict["dimensions"] = list(
-                set(card_dict.get("dimensions", []) + [f"对比:{sel}"]),
-            )
+            # 2026-11-08（plan analysis-quality-cleanup D1）：选项 value 是 yoy/mom/…，
+            # 落卡时翻成中文标签，执行层才认得出「同比」还是「环比」。
+            # 「不对比」不落任何标签（用户明确说不要对比）。
+            label = _COMPARISON_LABELS.get(str(sel))
+            if label:
+                card_dict["dimensions"] = list(
+                    dict.fromkeys(list(card_dict.get("dimensions") or []) + [f"对比:{label}"]),
+                )
         # else: drop from missing_fields (filled)
     card_dict["missing_fields"] = remaining_missing
 

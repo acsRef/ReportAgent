@@ -67,6 +67,13 @@ def build_display_table(
     kept = drop_duplicate_columns(names, rows)
     label_map = {name: column_label(name) for name in kept}
 
+    # 2026-11-08（plan analysis-quality-cleanup D2）：重复列的**行键**也要清掉。
+    # 只裁 columns 的话，rows 里仍留着两个同值键，`localize_chart` 会把它们改成
+    # 同一个中文名 → 图表上出现两个同名系列 / 轴重复。
+    if len(kept) < len(names):
+        kept_set = set(kept)
+        rows = [{key: value for key, value in row.items() if key in kept_set} for row in rows]
+
     # 重复列（值序列与某个保留列完全相同）→ 复用保留列的中文标签
     signatures: dict[tuple, str] = {}
     for name in kept:

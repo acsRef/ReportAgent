@@ -386,6 +386,10 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
         # 2026-11-04（top-period-detail-intent）：最高/最低的一期 → sql_graph 需要
         # 在生成阶段再强调、在校验阶段检查「真的只取那一期」。
         "top_period": top_period_state,
+        # 2026-11-08（plan analysis-quality-cleanup D1）：对比基线透传给生成阶段。
+        # 子图没有需求卡，靠 plan.dimensions 猜不可靠——「销售额同比怎么样」实测
+        # 只出了 12 个月的量，同比一个数都没有。
+        "comparison_baseline": _comparison_baseline_from_card(card),
         # 指标白名单（2026-11-03）：卡片解析出的指标才给模型，避免把整张注册表塞进去
         "metric_hints": _metric_hints_for(card),
         "fault_override": state.get("fault_override"),  # P15 e2e T4: e2e fault seam 透传
@@ -705,6 +709,24 @@ def _top_period_annotate_hint(
         f"   —— 少这一列就是把「标注」做成了没标注；用 top_period 过滤数据则是另一件事"
         f"（用户要的是全量里标出来）。"
     )
+
+
+def _comparison_baseline_from_card(card) -> str | None:
+    """需求卡 dimensions 里的对比标签 → 给 SQL 生成阶段的一句话（没有则 None）。
+
+    标签由需求层确定性产出（`requirement_parser._ensure_comparison_slot`），
+    这里只做翻译，不做判断。
+    """
+    dims = getattr(card, "dimensions", None) if card is not None else None
+    for dim in (dims or []):
+        text = str(dim)
+        if "同比" in text:
+            return "同比（今年与去年同期同月份比）"
+        if "环比" in text:
+            return "环比（本期与上一期比）"
+        if "指定基线" in text:
+            return "与指定基线对比"
+    return None
 
 
 def _format_confirmed_requirement(card, *, top_resolved=None) -> str | None:

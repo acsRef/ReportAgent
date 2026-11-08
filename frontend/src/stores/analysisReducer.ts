@@ -59,6 +59,11 @@ export type AnalysisAction =
   | { type: 'sessions/page-loading'; loading: boolean }
   | { type: 'sessions/received'; sessions: SessionSummary[] }
   | { type: 'requirement/received'; requirement: RequirementCard }
+  /**
+   * 2026-11-08（plan analysis-quality-cleanup D3）：草稿被确认（后端已 lock）。
+   * 进入 generating/adjusting 时派发——pill 立刻变「✓ 已确认」，不必等刷新。
+   */
+  | { type: 'requirement/locked' }
   /** 发送：一次原子追加「用户消息 + 空的助手占位（streaming）」。 */
   | { type: 'chat/turn-appended'; turn: SentTurn }
   /** 助手这句话的正文（闲聊回复 / 服务端回填的 assistant_text）。 */
@@ -217,6 +222,11 @@ export function analysisReducer(
         return state
       }
       return { ...state, requirement: action.requirement }
+
+    case 'requirement/locked':
+      // 只在确实有卡且还没锁时改：没有卡（闲聊轮）时不能凭空造一个。
+      if (!state.requirement || state.requirement.status === 'locked') return state
+      return { ...state, requirement: { ...state.requirement, status: 'locked' } }
 
     case 'report/received': {
       const existingIndex = state.reportVersions.findIndex(

@@ -27,6 +27,12 @@ export function handleSSEEvent(evt: AnalysisStreamEvent, ctx: StreamEventCtx): v
   switch (evt.type) {
     case 'phase':
       dispatch({ type: 'phase/received', phase: evt.phase })
+      // 2026-11-08（plan analysis-quality-cleanup D3）：确认后草稿已被后端锁定，
+      // 但卡还是 confirm 前那份（status=complete）→ pill 一直显示「信息完整 · 待确认」，
+      // 与「已按这份需求在跑」的实际状态自相矛盾。进入执行相位即视为已确认。
+      if (evt.phase === 'generating' || evt.phase === 'adjusting') {
+        dispatch({ type: 'requirement/locked' })
+      }
       break
     case 'requirement':
       dispatch({ type: 'requirement/received', requirement: evt.requirement })
