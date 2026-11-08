@@ -235,6 +235,59 @@ def dimension_column(term: str) -> str | None:
     return None
 
 
+# --- 维度取值归一（2026-11-08，真机：scope「华南区域」≠ 数据「华南」）------------
+
+# 口语后缀：用户说「华南区域的吧」「华东地区」，数据里只有「华南」「华东」。
+_SCOPE_SUFFIXES = ("区域", "地区", "大区", "省", "市", "县", "区")
+
+
+def dimension_values(term: str) -> tuple[str, ...]:
+    """某维度在数据里的真实取值（区域 → 华东/华中/…）。没有登记则空。"""
+    raw = (_schema_hints().get("dimension_values") or {}).get(str(term or "").strip())
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(item).strip() for item in raw if str(item).strip())
+
+
+def canonical_dimension_value(term: str, value: str) -> str:
+    """把用户说的维度值归一到数据里的真实值；**归不了就原样返回**（不猜）。
+
+    规则：先精确匹配 → 再逐个剥掉口语后缀（区域/地区/省/市…）后匹配。
+    `ALL`（全部区域）这类占位值原样保留。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return text
+    known = dimension_values(term)
+    if not known:
+        return text
+    needle = _normalize(text)
+    for candidate in known:
+        if _normalize(candidate) == needle:
+            return candidate
+    trimmed = text
+    for suffix in _SCOPE_SUFFIXES:
+        if trimmed.endswith(suffix) and len(trimmed) > len(suffix):
+            trimmed = trimmed[: -len(suffix)]
+            for candidate in known:
+                if _normalize(candidate) == _normalize(trimmed):
+                    return candidate
+    return text
+
+
+def canonical_scopes(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """需求卡 scope 列表归一（区域后缀 → 真实取值）；保持原顺序、去重。"""
+    out: list[str] = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        canonical = canonical_dimension_value("区域", text)
+        if canonical and canonical not in out:
+            out.append(canonical)
+    return out
+
+
 # --- 物理列名 → 中文标签（2026-11-03：卡片不允许出现 order_amount / region 这种列名） ---
 
 def label_for_metric_column(column: str) -> str | None:

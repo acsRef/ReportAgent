@@ -34,6 +34,19 @@ dimension_terms:
   - term: 促销
     column: dim_promotion.promotion_name
 
+# 维度取值枚举（数据字典里的真实值）。
+# 2026-11-08 真机：用户说「华南区域的吧」→ 卡上 scope 落成 `华南区域`，而库里是 `华南`
+# → 选期查询 0 行 → 上游把 SQL 修成语法错、repair 空转、最后报「SQL执行失败: 」（空）。
+# 需求层落 scope 前用它做**确定性归一**（只做后缀裁剪 + 精确匹配，不猜新值）。
+dimension_values:
+  区域:
+    - 华东
+    - 华中
+    - 华北
+    - 华南
+    - 西北
+    - 西南
+
 # 时间维度
 time_dimension:
   table: dim_date

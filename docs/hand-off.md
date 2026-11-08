@@ -301,6 +301,16 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    现在 `live` 里同一 step 只留最新一帧、流式帧总量上限 600（超了只停过程帧，终态照发）。
 26. **验证中断场景别用「看截图」**：判据是「断开后库里 phase 是否收敛 + 行是否齐」，
    再补一次 UI 复核；三个探针（interrupt / refresh / close-page）各自独立跑，别混。
+27. **scope 值必须先过数据字典**（2026-11-08 真机）：用户说「华南区域的吧」→ 卡上落成
+   `华南区域`，而 `dim_store.region` 里是 `华南` → 选期查询 0 行 → `resolved=false` →
+   退回「让模型自己写两段式」→ 校验连续失败 → 预算耗尽 → 报错。现在两个产卡路径都会过
+   `knowledge.canonical_scopes`（后缀裁剪 + 精确匹配，归不了原样保留）。
+   **判断这类问题的最快方式**：直接调 `resolve_top_period(...)` 看 `reason`，`empty` 基本就是取值没对齐。
+28. **失败文案绝不能拼空串**：`f"SQL执行失败: {raw_err}"` 里 `raw_err` 来自「执行结果 JSON」，
+   而校验失败时**根本没执行** → 空串 → 界面一行 `SQL执行失败: `。改走 `sql_graph._failure_detail`
+   （校验结论 → 执行错误 → 原始返回 → 固定兜底）。排查时优先看 `validation.error`。
+29. **`validate_sql` 的日志曾经只打 `sql[:60]`**：SQL 以换行/空格开头时日志里啥也看不到。
+   现在压缩空白后打 160 字——以后看「top-period contract violated」时能直接读到 SQL。
 
 ## 5. 文档地图
 

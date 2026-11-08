@@ -335,6 +335,7 @@ async def _requirement_parse(state: RequirementAnalysisState) -> dict:
         dictionary_context=dictionary_context or None,
         prior_card=prior_card,
     )
+    card = _normalize_card_scope(card)
     # 过程帧内容：这一段解析出的结论（时间/口径/待确认），让「解析需求」不只是四个字
     pending = "、".join(str(getattr(mf, "label", "") or "") for mf in (card.missing_fields or []))
     _progress_detail(
@@ -633,6 +634,23 @@ def _reportability(state: RequirementAnalysisState) -> dict:
     return {"reportability": verdict}
 
 
+def _normalize_card_scope(card):
+    """scope 值按数据字典归一（2026-11-08，真机：「华南区域」≠ 数据里的「华南」）。
+
+    只做**确定性**裁剪/匹配（`knowledge.canonical_scopes`），归不了就原样保留——
+    需求层不猜数据。
+    """
+    if card is None or not getattr(card, "scope", None):
+        return card
+    from app.knowledge import registry as knowledge
+
+    canonical = knowledge.canonical_scopes(list(card.scope or []))
+    if canonical == list(card.scope or []):
+        return card
+    logger.info("scope normalized: %s → %s", list(card.scope or []), canonical)
+    return card.model_copy(update={"scope": canonical})
+
+
 @traced_node("requirement_project")
 def _requirement_project(state: RequirementAnalysisState) -> dict:
     """ActiveAnalysisTask → RequirementCard（唯一执行契约），不再二次调模型。"""
@@ -646,6 +664,7 @@ def _requirement_project(state: RequirementAnalysisState) -> dict:
         reportability=state.get("reportability"),
         summary=state.get("user_query", ""),
     )
+    card = _normalize_card_scope(card)
     pending = "、".join(mf.label for mf in (card.missing_fields or []))
     _progress_detail(
         "投影需求卡",

@@ -709,6 +709,36 @@ def _strip_cte_blocks(sql: str) -> str:
     return text
 
 
+def _failure_detail(
+    *,
+    kind: str,
+    validation: dict | None,
+    parsed_raw: dict | None,
+    raw: str,
+) -> ErrorDetail:
+    """失败时的 ErrorDetail —— **文案绝不允许为空**（2026-11-08 真机：UI 显示「SQL执行失败: 」）。
+
+    失败可能发生在三个位置，原因分别在不同地方：
+    1. 校验没过（含选期/明细契约）→ `validation.error` 就是人话；
+    2. 执行返回了错误 JSON → `parsed_raw.error`；
+    3. 两者都没有（例如预算耗尽时空转）→ 给一句稳定的兜底，而不是把空串拼上去。
+    """
+    validation = validation or {}
+    detail = ""
+    if validation.get("valid") is False:
+        detail = str(validation.get("error") or "").strip()
+        if not detail:
+            violations = validation.get("violations") or []
+            detail = "；".join(str(v) for v in violations[:2]).strip()
+    if not detail and isinstance(parsed_raw, dict):
+        detail = str(parsed_raw.get("error") or "").strip()
+    if not detail:
+        detail = str(raw or "").strip()[:200]
+    if not detail:
+        detail = "SQL 未通过校验或执行失败（已按预算重试，仍未得到有效结果）"
+    return ErrorDetail(code="EXECUTION_ERROR", message=detail, kind=kind)
+
+
 def _top_period_contract_violation(sql: str, top_period: dict | None = None) -> str | None:
     """最高/最低期的确定性契约（2026-11-04，plan top-period-detail-intent）。
 
@@ -851,7 +881,11 @@ def _validate(state: SQLAgentState) -> dict:
         return {"validation_result": {"valid": False, "error": "无SQL语句"},
                 "execution_status": "SQL_SYNTAX_ERROR"}
     validation = json.loads(validate_sql(sql))
-    logger.info("validate_sql result for sql[:60]=%s -> %s", (sql or "")[:60], validation)
+    # 2026-11-08：原来只打 `sql[:60]`，SQL 以换行/空格开头时日志里啥都看不到（真机排查被卡）。
+    logger.info(
+        "validate_sql result sql[:160]=%s -> %s",
+        " ".join((sql or "").split())[:160], validation,
+    )
     # 明细契约（2026-11-03）：SQL 本身合法但形状违反需求 → 同样按 validation 失败处理，
     # 由 DiagnosePolicy → repair 重生成。放在 safety/EXPLAIN 之后，不绕过任何安全闸。
     if validation.get("valid"):
@@ -1134,14 +1168,9 @@ def _diagnose(state: SQLAgentState) -> dict:
             "retry_counters": new_counters,
         }
     if decision.action == "clarify":
-        err = state.get("error")
-        if not err:
-            raw_err = (parsed_raw or {}).get("error", "") if parsed_raw else raw[:200]
-            err = ErrorDetail(
-                code="EXECUTION_ERROR",
-                message=f"SQL执行失败: {raw_err}",
-                kind=kind,
-            )
+        err = state.get("error") or _failure_detail(
+            kind=kind, validation=validation, parsed_raw=parsed_raw, raw=raw,
+        )
         return {
             "diagnose_decision": decision.model_dump(),
             "execution_status": "NEED_CLARIFICATION",
@@ -1150,18 +1179,9 @@ def _diagnose(state: SQLAgentState) -> dict:
     # fail
     err = state.get("error")
     if not err:
-        if parsed_raw and parsed_raw.get("error"):
-            err = ErrorDetail(
-                code="EXECUTION_ERROR",
-                message=str(parsed_raw.get("error")),
-                kind=kind,
-            )
-        if err is None and validation_failed:
-            err = ErrorDetail(
-                code="SQL_GENERATION_FAILED",
-                message=str(validation.get("error", "验证不通过")),
-                kind=kind,
-            )
+        err = _failure_detail(
+            kind=kind, validation=validation, parsed_raw=parsed_raw, raw=raw,
+        )
     result: dict[str, Any] = {
         "diagnose_decision": decision.model_dump(),
         "execution_status": "FAILED",
