@@ -381,6 +381,11 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    另一个函数，会把装饰器套到新函数上——被 trace 的函数返回 `str` → `_handle_output_span`
    `r.keys()` 崩 → 节点失败 + 模型调用不记账（`llm_calls=0`），表现只是「卡片字段全空」。
    `_handle_output_span` 现在对非 dict 返回值免疫。
+47. **「换图 / 加图」不能被判成新任务**（2026-11-08 场景测试 S9 挖出来的）：出一份报告后说
+   「画个饼图看看」，模型判 `new_task` → `reduce_task` 按 new_task 丢弃上一轮任务 →
+   **指标被清空** → 系统重新问「用哪个口径？」；再说「换成柱状图」又问一遍，报告也出不来。
+   修法：有上一轮任务时，含「画/换成/改成/饼图/柱状图/折线/表格…」的措辞一律改成 `follow_up`
+   （`_refine_act_by_wording`）。这类「在既有结果上改」的指令，不该由模型自行判断成新话题。
 
 ## 5. 文档地图
 

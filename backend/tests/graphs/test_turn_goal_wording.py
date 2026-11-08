@@ -204,6 +204,47 @@ class TestDuplicateGoals:
         assert data["analysis_goals"] == [{"type": "trend"}]
 
 
+class TestChartFollowUp:
+    """换图/加图是在上一轮结果上改，不能被判成新任务（2026-11-08 真机 S9）。
+
+    实测：出完报告后说「画个饼图看看」→ 模型判 new_task → reduce 丢弃上一轮任务 →
+    指标清空 → 系统重新问「用哪个口径？」；再说「换成柱状图」又问一遍，报告也出不来。
+    """
+
+    @pytest.mark.parametrize("query", [
+        "画个饼图看看", "换成柱状图", "改成折线图", "出个图看看", "用表格展示",
+    ])
+    def test_有上一轮时图表追问改成_follow_up(self, query: str) -> None:
+        from app.agent.turn_understanding import _refine_act_by_wording
+        from app.models.turn_plan import TurnPlan
+
+        plan = TurnPlan(conversation_act="new_task", analysis_goals=[])
+        refined = _refine_act_by_wording(plan, query, has_prior=True)
+
+        assert refined.conversation_act == "follow_up"
+
+    def test_没有上一轮时保持_new_task(self) -> None:
+        from app.agent.turn_understanding import _refine_act_by_wording
+        from app.models.turn_plan import TurnPlan
+
+        plan = TurnPlan(conversation_act="new_task", analysis_goals=[])
+        assert _refine_act_by_wording(plan, "画个饼图看看", has_prior=False) is plan
+
+    def test_普通的换话题不被误改(self) -> None:
+        from app.agent.turn_understanding import _refine_act_by_wording
+        from app.models.turn_plan import TurnPlan
+
+        plan = TurnPlan(conversation_act="new_task", analysis_goals=[])
+        assert _refine_act_by_wording(plan, "看看退货情况", has_prior=True) is plan
+
+    def test_已经是_follow_up_时不动(self) -> None:
+        from app.agent.turn_understanding import _refine_act_by_wording
+        from app.models.turn_plan import TurnPlan
+
+        plan = TurnPlan(conversation_act="follow_up", analysis_goals=[])
+        assert _refine_act_by_wording(plan, "画个饼图看看", has_prior=True) is plan
+
+
 class TestDecisionHappensBeforeReturn:
     """裁决必须在 `understand_turn` 返回前生效。
 

@@ -87,10 +87,37 @@ def _retry_timeout(deadline: float) -> float | None:
     return max(1.0, min(fast_retry_timeout(), remaining))
 
 
+# 「换图 / 加图 / 改格式」一定是在上一轮结果上的改动（2026-11-08 真机 S9）
+_CHART_INTENT_WORDS = (
+    "画", "换成", "改成", "换", "图表", "饼图", "柱状图", "折线", "表格",
+    "可视化", "图看", "出个图",
+)
+
+
+def _refine_act_by_wording(plan: TurnPlan, user_query: str, *, has_prior: bool) -> TurnPlan:
+    """图表/格式类追问不该被当成新任务。
+
+    真机实锤：一轮出完报告，用户说「画个饼图看看」→ 模型判 `new_task` →
+    `reduce_task` 按 new_task 丢弃上一轮任务 → 指标被清空 → 系统重新问「用哪个指标？」；
+    再说「换成柱状图」又问一遍。用户每加一次图就被问一次口径，报告也出不来。
+
+    有上一轮任务时，这类措辞一律按 `follow_up`（换图是在既有结果上改，不是新分析）。
+    """
+    if not has_prior or plan.conversation_act != "new_task":
+        return plan
+    text = str(user_query or "")
+    if not any(word in text for word in _CHART_INTENT_WORDS):
+        return plan
+    logger.info("turn plan: act refined new_task → follow_up (chart/format wording)")
+    return plan.model_copy(update={"conversation_act": "follow_up"})
+
+
 def _finish_reply(
     reply,
     meta: dict | None,
     user_query: str = "",
+    *,
+    has_prior: bool = False,
 ) -> tuple[TurnPlan | None, str]:
     """把一次模型回复收敛成 (TurnPlan, 思维链)——同步/异步两条路共用。
 
@@ -131,6 +158,8 @@ def _finish_reply(
         )
         if refined != plan.analysis_goals:
             plan = plan.model_copy(update={"analysis_goals": refined})
+    # 2026-11-08：图表/格式类追问强制 follow_up（否则 new_task 会清空上一轮指标）。
+    plan = _refine_act_by_wording(plan, user_query, has_prior=has_prior)
     return plan, reasoning
 
 
@@ -213,7 +242,7 @@ def understand_turn(
             )
             if reply is not None and meta is not None:
                 meta["retried_without_thinking"] = True
-    return _finish_reply(reply, meta, user_query)
+    return _finish_reply(reply, meta, user_query, has_prior=task is not None)
 
 
 async def understand_turn_async(
@@ -268,7 +297,7 @@ async def understand_turn_async(
             )
             if reply is not None and meta is not None:
                 meta["retried_without_thinking"] = True
-    return _finish_reply(reply, meta, user_query)
+    return _finish_reply(reply, meta, user_query, has_prior=task is not None)
 
 
 def _normalize_plan_dict(parsed: dict) -> dict:
