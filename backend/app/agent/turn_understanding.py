@@ -90,8 +90,15 @@ def _retry_timeout(deadline: float) -> float | None:
 def _finish_reply(
     reply,
     meta: dict | None,
+    user_query: str = "",
 ) -> tuple[TurnPlan | None, str]:
-    """把一次模型回复收敛成 (TurnPlan, 思维链)——同步/异步两条路共用。"""
+    """把一次模型回复收敛成 (TurnPlan, 思维链)——同步/异步两条路共用。
+
+    2026-11-08（plan turn-goal-wording-rules）：目标分类的**代码侧裁决**在这里就做完。
+    `reduce_task` 里那次是幂等兜底——评测/离线脚本直接看 `plan.analysis_goals`，
+    裁决只写在 reduce 里的话，系统行为是对的、但「计划」本身仍是模型原话的翻译，
+    两处对不上（实测：评测 `goals 2/4`，而卡片其实早就被 reduce 纠正过）。
+    """
     if reply is None:
         if meta is not None:
             meta["failed"] = True
@@ -109,10 +116,17 @@ def _finish_reply(
         return None, reasoning
     parsed = _normalize_plan_dict(parsed)
     try:
-        return TurnPlan.model_validate(parsed), reasoning
+        plan = TurnPlan.model_validate(parsed)
     except Exception as exc:  # noqa: BLE001 - schema 不合法就用回退路径
         logger.warning("turn plan schema invalid: %s | payload=%s", exc, json.dumps(parsed)[:300])
         return None, reasoning
+    if plan.analysis_goals:
+        refined = _refine_goals_by_wording(
+            _veto_goals(plan.analysis_goals, user_query), user_query,
+        )
+        if refined != plan.analysis_goals:
+            plan = plan.model_copy(update={"analysis_goals": refined})
+    return plan, reasoning
 
 
 def _delta_forwarder(on_reasoning: Callable[[str], None] | None) -> Callable[[str, str], None] | None:
@@ -192,7 +206,7 @@ def understand_turn(
             )
             if reply is not None and meta is not None:
                 meta["retried_without_thinking"] = True
-    return _finish_reply(reply, meta)
+    return _finish_reply(reply, meta, user_query)
 
 
 async def understand_turn_async(
@@ -245,7 +259,7 @@ async def understand_turn_async(
             )
             if reply is not None and meta is not None:
                 meta["retried_without_thinking"] = True
-    return _finish_reply(reply, meta)
+    return _finish_reply(reply, meta, user_query)
 
 
 def _normalize_plan_dict(parsed: dict) -> dict:
@@ -283,7 +297,86 @@ def _normalize_plan_dict(parsed: dict) -> dict:
 _VALID_GRANULARITY = {"day", "week", "month", "quarter", "year"}
 _VALID_DETAIL = {"aggregate", "detail"}
 # 只有用户原话里出现这些词，才允许「逐条明细」这个目标存在（模型猜的不算）
-_DETAIL_WORDS = ("明细", "逐条", "逐笔", "原始数据", "每一笔", "每笔", "详细数据", "数据明细")
+#
+# 2026-11-08（plan turn-goal-wording-rules R2）：原表只有名词（明细/逐条/原始数据…），
+# 于是「把刚才最高的那个月**详细列出来**」——最直白的一种明细诉求——被判成「不是明细」，
+# 结果模型给的 distribution 目标留下来，用户拿到的是「按区域分布」而不是那一月的逐条。
+# 「详细说说/详细讲一下」仍然**不算**（那是要解释，不是要行），所以只加「列出」类动词短语。
+_DETAIL_WORDS = (
+    "明细", "逐条", "逐笔", "原始数据", "每一笔", "每笔", "详细数据", "数据明细",
+    "列出来", "列出", "列一下", "列给我", "逐条列", "都列",
+)
+
+# 「按<维度>细分/拆分/分组/对比」= 维度对比，不是趋势（2026-11-08 R1）
+_SPLIT_WORDS = ("细分", "拆分", "拆开", "分组", "分类", "分别", "各自", "对比", "比较")
+
+
+def _dimension_in(text: str) -> str | None:
+    """原话里出现的业务维度（复用 requirement_parser 的维度词表，不新造一份）。"""
+    from app.agent.requirement_parser import _TOP_PERIOD_DIMENSION_WORDS
+
+    for word in _TOP_PERIOD_DIMENSION_WORDS:
+        if word in text:
+            return word
+    return None
+
+
+def _refine_goals_by_wording(
+    goals: list[AnalysisGoal], user_query: str,
+) -> list[AnalysisGoal]:
+    """按**原话措辞**纠正模型的目标分类（2026-11-08，plan turn-goal-wording-rules）。
+
+    分工和 `_veto_goals` 一致：模型负责理解，代码负责裁决。区别是这里要**改/补**目标，
+    不只是删。三条规则都是确定性的，可单测：
+
+    - R2 明细措辞在场 → 收敛成**单个** `detail_rows`（明细是终态：用户说「列出来」时，
+      「按区域分布」这类聚合目标已经过时；`dimension`/`metric` 从被替换的目标继承，
+      免得「按品类明细列出来」丢掉品类）；
+    - R1 「按<维度>细分/分组/对比」→ `compare`（模型实测读成 `trend`）；
+    - R3 原话同时要「最多」和「最少」→ 两个方向必须有（此前靠采样运气，评测那次掉一个）。
+    """
+    text = str(user_query or "")
+    if not text or not goals:
+        return goals
+
+    from app.agent.requirement_parser import (
+        _TOP_PERIOD_MAX_WORDS,
+        _TOP_PERIOD_MIN_WORDS,
+    )
+
+    metric = next((goal.metric for goal in goals if goal.metric), None)
+
+    # R2：明细到位 —— 单目标
+    if any(word in text for word in _DETAIL_WORDS):
+        if not any(goal.type == "detail_rows" for goal in goals):
+            logger.info("turn plan: goals refined to detail_rows (explicit listing wording)")
+        dimension = next((goal.dimension for goal in goals if goal.dimension), None)
+        return [AnalysisGoal(type="detail_rows", dimension=dimension, metric=metric)]
+
+    # R1：维度细分 —— compare
+    dimension = _dimension_in(text)
+    if dimension and any(word in text for word in _SPLIT_WORDS):
+        if not any(goal.type == "compare" for goal in goals):
+            logger.info("turn plan: goals refined to compare (dimension = %s)", dimension)
+        return [AnalysisGoal(type="compare", dimension=dimension, metric=metric)]
+
+    # R3：极值双向兜底
+    has_max = any(word in text for word in _TOP_PERIOD_MAX_WORDS)
+    has_min = any(word in text for word in _TOP_PERIOD_MIN_WORDS)
+    extremes = [goal for goal in goals if goal.type == "extreme_period"]
+    if has_max and has_min and extremes:
+        directions = {goal.direction for goal in extremes if goal.direction}
+        if not {"max", "min"} <= directions:
+            unit = next((goal.unit for goal in extremes if goal.unit), "month")
+            unit_metric = extremes[0].metric or metric
+            logger.info("turn plan: extreme_period filled to both directions")
+            others = [goal for goal in goals if goal.type != "extreme_period"]
+            return others + [
+                AnalysisGoal(type="extreme_period", direction=d, unit=unit, metric=unit_metric)
+                for d in ("max", "min")
+            ]
+
+    return goals
 
 
 def _veto_goals(goals: list[AnalysisGoal], user_query: str) -> list[AnalysisGoal]:
@@ -371,7 +464,9 @@ def reduce_task(
     # 这里不做事，但保留参数语义供审计。
     if plan.analysis_goals:
         # 这一轮明确给了目标 → 目标以这一轮为准（避免旧目标残留）
-        base["goals"] = _veto_goals(plan.analysis_goals, user_query)
+        base["goals"] = _refine_goals_by_wording(
+            _veto_goals(plan.analysis_goals, user_query), user_query,
+        )
 
     for field in TASK_FIELDS:
         base.setdefault(field, [] if field in ("scope", "metrics", "goals") else None)

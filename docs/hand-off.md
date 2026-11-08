@@ -84,6 +84,7 @@ Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
 | 17 | **中断场景收口**（plan `2026-11-08-interruption-resilience.md`）：断流 / 停止 / F5 / 关浏览器各写**独立**用例（2 个测试文件 + 3 个探针）；`live` 缓冲同 step 只留最新帧 + 流式帧上限 600；**修 F5 卡死真 bug**（解析中刷新后不起轮询 → 永远停在「正在解析」） | 三探针全绿 |
 | 18 | **LLM 预算与记账收敛**（plan `2026-11-08-llm-budget-and-accounting.md`，用户拍板顺序 2→1→3）：①turn 直连调用补 usage 记账（`ReasoningReply.prompt_tokens/completion_tokens` + 三出口 `tracer.add_llm_call`，真机已验证 `observability.llm_call` 出现 `DeepSeek-V4-Flash` 那条：928/610/5469ms）②新建 `app/llm/budgets.py` 单一预算表，6 个 caller 的 7 处字面量全部改走 `budgets.max_tokens("<task>")`③`TURN_REQUEST_BUDGET=120` 贯穿重试（首轮 `min(90,剩余)`，剩余 <20s 不重试并标 `retry_skipped`），最坏耗时从 135s 收到 ≈120s | 48 例聚焦用例 + 真机探针 5/5 |
 | 19 | **「标注」不再被当成「只看」+ 模型超时不再说成查询超时**（plan `2026-11-08-top-period-annotate-and-timeout-copy.md`）：①`RequirementTopPeriod.purpose: select\|annotate`（默认 select 零迁移），词表判定 + 产卡后原话归一（模型漏给时按原话补建）；annotate = 全区间 + `CASE WHEN ... AS 是否最高期`，契约校验反向（必须有标记列、不许退化）②`user_message(kind, code)` 加 code 覆盖层，`LLM_TIMEOUT` 说「模型响应超时」不再叫用户去缩时间范围 | 后端 122 passed / 前端 24 + tsc；真机 `probe_top_period_annotate.py` ALL PASS（5 列 200 行、SQL 全区间带标记） |
+| 20 | **Turn Understanding 目标分类收口**（plan `2026-11-08-turn-goal-wording-rules.md`）：`_VETO_GOALS` 只删不补导致「详细**列出来**」被判成不是明细；新增 `_refine_goals_by_wording` 三条确定性规则（明细到位→单 `detail_rows`、维度细分→`compare`、极值双向兜底），**裁决前移到 `_finish_reply`**（只在 reduce 里做则评测看不见） | 真 LLM 8 例 `goals 2/4 → 4/4`（act 7/7 / extreme 1/1 / inherit 5/5 / upd 8/8 / json 8/8）；聚焦 28 + 相关 66 passed |
 
 ### 2026-11-04 做完的事
 
@@ -153,11 +154,13 @@ node .e2elogs/probe_p0_reload.mjs    # 刷新后 2 问 2 答 + 版本条；DB �
 约束（用户明确，已固化进实现）：一条消息就是一条消息、不要白卡；历史永久连续、绝不整表覆盖；
 结构化组件按需出现；过程融进同一条回复。
 
-### P1（Turn Understanding 收口）
+### P1（Turn Understanding 收口）—— 2026-11-08 已收口
 
-- 评测里还差三例目标分类：`再按产品细分`（应 compare）、`把刚才最高的那个月详细列出来`
-  （应 detail_rows）、`现在看看退货情况`（应 new_task）——`goals 2/4、act 6/7`；
-  修 prompt 示例或加确定性后置规则，目标是 `goals 4/4`；
+- ~~评测里还差三例目标分类~~ **已修完**（plan `2026-11-08-turn-goal-wording-rules.md`）：
+  真 LLM 8 例 `goals 2/4 → 4/4`，同批 `act 7/7`、`extreme 1/1`、`inherit 5/5`、`upd 8/8`、`json 8/8`。
+  做法是 `_refine_goals_by_wording` 三条确定性规则（明细到位→`detail_rows`、维度细分→`compare`、
+  极值双向兜底），且裁决**必须在 `understand_turn` 返回前**做——只在 `reduce_task` 里做的话，
+  卡片是对的、但 `plan.analysis_goals` 还是模型原话，评测与离线脚本都看不见修复（踩过）。
 - **Qwen3.8-27B 未公平比较**：短 prompt 7.4s 且有 CoT，但本项目长 prompt 会 >90s 超时。
   要重测就得先裁 prompt / 改流式 / 加大预算；
 - 把 `TURN_UNDERSTANDING` 从实验开关变成默认（现在 `=1` 已在 `.env` 开着，但代码默认仍是关，
@@ -336,6 +339,11 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    加字段前先确认它在 TypedDict 里，不然「算出来了」和「传下去了」是两回事。
 36. **排序本身也会制造 bug**：想「把标为『是』的行排前面」→ 前 200 行全变「是」→
    标记列又成常量、又被删。标注的正确排序是**照旧按时间倒序**（LIMIT 截断才是客观限制）。
+37. **「裁决」写在最下游 = 等于没写**（2026-11-08）：Turn Understanding 的目标裁决原本只在
+   `reduce_task` 里做，卡片是对的，但 `plan.analysis_goals` 仍是模型原话 —— 评测和离线脚本
+   直接看计划，于是得出「模型不懂」的错误结论（`goals 2/4`，实际上线上早已纠正）。
+   裁决要放在**对外返回的那份数据**上：`_finish_reply` 出口，reduce 里留幂等兜底。
+   教训：判指标之前先确认「被度量的对象」和「被交付的对象」是同一个。
 
 ## 5. 文档地图
 
