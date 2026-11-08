@@ -1,4 +1,4 @@
-> 状态: 进行中
+> 状态: 已完成
 
 # 执行链路排查工具：看见每个节点的输入输出 + 按会话直达
 
@@ -115,6 +115,28 @@ Langfuse 按 observation 计费，而一轮完整流程实测 **57 个 span**。
 ### 验证
 
 - `test_langfuse_humanize.py` **44 passed**（命名 / 中文节点名 / 截断 / PII / 采样过滤）、
-  `test_trace_timestamps.py` **7 passed**（UTC 口径）、`test_interruption_resilience.py` 零回归。
+  `test_trace_timestamps.py` **7 passed**（UTC 口径）、
+  `test_trace_detail_merge.py` **6 passed**、`test_trace_output_parenting.py` **7 passed**；
+  前端 `ObservabilityPage.test.tsx` **6 passed**（含 `?session=` 三条）+ `tsc -b` 干净。
+- 真机（新跑一轮）：spans **43 → 23**、孤儿 `node_output` **7 → 0**、**20 个节点有输出**
+  （之前节点自身 output 全空）。
+- 探针会话已按前缀清理，库中会话回到 13。
+
+## 结论：本地页面当主力，Langfuse 当可选视角
+
+- 本地 `observability.*` 三张表：全量、免费、不受网络影响，`/observability` 页面能看到
+  节点名 + 耗时 + 输入/输出；工作台顶部「执行链路」带着当前会话一键进入。
+- Langfuse：18 个阶段节点 + LLM 调用（`essential` 档），写完算赚到；云端 OTLP 在
+  这台机器上持续 5s 超时，**不适合当主链路**。要云端体验就自托管（localhost）。
+
+## 连带修掉的两个真 bug
+
+1. **`_handle_output_span` 在 `with tracer.span(...)` 外面调用**：那时 span 栈已空 →
+   输出 span 的 `parent_span_id` 为 None、名字退化成 `node_output`。结果「节点算出了什么」
+   对不上任何节点，页面上点开是「输出：空」，一轮还多出 7 个孤儿。移进 `with` 内即修复。
+2. **trace 时间戳不是 UTC**：`datetime.now()`（宿主本地）与 `created_at DEFAULT NOW()`（容器 UTC）
+   同一行差 8 小时；按 `start_time` 做「最近 N 分钟」过滤永远查不到刚跑的那轮
+   （我因此误判过「PG 没落库」，实际 PG 一直正常）。
+
 
 
