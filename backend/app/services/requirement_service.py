@@ -8,6 +8,7 @@ HTTPException in the API layer.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from app.infra.db import requirement_repository
@@ -15,6 +16,8 @@ from app.infra.db.requirement_repository import LockError
 from app.infra.db.postgres import get_pool
 from app.models.requirement import RequirementCard, RequirementMissingField
 from app.utils.pii import mask_pii
+
+logger = logging.getLogger(__name__)
 
 # A-4/A-5：卡里所有用户可控的文本字段——脱敏与安全闸共用这份清单。
 _CARD_TEXT_FIELDS = ("summary", "time_range")
@@ -105,6 +108,36 @@ def _normalize_metric_name(raw: str) -> str:
         return text
 
 
+def _is_known_metric(name: str) -> bool:
+    """该口径是否在注册表里（`metrics.yaml` 是唯一事实来源）。"""
+    if not name:
+        return False
+    try:
+        from app.knowledge import registry as knowledge
+
+        return knowledge.resolve_metric(name) is not None
+    except Exception:  # noqa: BLE001 - 知识库不可用时放行，不因为校验失败挡住用户
+        return True
+
+
+_GRANULARITY_ALIASES: dict[str, str] = {
+    "按天": "day", "按日": "day", "天": "day", "日": "day", "day": "day",
+    "按周": "week", "按星期": "week", "周": "week", "week": "week",
+    "按月": "month", "按月份": "month", "月": "month", "month": "month",
+    "按季": "quarter", "按季度": "quarter", "季度": "quarter", "quarter": "quarter",
+    "按年": "year", "年": "year", "year": "year",
+}
+
+
+def _normalize_granularity(value: str) -> str | None:
+    """粒度值归一（中文/英文都认）；认不出返回 None——宁可留空，也不往卡上写非法值。
+
+    2026-11-08（plan clarification-option-prefixes）：`granularity` 澄清项的选项是
+    「按月/按周/按天」，此前没有 `granularity:` 前缀，值会原样写进卡的 Literal 字段 → 422。
+    """
+    return _GRANULARITY_ALIASES.get(str(value or "").strip().lower())
+
+
 def _apply_intent(card_dict: dict, intent: str) -> None:
     """把「分析角度」确定性翻译成卡体字段（2026-11-03）。
 
@@ -146,6 +179,14 @@ def _apply_intent(card_dict: dict, intent: str) -> None:
         card_dict["detail_level"] = "detail"
         card_dict["analysis_methods"] = []
         card_dict["granularity"] = None
+    elif intent == "extreme":
+        # 2026-11-08（plan clarification-option-prefixes）：「最高与最低」此前落到下面的
+        # else 分支被当成 overview——用户点了「最高与最低」，卡上一个方向都没有。
+        # 选期的具体数值由 Execution 的确定性服务算，这里只记方向与单位。
+        card_dict["top_period"] = {"direction": "both", "unit": "month", "purpose": "select"}
+        card_dict["analysis_methods"] = []
+        card_dict["granularity"] = "month"
+        card_dict["detail_level"] = None
     else:  # overview / 未知 → 不做趋势、不聚合到某个粒度
         card_dict["detail_level"] = None
         card_dict["analysis_methods"] = []
@@ -188,7 +229,21 @@ async def patch_requirement(
         if isinstance(value, str) and value.startswith("intent:"):
             _apply_intent(card_dict, value.split(":", 1)[1])
         elif isinstance(value, str) and value.startswith("metric:"):
-            card_dict["target_metrics"] = [_normalize_metric_name(value.split(":", 1)[1])]
+            # 2026-11-08（plan clarification-option-prefixes D3）：只有注册表里的口径才写进卡。
+            # 真机事故里 `metric:逐条明细` 把指标写成了「逐条明细」，之后 SQL 照跑、
+            # 结果是一个和问题无关的总额——比报错更糟。选项生成错就用原口径，别写坏卡。
+            name = _normalize_metric_name(value.split(":", 1)[1])
+            if _is_known_metric(name):
+                card_dict["target_metrics"] = [name]
+            else:
+                logger.warning(
+                    "patch: unknown metric %r from clarification option, kept %s",
+                    name, card_dict.get("target_metrics"),
+                )
+        elif isinstance(value, str) and value.startswith("granularity:"):
+            unit = _normalize_granularity(value.split(":", 1)[1])
+            if unit:
+                card_dict["granularity"] = unit
         elif isinstance(value, str) and value.startswith("time:"):
             card_dict["time_range"] = value.split(":", 1)[1]
         elif isinstance(value, str) and value.startswith("scope:"):

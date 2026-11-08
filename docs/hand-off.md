@@ -85,6 +85,7 @@ Get-Content backend/scripts/cleanup_test_sessions.sql -Raw |
 | 18 | **LLM 预算与记账收敛**（plan `2026-11-08-llm-budget-and-accounting.md`，用户拍板顺序 2→1→3）：①turn 直连调用补 usage 记账（`ReasoningReply.prompt_tokens/completion_tokens` + 三出口 `tracer.add_llm_call`，真机已验证 `observability.llm_call` 出现 `DeepSeek-V4-Flash` 那条：928/610/5469ms）②新建 `app/llm/budgets.py` 单一预算表，6 个 caller 的 7 处字面量全部改走 `budgets.max_tokens("<task>")`③`TURN_REQUEST_BUDGET=120` 贯穿重试（首轮 `min(90,剩余)`，剩余 <20s 不重试并标 `retry_skipped`），最坏耗时从 135s 收到 ≈120s | 48 例聚焦用例 + 真机探针 5/5 |
 | 19 | **「标注」不再被当成「只看」+ 模型超时不再说成查询超时**（plan `2026-11-08-top-period-annotate-and-timeout-copy.md`）：①`RequirementTopPeriod.purpose: select\|annotate`（默认 select 零迁移），词表判定 + 产卡后原话归一（模型漏给时按原话补建）；annotate = 全区间 + `CASE WHEN ... AS 是否最高期`，契约校验反向（必须有标记列、不许退化）②`user_message(kind, code)` 加 code 覆盖层，`LLM_TIMEOUT` 说「模型响应超时」不再叫用户去缩时间范围 | 后端 122 passed / 前端 24 + tsc；真机 `probe_top_period_annotate.py` ALL PASS（5 列 200 行、SQL 全区间带标记） |
 | 20 | **Turn Understanding 目标分类收口**（plan `2026-11-08-turn-goal-wording-rules.md`）：`_VETO_GOALS` 只删不补导致「详细**列出来**」被判成不是明细；新增 `_refine_goals_by_wording` 三条确定性规则（明细到位→单 `detail_rows`、维度细分→`compare`、极值双向兜底），**裁决前移到 `_finish_reply`**（只在 reduce 里做则评测看不见） | 真 LLM 8 例 `goals 2/4 → 4/4`（act 7/7 / extreme 1/1 / inherit 5/5 / upd 8/8 / json 8/8）；聚焦 28 + 相关 66 passed |
+| 21 | **澄清选项前缀 + 明细列数**（plan `2026-11-08-clarification-option-prefixes.md`）：①`project_card` 曾把所有澄清选项 value 一律拼成 `metric:<中文>` → 「想看哪种分析：逐条明细」回传成 `metric:逐条明细`，**指标被写坏、detail_level 一个字段没设**；改按 blocker.key 发前缀（`intent:` 分派后端早就有了）+ 补 `granularity:` 接收分支与 `_apply_intent(extreme)`②明细契约加列数下限 3（日期+维度列+指标列），prompt 列清单要求至少 4 列③PATCH 后的 `metric:` 只认注册表口径 | 真机 `probe_detail_columns.py`：「把订单列出来看看」1 行总额 → **200 行 7 列（含订单编号）**；订单明细 4→5 列。新用例 33+9，受影响面 150 passed |
 
 ### 2026-11-04 做完的事
 
@@ -344,6 +345,14 @@ REPORTAGENT_E2E=1 pytest backend/tests/e2e/test_requirement_slots.py -q -s   # 1
    直接看计划，于是得出「模型不懂」的错误结论（`goals 2/4`，实际上线上早已纠正）。
    裁决要放在**对外返回的那份数据**上：`_finish_reply` 出口，reduce 里留幂等兜底。
    教训：判指标之前先确认「被度量的对象」和「被交付的对象」是同一个。
+38. **澄清选项的 value 必须带对应字段的前缀**（2026-11-08）：`project_card` 曾把**所有**
+   blocker 的选项一律拼成 `metric:<中文>`——于是「想看哪种分析：逐条明细」被当口径写进卡，
+   指标变成「逐条明细」、`detail_level` 一个字段没设，SQL 照跑出一个无关的总额。
+   后端 `intent:` / `time:` / `scope:` 的分派表早就在，缺的只是生成侧发对前缀。
+   发错前缀比不发更糟：值会被当上一层字段写入，卡看着有内容、语义全错。
+39. **探针「一律选第一个选项」会掩盖 bug**（2026-11-08）：`probe_detail_columns.py` 原来对
+   `analysis_intent` 总选「总体情况」，于是永远测出「一个总额」——看起来是判据设计问题，
+   实际掩盖了「点了明细却拿不到明细」。探针的选择策略要模拟**用户真实选择**，不是最省事的选择。
 
 ## 5. 文档地图
 

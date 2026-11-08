@@ -619,7 +619,8 @@ def _generate_sql(state: SQLAgentState) -> dict:
         prompt += (
             "\n\n【明细模式（优先级最高）】用户要逐条数据："
             "禁止 SUM/COUNT/AVG 等聚合与 GROUP BY；"
-            "直接 SELECT 原始列（日期、门店、品类、金额等）；"
+            "直接 SELECT 原始列（日期、门店/区域、品类、数量、金额，有订单号就带上）；"
+            "**至少 4 列**——只给「日期 + 金额」这种两列，用户看到的是「一列数」，不是明细；"
             "按时间倒序；末尾加 LIMIT 200。"
         )
     # 2026-11-04（top-period-detail-intent）：最高/最低的那一期必须在生成阶段就拆两步，
@@ -686,6 +687,9 @@ def _generate_sql(state: SQLAgentState) -> dict:
 _DETAIL_AGGREGATE_RE = re.compile(r"\b(SUM|AVG|COUNT|MIN|MAX)\s*\(", re.IGNORECASE)
 _DETAIL_GROUP_RE = re.compile(r"\bGROUP\s+BY\b", re.IGNORECASE)
 _TOP_PERIOD_LIMIT_RE = re.compile(r"\bLIMIT\s+1\b", re.IGNORECASE)
+# 明细投影的列数下限（2026-11-08，plan clarification-option-prefixes D2）：
+# 日期 + 维度列 + 指标列，少于三列就不是「一条数据的明细」，而是一列数。
+_MIN_DETAIL_COLUMNS = 3
 _CTE_START_RE = re.compile(r"^\s*WITH\b", re.IGNORECASE)
 
 
@@ -840,7 +844,7 @@ def _top_period_annotate_violation(sql: str, spec: dict) -> str | None:
 
 
 def _detail_contract_violation(sql: str, *, allow_cte_aggregate: bool = False) -> str | None:
-    """明细模式的确定性契约：不许聚合、不许 GROUP BY。
+    """明细模式的确定性契约：不许聚合、不许 GROUP BY、列数不能太少。
 
     2026-11-03 实测（多轮 e2e）：「给我这两个月的明细数据」卡上 `detail_level=detail`、
     plan 阶段维度已清空、生成 prompt 也明写「禁止聚合」，模型仍然写出
@@ -865,6 +869,15 @@ def _detail_contract_violation(sql: str, *, allow_cte_aggregate: bool = False) -
         )
     # 2026-11-04：明细还必须带日期/维度列。实测「帮我分析一下销量」即使给了照抄投影，
     # 模型仍会只 `SELECT quantity` → 表格只有一列、图表画成一排噪声柱。
+    # 2026-11-08（plan clarification-option-prefixes D2）：明细的列数也要有下限。
+    # 实测「2023年11月的订单明细」给出 4 列（日期/区域/品类/金额），缺数量、缺订单号——
+    # 而契约此前只要求「至少一个日期/维度列」，`日期 + 金额` 两列也能过闸。
+    if _count_select_columns(sql) < _MIN_DETAIL_COLUMNS:
+        return (
+            f"明细模式至少要有 {_MIN_DETAIL_COLUMNS} 列（日期 + 维度列 + 指标列）："
+            "请补上 日期、门店/区域、品类、数量、金额（有订单号也带上），"
+            "只给一两列的话表格等于只有一列数"
+        )
     if not _has_dimension_column(sql or ""):
         return (
             "明细模式必须包含日期或维度列（如 dim_date.full_date AS 日期、"
@@ -901,6 +914,23 @@ def _select_list(sql: str) -> str:
         return text
     end = from_index if from_index > select_index else len(text)
     return text[select_index + len("select"):end]
+
+
+def _count_select_columns(sql: str) -> int:
+    """SELECT 投影里有几个顶层列（忽略函数括号里的逗号）。"""
+    text = _select_list(sql)
+    if not text.strip():
+        return 0
+    depth = 0
+    count = 1
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            count += 1
+    return count
 
 
 def _has_dimension_column(sql: str) -> bool:

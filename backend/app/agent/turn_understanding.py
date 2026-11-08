@@ -552,6 +552,56 @@ _GOAL_TO_DIMENSION = {
 }
 
 
+# --- 澄清选项的 value 编码（2026-11-08，plan clarification-option-prefixes） ---
+#
+# 真机事故：`project_card` 把所有 blocker 的选项 value 一律拼成 `metric:<中文>`。
+# 于是「想看哪种分析 → 逐条明细」回传成 `metric:逐条明细` → 后端按前缀分派 → **指标被写成
+# 「逐条明细」**，而 detail_level 一个字段都没设。用户选了明细，系统却按「总体=一个数」出结果。
+#
+# 接收侧（`requirement_service.patch_requirement`）的 `intent:` / `time:` / `scope:` 分派
+# 早就写好了，缺的只是生成侧发对前缀。这里补上映射，不新造协议。
+
+_PREFIX_BY_FIELD: dict[str, str] = {
+    "metric": "metric",
+    "analysis_intent": "intent",
+    "granularity": "granularity",
+    "time_range": "time",
+    "scope": "scope",
+}
+
+# 中文 label → `_apply_intent` 认得的确定性 code
+_INTENT_CODES: dict[str, str] = {
+    "总体情况": "overview",
+    "按月趋势": "trend",
+    "最高与最低": "extreme",
+    "逐条明细": "detail",
+}
+
+# 中文 label → RequirementGranularity
+_GRANULARITY_CODES: dict[str, str] = {
+    "按天": "day", "按日": "day",
+    "按周": "week", "按星期": "week",
+    "按月": "month", "按月份": "month",
+    "按季": "quarter", "按季度": "quarter",
+    "按年": "year",
+}
+
+
+def _option_value(key: str, label: str) -> str:
+    """澄清选项的 value：`<前缀>:<值>`。前缀由 blocker.key 决定——**不是一律 metric**。
+
+    前缀必须和后端的分派表对上（`patch_requirement` 的 Step 1）；发错前缀比不发更糟：
+    值会被当成上一层字段写入，卡看着有内容、实际语义全错。
+    """
+    text = str(label or "").strip()
+    prefix = _PREFIX_BY_FIELD.get(str(key or ""), "metric")
+    if prefix == "intent":
+        return f"intent:{_INTENT_CODES.get(text, text or 'overview')}"
+    if prefix == "granularity":
+        return f"granularity:{_GRANULARITY_CODES.get(text, text or 'month')}"
+    return f"{prefix}:{text}"
+
+
 def project_card(
     task: ActiveAnalysisTask,
     *,
@@ -613,7 +663,10 @@ def project_card(
             key=blocker.key,
             label=blocker.question,
             kind="single",
-            options=[RequirementOption(label=opt, value=f"metric:{opt}") for opt in blocker.options],
+            options=[
+                RequirementOption(label=opt, value=_option_value(blocker.key, opt))
+                for opt in blocker.options
+            ],
         ))
     # 数据能力不支持（指标/实体不在注册表/Schema）也要拦住：不能装成一张「可直接确认」的卡
     if reportability is not None and reportability.verdict == "UNSUPPORTED":

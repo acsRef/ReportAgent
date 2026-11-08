@@ -87,7 +87,15 @@ def test_validate_detail_ok_passes(monkeypatch) -> None:
 
     monkeypatch.setattr(sql_graph, "validate_sql", fake_validate_sql)
     state = {
-        "generated_sql": "SELECT full_date, order_amount FROM fact_orders LIMIT 200",
+        # 2026-11-08（plan clarification-option-prefixes D2）：明细列数下限抬到 3 列，
+        # 原来的「full_date + order_amount」两列现在按违规处理（正是真机里「一列数」的形态）。
+        "generated_sql": (
+            "SELECT dim_date.full_date AS 日期, dim_store.region AS 区域, "
+            "fact_orders.order_amount AS 金额 FROM fact_orders "
+            "LEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date "
+            "LEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id "
+            "ORDER BY 1 DESC LIMIT 200"
+        ),
         "detail_level": "detail",
     }
 
