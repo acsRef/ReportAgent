@@ -52,6 +52,15 @@ class MemoryPolicy:
                 r"我(?:喜欢|想|要)\s*(?:看|用)?\s*(.*?)(?:的)?\s*(?:图表|格式|方式)",
                 "preference",
             ),
+            # 2026-11-09（plan memory-admission-and-consolidation）：会话级说法也要能被抽取。
+            # 少这一条时，「这次先按周看」在 extract_preference 就返回 None，
+            # 后面的准入闸根本没机会把它判成 session 级 —— 也就是
+            # `temporary_preference` 永不产生的**真正起点**在这里，不只是 manager 的硬编码。
+            (
+                r"(?:这次|本次|这一回|这一轮|暂时|临时|先)\s*(.*?)(?:显示|用|使用|按|以)\s*"
+                r"(.*?)(?:为单位|来显示|来看|看|$)",
+                "display",
+            ),
         ]
         for pattern, pref_type in patterns:
             m = re.search(pattern, text)

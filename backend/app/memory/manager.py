@@ -14,6 +14,7 @@ seam，P4b 在此落地 §五 冻结的 **固定 confidence 规则**（不让 LL
 """
 from __future__ import annotations
 
+import datetime
 import logging
 
 from app.infra.memory import mem0_extractor
@@ -25,6 +26,7 @@ from app.memory.lifecycle import (
     MemoryScope,
     MemoryStatus,
 )
+from app.memory.admission import classify_scope, is_admissible
 from app.memory.preferences import conflicting_contents
 
 logger = logging.getLogger(__name__)
@@ -96,31 +98,72 @@ async def remember_explicit_preference(
     非 explicit statement → 返回 None（§四 Insert/Update/**Discard**：不写 active）。
     写前 supersede 旧 active 同 content（§六）。
     """
+def remember_explicit_preference_plan(text: str):
+    """纯函数：给定一句话，返回 (要不要写, 写入参数)。便于单测与日志排查。
+
+    2026-11-09（plan memory-admission-and-consolidation）：此前这里只看「像不像偏好」，
+    写库时硬编码 `stable_preference / scope=user / 无 expires_at` —— 结果是
+    「以后都用柱状图」和「这次先按周看」生命周期完全相同，`temporary_preference`
+    在生产里永远不产生。现在由 `admission.classify_scope` 决定三档。
+    """
     entry = _policy.extract_preference(text)
     if entry is None:
         return None
-    content = entry.value
+    ok, reason = is_admissible(text)
+    if not ok:
+        logger.info("memory admission rejected: reason=%s text=%r", reason, text[:40])
+        return None
+    adm = classify_scope(text)
+    expires_at = (
+        datetime.datetime.now() + datetime.timedelta(hours=adm.ttl_hours)
+        if adm.ttl_hours else None
+    )
+    return {
+        "content": entry.value,
+        "admission": adm,
+        "expires_at": expires_at,
+    }
+
+
+async def remember_explicit_preference(
+    user_id: int | str, text: str, *, source: str = "user_turn",
+) -> int | None:
+    """Explicit user statement → 按准入结论落 `active` 或 `candidate`（§五/§六）。
+
+    - 长期标记 → `active` / `stable_preference` / user / 无过期（当轮生效，不等批处理）；
+    - 会话标记 → `active` / `temporary_preference` / session / 24h 过期（同样当轮生效，
+      否则「这次先按周看」要等到明早才管用——那是坏体验）；
+    - 无作用域标记 → `candidate`（不召回，等离线固化攒跨会话证据，§五「推断不进 active」）。
+
+    写前 supersede 旧 active：同内容（§六）+ 同维度（2026-11-09 D3）。
+    非 explicit statement → 返回 None（§四 Insert/Update/**Discard**）。
+    """
+    plan = remember_explicit_preference_plan(text)
+    if plan is None:
+        return None
+    adm = plan["admission"]
+    content = plan["content"]
     mm = MemoryManager()
-    try:
-        await mm.supersede_stable_preference(str(user_id), content)
-    except Exception as exc:
-        logger.warning("supersede failed: %s", exc)
-    # §六 同维度冲突（2026-11-09，plan memory-system-conformance D3）：
-    # 上面只处理「同内容」，柱状图 → 饼图会留下两条 active 互相矛盾。
-    # 这里按维度（图表 / 粒度）淘汰旧条目；维度判定是确定性词表（见 app/memory/preferences.py）。
-    try:
-        active = await mm.list_active_preference_contents(str(user_id))
-        stale = conflicting_contents(content, active)
-        if stale:
-            await mm.supersede_active_by_contents(str(user_id), stale)
-    except Exception as exc:  # noqa: BLE001 - supersede 失败不该阻塞写入
-        logger.warning("dimension supersede failed: %s", exc)
+    # 只有要成为 user 级长期记忆时才动 supersede：session 级的「这次先…」不该顶掉长期偏好
+    if adm.writes_active and adm.scope == "user":
+        try:
+            await mm.supersede_stable_preference(str(user_id), content)
+        except Exception as exc:
+            logger.warning("supersede failed: %s", exc)
+        try:
+            active = await mm.list_active_preference_contents(str(user_id))
+            stale = conflicting_contents(content, active)
+            if stale:
+                await mm.supersede_active_by_contents(str(user_id), stale)
+        except Exception as exc:  # noqa: BLE001 - supersede 失败不该阻塞写入
+            logger.warning("dimension supersede failed: %s", exc)
     return await mm.remember_preference(
-        user_id=str(user_id), content=content, memory_type="stable_preference",
-        importance=0.8, source=source,
-        scope=MemoryScope.USER.value,
-        status=MemoryStatus.ACTIVE.value,
+        user_id=str(user_id), content=content, memory_type=adm.memory_type,
+        importance=0.8 if adm.writes_active else 0.5, source=source,
+        scope=adm.scope,
+        status=adm.status,
         confidence=CONFIDENCE_EXPLICIT_STATEMENT.value,
+        expires_at=plan["expires_at"],
     )
 
 

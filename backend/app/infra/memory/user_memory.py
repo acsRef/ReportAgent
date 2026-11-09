@@ -352,6 +352,141 @@ class UserMemory:
         score = primary + aux
         return rank_key(primary, aux), self._row_to_memory(row, score)
 
+    # --- 离线固化（plan 2026-11-09-memory-admission-and-consolidation）---------
+
+    async def list_candidates(self, user_id: str, limit: int = 200) -> list[dict]:
+        """待固化队列：`status='candidate' AND promoted_at IS NULL`。
+
+        用「队列」而不是「时间窗口」选活：候选池本身就是工作队列，天然可重跑、
+        不会因为游标写晚了漏掉行（时间窗口在断点续跑时容易漏边界）。
+        """
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT id, content, session_id, created_at
+                   FROM memory.semantic_entry
+                   WHERE user_id=$1 AND status='candidate' AND promoted_at IS NULL
+                   ORDER BY created_at ASC LIMIT $2""",
+                user_id, limit,
+            )
+        return [dict(r) for r in rows]
+
+    async def promote_candidate(
+        self,
+        user_id: str,
+        entry_id: int,
+        *,
+        memory_type: str,
+        scope: str,
+        confidence: str,
+        expires_at: Optional[datetime.datetime] = None,
+    ) -> None:
+        """candidate → active，并写入作用域/期限（§六）。"""
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE memory.semantic_entry SET status='active', memory_type=$3, "
+                "scope=$4, confidence=$5, expires_at=$6, promoted_at=NOW(), updated_at=NOW() "
+                "WHERE id=$1 AND user_id=$2 AND status='candidate'",
+                entry_id, user_id, memory_type, scope, confidence, expires_at,
+            )
+
+    async def expire_due(
+        self, user_id: str, *, now: Optional[datetime.datetime] = None
+    ) -> int:
+        """§六：到期的 active 条目（session 级临时偏好）→ expired。"""
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            res = await conn.execute(
+                "UPDATE memory.semantic_entry SET status='expired', updated_at=NOW() "
+                "WHERE user_id=$1 AND status='active' AND expires_at IS NOT NULL "
+                "AND expires_at <= $2",
+                user_id, now or datetime.datetime.now(),
+            )
+        return int(str(res).split()[-1]) if res else 0
+
+    async def list_active_preference_rows(self, user_id: str) -> list[dict]:
+        """active 的 stable_preference 行（id/content/created_at）——维度冲突收敛用。"""
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, content, created_at FROM memory.semantic_entry "
+                "WHERE user_id=$1 AND memory_type='stable_preference' AND status='active' "
+                "ORDER BY created_at ASC",
+                user_id,
+            )
+        return [dict(r) for r in rows]
+
+    async def supersede_ids(self, user_id: str, entry_ids: list[int]) -> int:
+        """按主键置 superseded（固化阶段的冲突收敛用）。"""
+        if not entry_ids:
+            return 0
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            res = await conn.execute(
+                "UPDATE memory.semantic_entry SET status='superseded', updated_at=NOW() "
+                "WHERE user_id=$1 AND id = ANY($2::int[]) AND status='active'",
+                user_id, list(entry_ids),
+            )
+        return int(str(res).split()[-1]) if res else 0
+
+    async def get_last_consolidation(self, user_id: str) -> Optional[datetime.datetime]:
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT last_window_end FROM memory.consolidation_cursor WHERE user_id=$1",
+                user_id,
+            )
+        return row["last_window_end"] if row else None
+
+    async def set_last_consolidation(
+        self, user_id: str, when: datetime.datetime
+    ) -> None:
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO memory.consolidation_cursor (user_id, last_window_end, updated_at) "
+                "VALUES ($1, $2, NOW()) "
+                "ON CONFLICT (user_id) DO UPDATE SET "
+                "last_window_end=EXCLUDED.last_window_end, updated_at=NOW()",
+                user_id, when,
+            )
+
+    async def record_consolidation_run(
+        self,
+        *,
+        user_id: str,
+        considered: int,
+        promoted: int,
+        expired: int,
+        superseded: int,
+        skipped: int,
+        errors: int,
+        dry_run: bool,
+        note: str = "",
+        started_at: Optional[datetime.datetime] = None,
+    ) -> int:
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO memory.consolidation_run
+                   (user_id, started_at, finished_at, considered, promoted, expired,
+                    superseded, skipped, errors, dry_run, note)
+                   VALUES ($1, $2, NOW(), $3,$4,$5,$6,$7,$8,$9,$10)
+                   RETURNING id""",
+                user_id, started_at or datetime.datetime.now(), considered, promoted,
+                expired, superseded, skipped, errors, dry_run, note[:500],
+            )
+        return row["id"]
+
     def _row_to_memory(self, row, score: float) -> RankedMemory:
         return RankedMemory(
             id=row["id"],

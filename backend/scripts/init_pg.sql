@@ -140,6 +140,37 @@ CREATE TABLE IF NOT EXISTS memory.query_failure (
 CREATE INDEX IF NOT EXISTS idx_query_failure_user_time
     ON memory.query_failure (user_id, created_at DESC);
 
+-- 离线固化（plan 2026-11-09-memory-admission-and-consolidation）：
+-- ① semantic_entry 增 promoted_at：candidate → active 的时间戳，也是「已固化」标记
+--    （候选池 = status='candidate' AND promoted_at IS NULL，天然可重跑）。
+ALTER TABLE memory.semantic_entry ADD COLUMN IF NOT EXISTS promoted_at TIMESTAMP;
+
+-- ② 每个用户一个游标：只用于「上次成功跑到什么时候」，供运维判断批处理落后多久。
+CREATE TABLE IF NOT EXISTS memory.consolidation_cursor (
+    user_id INT PRIMARY KEY,
+    last_window_end TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ③ 每轮记账：晋级/过期/收敛各多少、是否 dry-run、有没有报错。
+CREATE TABLE IF NOT EXISTS memory.consolidation_run (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL,
+    started_at TIMESTAMP DEFAULT NOW(),
+    finished_at TIMESTAMP,
+    considered INT DEFAULT 0,
+    promoted INT DEFAULT 0,
+    expired INT DEFAULT 0,
+    superseded INT DEFAULT 0,
+    skipped INT DEFAULT 0,
+    errors INT DEFAULT 0,
+    dry_run BOOLEAN DEFAULT FALSE,
+    note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_consolidation_run_user_time
+    ON memory.consolidation_run (user_id, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS memory.semantic_entry (
     id SERIAL PRIMARY KEY,
     user_id INT NOT NULL,

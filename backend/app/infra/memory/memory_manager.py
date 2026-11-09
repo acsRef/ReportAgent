@@ -127,6 +127,33 @@ class MemoryManager:
         """把指定旧偏好置 superseded（§六；判定在 domain，这里只执行）。"""
         return await self._user_memory.supersede_active_by_contents(user_id, contents)
 
+    # --- 离线固化（plan 2026-11-09-memory-admission-and-consolidation）---------
+    # domain 层（app/memory/consolidation.py）只通过这些窄接口操作，不碰下面的 UserMemory。
+
+    async def list_candidates(self, user_id, limit: int = 200) -> list[dict]:
+        return await self._user_memory.list_candidates(user_id, limit=limit)
+
+    async def promote_candidate(self, user_id, entry_id: int, **kwargs) -> None:
+        await self._user_memory.promote_candidate(user_id, entry_id, **kwargs)
+
+    async def expire_due_preferences(self, user_id, *, now=None) -> int:
+        return await self._user_memory.expire_due(user_id, now=now)
+
+    async def list_active_preference_rows(self, user_id) -> list[dict]:
+        return await self._user_memory.list_active_preference_rows(user_id)
+
+    async def supersede_ids(self, user_id, entry_ids: list[int]) -> int:
+        return await self._user_memory.supersede_ids(user_id, entry_ids)
+
+    async def get_last_consolidation(self, user_id):
+        return await self._user_memory.get_last_consolidation(user_id)
+
+    async def set_last_consolidation(self, user_id, when) -> None:
+        await self._user_memory.set_last_consolidation(user_id, when)
+
+    async def record_consolidation_run(self, **kwargs) -> int:
+        return await self._user_memory.record_consolidation_run(**kwargs)
+
     async def remember_preference(
         self,
         user_id: str,

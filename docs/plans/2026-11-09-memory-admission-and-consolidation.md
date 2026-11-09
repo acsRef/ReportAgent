@@ -1,4 +1,4 @@
-> 状态: 进行中
+> 状态: 已完成
 
 # 记忆准入 + 离线固化（长期记忆不在热路径上判定）
 
@@ -146,3 +146,65 @@ python -m app.jobs.memory_consolidation --user-id 1
 - **不在热路径加 LLM 调用**：准入判定必须确定性；模型仍只能“提候选”。
 - **不改召回侧**：读路径上一轮刚定稿（scope 过滤 + 语义带排序），本 plan 不动它。
 - **不做多租户/跨用户批处理**：游标与预算都是 per-user。
+
+## 落地记录（2026-11-09）
+
+按 D1–D5 实施完毕，真机 demo（临时用户，跑完即删）验证了整条链：
+
+```
+热路径写完：
+  以后都用柱状图显示   stable_preference  active  user     无期限
+  这次先按周看        temporary_preference active  session  24h ← 此前永不产生
+  以后都用饼图显示     insight           candidate user     （推断类）
+  柱状图挺好的         insight           candidate user     （无作用域标记）
+dry-run：considered=2 promoted=1 skipped=1（只算不写）
+真跑：  promoted=1 superseded=1 skipped=1
+  柱状图  → superseded（被同维度新偏好取代）
+  饼图    → stable_preference active user（晋级，promoted_at 落章）
+  挺好的  → 仍是 candidate（§五：推断类不晋级）
+```
+
+### 与 plan 的三处偏差（都写清理由）
+
+1. **会话标记当轮 active，不等批处理**（plan 原文写「先 candidate 再由批处理晋级」）。
+   改了：用户说「这次先按周看」就是要**现在**生效，等到明早等于没说。
+   判据依然是确定性的（会话标记词），所以「能一句话拍死的留在热路径」这条原则没破；
+   真正需要证据的（无标记/推断）才进候选队列。
+2. **候选用「队列」而不是「时间窗口」选活**（`status='candidate' AND promoted_at IS NULL`）。
+   时间窗口在断点续跑时容易漏边界行；队列天然可重跑。`consolidation_cursor` 保留，
+   但只用来记录「上次成功跑到何时」，供运维看批处理落后多久。
+3. **闸 1 只做最小版**（空 / 纯寒暄 / 过短）。完整的「一次性任务参数不记」拒绝词表有误杀风险
+   （会把该记的口径丢掉），仍等用户过词表；现在结构位已经在 `is_admissible()` 里。
+
+### 实施中抓到的真缺陷（比计划更靠前的一环）
+
+第一版跑完 demo 发现「这次先按周看」**根本没落库**——不是准入闸没写好，是
+`MemoryPolicy.extract_preference` 的正则只认「以后/默认/每次」和「我喜欢…图表/格式」，
+会话级说法在**抽取阶段**就返回 None，准入闸根本没机会执行。
+补了第三条正则（`这次/本次/暂时/临时/先 + 显示|用|按|以`），并在
+`tests/contracts/test_memory_admission.py` 加了回归钉：
+**抽取与准入必须同时命中**，只测其中一半会漏掉这类「上游先死」的问题。
+
+### 落地文件
+
+| 文件 | 内容 |
+|---|---|
+| `backend/app/memory/admission.py` | `classify_scope`（三档）+ `is_admissible`（最小闸 1）+ `DEFAULT_SESSION_TTL_HOURS=24` |
+| `backend/app/memory/manager.py` | `remember_explicit_preference_plan`（纯函数，可单测）+ 接线（`expires_at`/`scope`/`status` 由准入结论决定）；只有 user 级才做 supersede（session 级不该顶掉长期偏好） |
+| `backend/app/memory/consolidation.py` | `consolidate(user_id, dry_run, max_items)`：到期淘汰 → 候选晋级 → 同维度收敛 → 记账 |
+| `backend/app/infra/memory/user_memory.py` | `list_candidates` / `promote_candidate` / `expire_due` / `list_active_preference_rows` / `supersede_ids` / 游标 / run 记账（全部窄接口） |
+| `backend/app/infra/memory/memory_manager.py` | 上述能力的公共网关（domain 不碰 UserMemory 私有成员） |
+| `backend/app/jobs/memory_consolidation.py` | CLI：`--user-id/--all-users/--dry-run/--max-items`；真实库上 `--all-users --dry-run` 可跑 |
+| `backend/scripts/init_pg.sql` | `semantic_entry.promoted_at`（软迁移）+ `consolidation_cursor` + `consolidation_run` |
+| `backend/tests/contracts/test_memory_admission.py` | 25 例：三档判据矩阵 + 抽取/准入双命中 + 闸 1 拒绝 |
+| `backend/tests/persistence/test_memory_consolidation.py` | 8 例：晋级（user/session）/ 无标记留队 / 过期退役 / 幂等重跑 / dry-run 不落库 / 同维度收敛 / `max_items` 分两轮续跑 |
+
+回归：`pytest backend/tests/contracts` **889 passed**；`pytest backend/tests/persistence -k "memory or consolidation"`
+**64 passed**；`-k "memory or recall or context or preference or scoring or consolidation or admission"` **262 passed**。
+
+### 仍未做（与本 plan 的 Explicitly NOT doing 一致）
+
+- 推断升级（跨会话证据 → active）：要改 §五 冻结条款，等你批准。
+- 闸 1 完整拒绝词表：等你过一遍（尤其“一次性任务参数”这一条）。
+- 语义近似 supersede（措辞不同但同义）：要 embedding 阈值与误杀评估。
+- 进程内每日定时器：CLI 已验证可用，进程内循环留到你确认部署形态后再开（默认关）。
