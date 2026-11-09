@@ -119,3 +119,44 @@ class TestApplyChartPreference:
         cfg["config"]["dimensions"]["extra"] = "keep-me"
         out = apply_chart_preference(cfg, ["柱状图"])
         assert out["config"]["dimensions"] == {"x": "region", "y": "sales", "extra": "keep-me"}
+
+
+# --- 否定语义（2026-11-09，plan chart-preference-negation）---------------------
+#
+# 缺陷回顾：`explicit_chart_type`（当轮原话）有否定词防护，但记忆通道
+# `_preferred_chart_type` 是裸 substring 匹配 ——「以后不要用柱状图」被存成偏好后
+# 反而把 pie 覆盖成 bar（意图反转，真机探针复现）。现在两条通道共用 `_is_negated`，
+# 且否定只作**排除**（说「不要柱状图」≠「要饼图」）。
+
+
+def test_negated_preference_does_not_flip_the_chart():
+    """纯否定不该改变图表类型：pie + 「不要柱状图」 → 仍然 pie。"""
+    assert apply_chart_preference(_pie(), ["以后不要用柱状图"])["type"] == "pie"
+
+
+def test_negating_the_current_type_falls_back_to_the_other_visual_type():
+    """当前类型正好被排除 → 降级到另一个可视化类型（bar → pie）。"""
+    assert apply_chart_preference(_bar(), ["以后不要用柱状图"])["type"] == "pie"
+
+
+def test_positive_preference_wins_when_not_negated():
+    """否定与肯定同时存在：未被排除的正向命中生效。"""
+    chart = apply_chart_preference(_pie(), ["以后不要用柱状图", "以后都用饼图"])
+    assert chart["type"] == "pie"
+
+
+def test_exclusion_yields_to_data_constraint():
+    """§七：数据不支持可视化时，排除项也不该让 table 变成可视化。"""
+    table = {"type": "table", "config": {"data": [{"region": "华东", "sales": "1"}]}}
+    assert apply_chart_preference(table, ["以后不要用柱状图"])["type"] == "table"
+
+
+def test_negated_pie_falls_back_to_bar():
+    """对称性检查：排除饼图 + 当前是饼图 → bar。"""
+    assert apply_chart_preference(_pie(), ["以后别用饼图"])["type"] == "bar"
+
+
+def test_both_visual_types_negated_keeps_original():
+    """两个可视化类型都被排除 → 无可退，保持原样（不猜）。"""
+    chart = _pie()
+    assert apply_chart_preference(chart, ["不要柱状图", "不要饼图"])["type"] == "pie"

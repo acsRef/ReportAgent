@@ -38,26 +38,79 @@ _DIMS_RENAME: dict[str, dict[str, str]] = {
 }
 
 
-def _preferred_chart_type(preferences: list[str]) -> str | None:
-    """从 preference 文本解析首选 chart type（词表外 → None）。"""
-    for text in preferences:
+def _is_negated(text: str, index: int, window: int = 3) -> bool:
+    """`text[index:]` 那个词是否被否定。
+
+    词前 `window` 个字符里出现否定词即算否定。这是「当轮原话」与「召回的记忆偏好」
+    **共用**的唯一判据——2026-11-09 之前只有原话通道有它，记忆通道漏了，
+    于是「以后不要用柱状图」被当成「要柱状图」强制执行（意图反转，已复现）。
+    """
+    prefix = text[max(0, index - window):index]
+    return any(neg in prefix for neg in _NEGATIONS)
+
+
+def _parse_chart_preference(text: str) -> tuple[str | None, set[str]]:
+    """解析一条偏好文本 →（正向命中的 chart type, 被否定的 chart type 集合）。
+
+    语义定调：**否定句是“排除”，不是“要反面”**。用户说「不要柱状图」不等于「要饼图」；
+    选哪个是 chart_advisor 的事，记忆只负责排除。同一条文本里可以同时出现肯定与否定
+    （「以后都不要柱状图，都用饼图」）——两者都要收。
+    """
+    positive: str | None = None
+    excluded: set[str] = set()
+    for kw, chart_type in _PREFERRED_TYPE_MAP.items():
+        start = text.find(kw)
+        while start >= 0:
+            if _is_negated(text, start):
+                excluded.add(chart_type)
+            elif positive is None:
+                positive = chart_type
+            start = text.find(kw, start + len(kw))
+    return positive, excluded
+
+
+def _preferred_chart_type(preferences: list[str]) -> tuple[str | None, set[str]]:
+    """按召回分顺序取**第一条正向命中**，同时并集所有排除项。
+
+    排除是约束而不是排序候选：不管它出现在第几条，都得生效。
+    """
+    positive: str | None = None
+    excluded: set[str] = set()
+    for text in preferences or []:
         if not text:
             continue
-        for kw, chart_type in _PREFERRED_TYPE_MAP.items():
-            if kw in text:
-                return chart_type
-    return None
+        hit, negated = _parse_chart_preference(text)
+        excluded |= negated
+        if positive is None and hit is not None:
+            positive = hit
+    return positive, excluded
+
+
+def _first_not_negated(current: str, excluded: set[str]) -> str | None:
+    """当前类型被排除时，退到另一个未被排除的可视化类型（bar ↔ pie）。"""
+    other = "pie" if current == "bar" else "bar"
+    return other if other not in excluded else None
 
 
 def apply_chart_preference(chart_config: dict, preferences: list[str]) -> dict:
     """把视觉化偏好应用到 chart_advisor 产出的 chart_config（纯函数，不 mut 输入）。
 
-    无偏好 / 偏好词表外 → 原样返回（identity）。
+    无偏好 / 偏好词表外 / 正向命中被自己否定 → 原样返回（identity）；
+    当前类型被排除 → 降级到另一个可视化类型；数据不支持可视化 → 偏好让位（§七）。
     """
-    target = _preferred_chart_type(preferences or [])
-    if target is None or not isinstance(chart_config, dict) or not chart_config:
+    if not preferences or not isinstance(chart_config, dict) or not chart_config:
         return chart_config
-    return _apply_type(chart_config, target)
+
+    target, excluded = _preferred_chart_type(preferences)
+    if target is not None and target not in excluded:
+        return _apply_type(chart_config, target)
+
+    cur_type = chart_config.get("type")
+    if cur_type in excluded:
+        fallback = _first_not_negated(cur_type, excluded)
+        if fallback is not None:
+            return _apply_type(chart_config, fallback)
+    return chart_config
 
 
 # ── 用户本轮**原话**里的显式图表要求（2026-11-05，plan live-session-issues D4）─────────
@@ -88,8 +141,7 @@ def explicit_chart_type(text: str | None) -> str | None:
         for word in words:
             start = text.find(word)
             while start >= 0:
-                prefix = text[max(0, start - 3):start]
-                if not any(neg in prefix for neg in _NEGATIONS):
+                if not _is_negated(text, start):
                     return chart_type
                 start = text.find(word, start + len(word))
     return None
