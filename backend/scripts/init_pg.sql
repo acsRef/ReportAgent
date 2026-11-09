@@ -118,6 +118,28 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_query_template_user ON memory.query_template (user_id);
 
+-- Query Memory 的**失败**侧（memory-architecture §四）：失败 SQL 不进入成功经验，
+-- 但必须留下明细（failure_category / failed_sql / retry_count / error），否则
+-- 「那次为什么失败」只能翻日志。2026-11-09（plan memory-system-conformance D2）：
+-- 此前 contract 写了这四个字段，表里一个都没有，record_failure 只能对已存在的
+-- 成功行 +1——失败根本无处可落，故单开一张表，不把 query_template 继续撑宽。
+CREATE TABLE IF NOT EXISTS memory.query_failure (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL,
+    session_id VARCHAR(64),
+    question TEXT NOT NULL,
+    failed_sql TEXT,
+    failure_category VARCHAR(64),
+    error_message TEXT,
+    retry_count INT DEFAULT 0,
+    target_metric VARCHAR(128),
+    trace_id VARCHAR(64),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_failure_user_time
+    ON memory.query_failure (user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS memory.semantic_entry (
     id SERIAL PRIMARY KEY,
     user_id INT NOT NULL,

@@ -81,7 +81,7 @@ async def test_selective_policy_injects_recall_into_assembled(monkeypatch):
     async def fake_prepare(sid, uid):
         return "<L1>conv</L1>"
 
-    async def fake_recall(q, uid, *, top_k_preferences=3):
+    async def fake_recall(q, uid, *, top_k_preferences=3, session_id=None):
         return [{
             "raw_text": "user prefers bar charts",
             "source": "memory_semantic",

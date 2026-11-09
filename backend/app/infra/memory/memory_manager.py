@@ -19,6 +19,7 @@ class MemoryManager:
         *,
         top_k_queries: int = 2,
         top_k_preferences: int = 3,
+        session_id: str | None = None,
     ) -> list[dict]:
         """P4b：structured 召回（memory-architecture §六）。
 
@@ -45,7 +46,9 @@ class MemoryManager:
                 "score": float(q.get("score", 0.0)), "ref_id": q.get("id"),
             })
 
-        prefs = await self._user_memory.search(user_id, query, top_k=top_k_preferences)
+        prefs = await self._user_memory.search(
+            user_id, query, top_k=top_k_preferences, session_id=session_id,
+        )
         for p in prefs:
             kind = "preference" if p.memory_type in _PREFERENCE_TYPES else "semantic"
             source = "memory_preference" if kind == "preference" else "memory_semantic"
@@ -87,6 +90,42 @@ class MemoryManager:
         return await self._query_memory.save_query(
             question, sql, schema, target_metric, user_id=user_id,
         )
+
+    async def remember_query_failure(
+        self,
+        *,
+        user_id: int,
+        question: str,
+        failed_sql: str | None,
+        failure_category: str = "other",
+        error_message: str = "",
+        retry_count: int = 0,
+        target_metric: str = "",
+        session_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> int:
+        """§四：失败明细落 `memory.query_failure`（宪法 §6：memory 写一律经本网关）。"""
+        return await self._query_memory.record_failure_detail(
+            user_id=user_id,
+            question=question,
+            failed_sql=failed_sql,
+            failure_category=failure_category,
+            error_message=error_message,
+            retry_count=retry_count,
+            target_metric=target_metric,
+            session_id=session_id,
+            trace_id=trace_id,
+        )
+
+    async def list_active_preference_contents(self, user_id: str) -> list[str]:
+        """当前 active 偏好正文（domain 层做「同维度冲突」判定用）。"""
+        return await self._user_memory.list_active_preference_contents(user_id)
+
+    async def supersede_active_by_contents(
+        self, user_id: str, contents: list[str]
+    ) -> int:
+        """把指定旧偏好置 superseded（§六；判定在 domain，这里只执行）。"""
+        return await self._user_memory.supersede_active_by_contents(user_id, contents)
 
     async def remember_preference(
         self,

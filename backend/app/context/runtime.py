@@ -92,6 +92,9 @@ class ContextRuntime:
                 query,
                 str(user_id),
                 top_k_preferences=decision.top_k_preferences,
+                # §五 session 级记忆只在原会话可见（2026-11-09 memory-system-conformance D4）；
+                # session_id=None（离线/无会话）时 session 级一律不召回。
+                session_id=session_id,
             ))
         if decision.query:
             recall_items.extend(await query_memory.recall_structured(

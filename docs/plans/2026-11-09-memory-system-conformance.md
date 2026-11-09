@@ -59,25 +59,33 @@
 `_should_writeback_query_memory(verdict, is_adjust)`，测试直接打它；真正的写入函数
 `_remember_successful_query(state)` 用真 PG 测。
 
-### D7 · D3 / D4 本轮只取证，不改
+### D7 · D3 / D4 第一轮只取证，第二轮（用户拍板「三个一起做」）已实施
 
-两处都需要**设计决策**，不该由我在这一轮替你拍：
+两处都需要**设计决策**，第一轮不该由我替你拍，所以先钉成 `xfail(strict=True)`——
+跑测试就能看到「这里契约没兑现」，修好会变 XPASS 并**因为 strict 而失败**，强制回来改矩阵，
+比写进文档可靠。第二轮决定并实施：
 
-- D3「同一维度」需要一个「偏好维度」概念（图表类型 / 粒度 / 语气 / …）。现在 `stable_preference`
-  只有自由文本，没有维度标签；我可以按关键词家族硬编码（柱状图/饼图/表格/折线 = 图表维度），
-  但那是词表补丁，不是设计。
-- D4 要改召回签名（`search` / `recall_structured` / ContextRuntime 一路透传 `session_id`），
-  并且要决定「没有 session 上下文时（如评测/离线）session 级记忆是否一律不召回」。
-
-所以本轮用 `xfail(strict=True)` 把它们钉成**可执行的已知缺口**：跑测试就能看到「这里契约没兑现」，
-修好之后 xfail 会变 XPASS 并**因为 strict 而失败**，强制下一个人回来改矩阵——这比写进文档更可靠。
+- **D3**：新增 `app/memory/preferences.py`，用确定性词表给出维度（`chart` 呈现形态 /
+  `granularity` 时间粒度），只 supersede **同维度且不同正文**的旧条目；跨维度不互相顶掉。
+  维度判定留在 domain（`app/memory/`），infra 只提供「按正文清单置 superseded」的执行方法，
+  不反向依赖 domain。
+- **D4**：召回签名加 `session_id`（`UserMemory.search` / `get_user_preferences` →
+  `MemoryManager.recall_structured` → `app/memory/semantic` → `ContextRuntime.build`）；
+  **没有 session 上下文时 session 级一律不召回**（离线评测 / 模板中心的安全默认）。
 
 ## Files to change
 
 | 文件 | 改动 |
 |---|---|
-| `backend/app/agent/confirmed_execution_graph.py` | 新增 `_should_writeback_query_memory` / `_remember_successful_query`；`_persist_report` 在 SUCCESS 分支调用（best-effort） |
-| `backend/tests/persistence/test_memory_system_conformance.py` | 新增：C1–C5、C9 的可执行断言（真 PG + fake embedder），C4/C5 为 `xfail(strict)` |
+| `backend/app/agent/confirmed_execution_graph.py` | `_should_writeback_query_memory` / `_remember_successful_query`（D1，SUCCESS 分支）+ `_remember_failed_query`（D2，FAILED 分支） |
+| `backend/app/infra/memory/user_memory.py` | `_scope_filter` + `search`/`get_user_preferences` 的 `session_id`（D4）；`list_active_preference_contents` / `supersede_active_by_contents`（D3 执行侧） |
+| `backend/app/memory/preferences.py` | **新增**：确定性偏好维度词表 + `conflicting_contents`（D3 判定侧，domain） |
+| `backend/app/memory/manager.py` | `remember_explicit_preference` 里接同维度 supersede（D3） |
+| `backend/app/memory/semantic.py` / `backend/app/context/runtime.py` | `session_id` 透传（D4） |
+| `backend/app/infra/memory/query_memory.py` / `memory_manager.py` | `record_failure_detail` / `remember_query_failure`（D2） |
+| `backend/scripts/init_pg.sql` | 新表 `memory.query_failure` + 索引（D2） |
+| `backend/tests/persistence/test_memory_system_conformance.py` | C1–C6、C9 可执行断言（真 PG + fake embedder） |
+| `backend/tests/contracts/test_structured_recall_contract.py` 等 3 个契约测试 | fake 签名补 `session_id=None`（接口变了就改测试） |
 | `docs/plans/README.md` | 登记本 plan |
 
 ## Reused existing utilities
@@ -101,6 +109,45 @@ D:/miniConda/envs/agent/python.exe -m pytest backend/tests/contracts -k memory -
 1. C1/C2/C3/C9 绿（D1 已修）；C4/C5 显示 `xfail`（已知缺口被钉住）。
 2. 真链路：报告生成成功后 `memory.query_template` 多一行（同一 question 重跑则 `success_count` 累加）。
 3. 既有记忆测试零回归。
+
+### 第二轮（同日）：D2 / D3 / D4 一起落地，矩阵 10/10 转绿
+
+用户拍板「三个一起做」。三处都改了，且都留了可执行断言：
+
+| 缺口 | 改法 | 证据 |
+|---|---|---|
+| **D4** session 级记忆跨会话泄漏 | `UserMemory.search` / `get_user_preferences` 加 `session_id` 参数 + `_scope_filter()`：`(scope <> 'session' OR ($n::text IS NOT NULL AND session_id = $n::text))`；`MemoryManager.recall_structured` → `app/memory/semantic.recall_structured` → `ContextRuntime.build` 一路透传。**没有 session 上下文时 session 级一律不召回**（离线评测/模板中心的安全默认） | C5 三个断言：原会话召回 ✅ / 别的会话不召回 ✅ / 无 session 不召回 ✅ |
+| **D3** 同维度偏好不 supersede | 新增 `app/memory/preferences.py`：确定性词表给出「维度」（`chart` 呈现形态 / `granularity` 时间粒度），`conflicting_contents()` 只淘汰**同维度且不同正文**的旧条目；infra 侧只加两个执行方法（`list_active_preference_contents` / `supersede_active_by_contents`），**维度判定留在 domain**，infra 不反向依赖 | C4 两条：柱状图→饼图只留 1 条 active ✅ / 粒度 vs 呈现跨维度都保留 ✅ |
+| **D2** 失败明细无处可落 | 新表 `memory.query_failure`（`failure_category / failed_sql / error_message / retry_count / target_metric / session_id / trace_id`），`MemoryManager.remember_query_failure` 网关 + `_remember_failed_query(state)` 在 FAILED 分支调用 | C6：真 PG 行断言 + 「失败不写进 success 表」；**真链路** e2e 05 跑完落 1 行（`failure_category='syntax'`，trace_id 与 trace 对得上） |
+
+真链路观察（诚实记账）：那条 FAILED 用例的 payload 是 `{"kind": "syntax", "message": "无SQL语句"}`，
+所以 `failed_sql` 为 NULL 是**如实**（真的没有 SQL 可说），不是没接线。
+另外 `retry_count` 现在取 `state["sql_repair_count"]`——该键还没在 `ConfirmedExecutionState` 声明
+（子图 `retry_counters` 没透传），生产里多为 0；等状态契约补字段后自然生效，已在测试注释里写明。
+
+执行结果：`test_memory_system_conformance.py` **10 passed**（原来 6 passed + 2 xfailed，两个 xfail 转 PASS 并
+新增了跨维度反例、confirm 流程、失败明细三条）。
+回归：`pytest backend/tests/persistence` **91 passed**；
+`pytest backend/tests -k "memory or recall or context or preference"` **229 passed**
+（顺带把三个契约测试里的 fake `search` / `recall_structured` 签名补上 `session_id=None`——
+接口变了就该改测试，不是给新参数开洞）。
+
+### 一处顺带修正的认知
+
+用户提到「记忆机制参考了 LRU / LFU」——确认属实，代码里的位置与权重是：
+
+| 场景 | 公式 | 位置 |
+|---|---|---|
+| 召回打分 | `0.6×语义相似度 + 0.2×importance + 0.1×LFU + 0.1×LRU` | `user_memory._compute_score` |
+| 淘汰打分 | `LFU×0.4 + LRU×0.4 + importance×0.2`（不含语义，淘汰时无查询） | `user_memory.evict_over_capacity` |
+| Query Memory 召回 | `0.5×语义 + 0.3×成功率 + 0.1×LFU + 0.1×LRU` | `query_memory.search_similar` |
+
+两点必须说清（都会影响怎么读评测数字）：
+1. **LFU/LRU 是「行级」计数**：`access_count` / `last_access_time` 每次召回（`record_access`）就改写，
+   所以它们是**读放大**信号，不是「用户喜欢什么」的信号——同一条记忆被系统自己召回一次就变「热」。
+2. **召回打分因此不是静态的**：上一轮 gold scoreboard 里 `_reset_access` 每轮清零，
+   所以公布的 `Recall@1 0.84 / @3 0.96` 是「**LRU/LFU 未热**」读数（纯语义+重要性）；
+   真实用户连续提问时，第 3 位之后会被历史访问改写——这也是我上一轮看到「尾部集合不可复现」的机制来源之一。
 
 ## 落地记录（2026-11-09）
 
@@ -166,7 +213,10 @@ D2 影响可运维性（查不到「为什么那次 SQL 失败了」的明细）
 
 ## Explicitly NOT doing
 
-- **不改 `memory.query_template` 加 `failure_*` 列**（D2）：要动 DDL + 迁移 + 前端模板中心展示，属于独立决策；本轮只把「失败明细无处可落」记成已知缺口。
-- **不实现偏好维度体系**（D3）：关键词家族硬编码是补丁不是设计，等你拍板维度清单。
-- **不改召回签名加 session 过滤**（D4）：涉及 5 个文件与离线/评测语义，单独一轮。
+- **不动 `memory.query_template` 加 `failure_*` 列**：改为新表 `memory.query_failure`（已做）；
+  模板中心不展示失败明细（要的话是前端需求，不是记忆契约）。
+- **不做语义级 supersede**（D3 只到词表维度）：两句换着说法的偏好（「要柱子的那种图」）仍可能并用；
+  语义 supersede 要 embedding 判定 + 阈值，属于二期。
+- **不透传子图 `retry_counters`**：`retry_count` 现取 `state["sql_repair_count"]`，该键未在
+  `ConfirmedExecutionState` 声明，生产多为 0；补状态字段是独立小改（会动 state-contract.md）。
 - **不碰 Turn Understanding / 上下文 compact**：与本契约无关。

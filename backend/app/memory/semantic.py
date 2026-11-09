@@ -14,6 +14,7 @@ async def recall_structured(
     user_id: str,
     *,
     top_k_preferences: int = 3,
+    session_id: str | None = None,
 ) -> list[dict]:
     """Recall semantic memory entries（source = memory_semantic / memory_preference）。
 
@@ -25,5 +26,6 @@ async def recall_structured(
         query, user_id,
         top_k_queries=0,
         top_k_preferences=top_k_preferences,
+        session_id=session_id,
     )
     return [i for i in items if i["source"] in ("memory_semantic", "memory_preference")]

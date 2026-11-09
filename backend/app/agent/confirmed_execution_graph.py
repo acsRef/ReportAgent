@@ -1088,6 +1088,40 @@ async def _remember_successful_query(state: ConfirmedExecutionState) -> None:
         logger.warning("query memory writeback failed: %s", exc)
 
 
+async def _remember_failed_query(state: ConfirmedExecutionState) -> None:
+    """§四 失败侧：把这一轮挂掉的 SQL 明细写进 `memory.query_failure`。
+
+    为什么不是写进成功经验再标记失败：Query Memory 的定义是「历史**成功**经验」，
+    掺进失败 SQL 会让 SQL agent 拿错误范式做参考（宪法 §6「Experience 不是 Truth」）。
+    失败的价值在**排障**（哪类错、哪条 SQL、重试几次），所以单独一张表。
+
+    best-effort：与成功侧一致，写记忆失败只 warn。
+    """
+    question = (state.get("user_query") or "").strip() or _report_title(state).strip()
+    if not question or question == "报告":
+        return
+    qr = state.get("query_result") or {}
+    sql = (state.get("sql") or (qr.get("sql") if isinstance(qr, dict) else "") or "").strip() or None
+    err = state.get("error")
+    detail = err.model_dump() if hasattr(err, "model_dump") else (err if isinstance(err, dict) else {})
+    try:
+        from app.infra.memory.memory_manager import MemoryManager
+
+        await MemoryManager().remember_query_failure(
+            user_id=int(state["user_id"]),
+            question=question,
+            failed_sql=sql,
+            failure_category=str(detail.get("kind") or "other"),
+            error_message=str(detail.get("message") or ""),
+            retry_count=int(state.get("sql_repair_count") or 0),
+            target_metric="",
+            session_id=state.get("session_id"),
+            trace_id=state.get("trace_id"),
+        )
+    except Exception as exc:  # noqa: BLE001 - 记忆写入不得拖垮主链
+        logger.warning("query failure record failed: %s", exc)
+
+
 def _report_title(state: ConfirmedExecutionState) -> str:
     """报告标题取自需求卡摘要（2026-11-03）。
 
@@ -1190,6 +1224,9 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
     # 报告已经落库之后才写记忆——顺序反了就成了「记忆写了、报告挂了」的假经验。
     if _should_writeback_query_memory(verdict, is_adjust=base_version is not None):
         await _remember_successful_query(state)
+    elif verdict == "FAILED":
+        # 失败侧：明细落 memory.query_failure（不进成功经验），D2
+        await _remember_failed_query(state)
     # 执行结束（三态都落库后）释放 draft 锁：否则 draft 永久 locked，
     # 重新生成 / adjust / PATCH 全被拒。并发保护仍由 `lock_draft` 原语 +
     # ExecutionRegistry 409 承担；中途失败（未走到本节点）场景由

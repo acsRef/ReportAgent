@@ -60,6 +60,7 @@ def _cleanup(user_id: int) -> None:
     cur = conn.cursor()
     cur.execute("DELETE FROM memory.semantic_entry WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM memory.query_template WHERE user_id=%s", (user_id,))
+    cur.execute("DELETE FROM memory.query_failure WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM app.users WHERE id=%s", (user_id,))
     conn.close()
 
@@ -90,6 +91,20 @@ def _semantic_rows(user_id: int, *, status: str | None = None) -> list[dict]:
         sql += " AND status=%s"
         params.append(status)
     cur.execute(sql + " ORDER BY id", params)
+    cols = [c[0] for c in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def _failure_rows(user_id: int) -> list[dict]:
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT question, failed_sql, failure_category, error_message, retry_count, "
+        "trace_id, session_id FROM memory.query_failure WHERE user_id=%s ORDER BY id",
+        (user_id,),
+    )
     cols = [c[0] for c in cur.description]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     conn.close()
@@ -247,18 +262,16 @@ def test_c3_restating_same_preference_keeps_single_active(monkeypatch):
         _cleanup(uid)
 
 
-# ----------------------------------------------- C4：§六 冲突 supersede（缺口）
+# --------------------------------------------- C4：§六 同维度冲突 supersede
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "D3 已知缺口：supersede_stable_preferences 的 WHERE 是 content=$2，只处理同内容冲突；"
-        "「柱状图 → 饼图」这类同维度不同取值会让两条 active 并存（§六 要求旧 → superseded）。"
-        "修法需要「偏好维度」概念，见 plan 2026-11-09-memory-system-conformance D7。"
-    ),
-)
 def test_c4_conflicting_preference_supersedes_old_active(monkeypatch):
+    """§六：柱状图 → 饼图属同一维度（呈现形态），旧的 active 必须变 superseded。
+
+    2026-11-09（plan memory-system-conformance D3）：此前只做同内容 supersede，
+    两条 active 并存 → 召回时给出互相矛盾的偏好。现在由
+    `app/memory/preferences.preference_dimension` 做确定性维度判定。
+    """
     _patch_embedders(monkeypatch)
     uid = _make_user()
     try:
@@ -271,22 +284,40 @@ def test_c4_conflicting_preference_supersedes_old_active(monkeypatch):
         _run(body())
         active = _semantic_rows(uid, status="active")
         assert len(active) == 1, f"§六：新旧偏好冲突时旧应 superseded，实际 active={active}"
+        assert "饼图" in active[0]["content"], active
+        superseded = _semantic_rows(uid, status="superseded")
+        assert any("柱状图" in r["content"] for r in superseded), superseded
     finally:
         _cleanup(uid)
 
 
-# ------------------------------------------------- C5：§五 session 作用域（缺口）
+def test_c4_cross_dimension_preference_is_kept(monkeypatch):
+    """§六 反例：不同维度不该互相顶掉（「饼图」不该把「按月看」废掉）。"""
+    _patch_embedders(monkeypatch)
+    uid = _make_user()
+    try:
+        from app.memory.manager import remember_explicit_preference
+
+        async def body():
+            # 「按月」属粒度维度，「饼图」属呈现维度——两者不冲突，都该留着
+            await remember_explicit_preference(uid, "以后按月的粒度来显示")
+            await remember_explicit_preference(uid, "以后都用饼图显示")
+
+        _run(body())
+        active = [r["content"] for r in _semantic_rows(uid, status="active")]
+        assert len(active) == 2, f"跨维度偏好不应被 supersede: {active}"
+    finally:
+        _cleanup(uid)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "D4 已知缺口：召回过滤 _ACTIVE_RECALL_FILTER 只有 status/expires_at，没有 session 维度，"
-        "session 级 temporary_preference 会在别的会话被召回。修法要给 search/recall_structured/"
-        "ContextRuntime 一路透传 session_id，见 plan D7。"
-    ),
-)
+# ------------------------------------------------ C5：§五 session 作用域
+
+
 def test_c5_session_scoped_preference_not_recalled_elsewhere(monkeypatch):
+    """§五：session 级 temporary_preference 只在原会话（或显式给出该 session）可召回。
+
+    2026-11-09（plan D4）：此前召回过滤没有 session 维度，A 会话的临时口径会串到 B 会话。
+    """
     _patch_embedders(monkeypatch)
     uid = _make_user()
     try:
@@ -305,12 +336,65 @@ def test_c5_session_scoped_preference_not_recalled_elsewhere(monkeypatch):
                 confidence="high",
                 session_id="sess-A",
             )
-            return await um.search(str(uid), "按周看", top_k=5)
+            same = await um.search(str(uid), "按周看", top_k=5, session_id="sess-A")
+            other = await um.search(str(uid), "按周看", top_k=5, session_id="sess-B")
+            none = await um.search(str(uid), "按周看", top_k=5)  # 无会话上下文
+            return same, other, none
 
-        items = _run(body())
-        contents = [i.content for i in items]
-        assert not any("下次再说" in c for c in contents), (
-            f"§五：session 级记忆不得跨会话召回，实际 {contents}"
-        )
+        same, other, none = _run(body())
+        assert any("下次再说" in i.content for i in same), "原会话应能召回"
+        assert not any("下次再说" in i.content for i in other), "别的会话不得召回"
+        assert not any("下次再说" in i.content for i in none), "无 session 时一律不召回"
+    finally:
+        _cleanup(uid)
+
+
+# -------------------------------------------- C6：§四 失败明细（D2）
+
+
+def test_c6_failed_run_records_failure_detail(monkeypatch):
+    """§四：失败 SQL 不进成功经验，但明细（kind / sql / 重试次数）必须可查。
+
+    2026-11-09（plan D2）：`memory.query_template` 里根本没有这些列，
+    `record_failure` 只能对已存在的成功行 +1 → 失败无处可落。现单开 `memory.query_failure`。
+    """
+    _patch_embedders(monkeypatch)
+    uid = _make_user()
+
+    class _Card:
+        summary = "2025年各区域销售额"
+        target_metrics = ["销售额"]
+
+    class _Err:
+        def model_dump(self):
+            return {"code": "QUERY_FAILED", "kind": "object_not_found", "message": "column does not exist"}
+
+    try:
+        from app.agent.confirmed_execution_graph import _remember_failed_query
+
+        state = {
+            "user_id": uid,
+            "user_query": "",
+            "session_id": "sess-fail",
+            "trace_id": "trace-fail",
+            "sql": "SELECT nonexistent FROM fact_orders",
+            "error": _Err(),
+            "requirement_card": _Card(),
+            "sql_repair_count": 2,
+        }
+        _run(_remember_failed_query(state))
+
+        rows = _failure_rows(uid)
+        assert len(rows) == 1, rows
+        assert rows[0]["question"] == "2025年各区域销售额"
+        assert rows[0]["failure_category"] == "object_not_found"
+        # retry_count 目前由父图透传 `sql_repair_count`——该键尚未在 ConfirmedExecutionState
+        # 声明（子图 `retry_counters` 不透传），生产里多为 0；这里断的是**透传通路**，
+        # 等状态契约补上字段后自然生效。
+        assert rows[0]["retry_count"] == 2
+        assert "nonexistent" in (rows[0]["failed_sql"] or "")
+        assert rows[0]["trace_id"] == "trace-fail"
+        # 关键：失败**不**进成功经验
+        assert _query_memory_rows(uid) == []
     finally:
         _cleanup(uid)

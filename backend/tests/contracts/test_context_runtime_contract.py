@@ -145,7 +145,7 @@ class TestContextRuntimeFiveStepOrchestration:
             return "CTX_FROM_ENGINE"
 
         async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
-                                         top_k_preferences=3):
+        top_k_preferences=3, session_id=None):
             # P4b F3：Runtime 经 app.memory.{semantic,query}.recall_structured 调用，
             # 每个 view 内部委托 MemoryManager.recall_structured 一次。
             # LegacyFallbackPolicy 全开 → 调 semantic + query 两个 view → fake 被调两次。
@@ -208,7 +208,7 @@ class TestContextRuntimeFiveStepOrchestration:
         recall_called = {"hit": False}
 
         async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
-                                         top_k_preferences=3):
+        top_k_preferences=3, session_id=None):
             recall_called["hit"] = True
             return []
 
@@ -247,7 +247,7 @@ class TestContextRuntimeFiveStepOrchestration:
             return "L2 摘要 + assistant 散文"
 
         async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
-                                         top_k_preferences=3):
+        top_k_preferences=3, session_id=None):
             captured["recall_calls"] += 1
             if top_k_queries:  # query view
                 return [{
@@ -288,7 +288,7 @@ class TestContextRuntimeFiveStepOrchestration:
             return "CTX"
 
         async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
-                                         top_k_preferences=3):
+        top_k_preferences=3, session_id=None):
             return []  # 无 active 召回
 
         with patch(

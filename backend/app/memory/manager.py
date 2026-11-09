@@ -25,6 +25,7 @@ from app.memory.lifecycle import (
     MemoryScope,
     MemoryStatus,
 )
+from app.memory.preferences import conflicting_contents
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,16 @@ async def remember_explicit_preference(
         await mm.supersede_stable_preference(str(user_id), content)
     except Exception as exc:
         logger.warning("supersede failed: %s", exc)
+    # §六 同维度冲突（2026-11-09，plan memory-system-conformance D3）：
+    # 上面只处理「同内容」，柱状图 → 饼图会留下两条 active 互相矛盾。
+    # 这里按维度（图表 / 粒度）淘汰旧条目；维度判定是确定性词表（见 app/memory/preferences.py）。
+    try:
+        active = await mm.list_active_preference_contents(str(user_id))
+        stale = conflicting_contents(content, active)
+        if stale:
+            await mm.supersede_active_by_contents(str(user_id), stale)
+    except Exception as exc:  # noqa: BLE001 - supersede 失败不该阻塞写入
+        logger.warning("dimension supersede failed: %s", exc)
     return await mm.remember_preference(
         user_id=str(user_id), content=content, memory_type="stable_preference",
         importance=0.8, source=source,

@@ -19,6 +19,22 @@ USER_MEMORY_CAP = 200
 _ACTIVE_RECALL_FILTER = "status = 'active' AND (expires_at IS NULL OR expires_at > NOW())"
 
 
+def _scope_filter(session_param: int) -> str:
+    """§五 session 作用域：session 级记忆只在**原会话**可见。
+
+    2026-11-09（plan memory-system-conformance D4）：此前召回只看 status/expires_at，
+    session 级的 temporary_preference 会在**任何**会话被召回——A 会话的临时口径
+    （「这次先按周看」）串到 B 会话是实打实的串味。
+
+    没有会话上下文（`None`，如离线评测 / 模板中心）时**一律不召回** session 级：
+    契约说它「绑定 session_id」，没有 session 就不该有它。
+    """
+    return (
+        f"(scope <> 'session' OR (${session_param}::text IS NOT NULL "
+        f"AND session_id = ${session_param}::text))"
+    )
+
+
 class RankedMemory:
     def __init__(self, id: int, content: str, memory_type: str,
                  importance_score: float, access_count: int,
@@ -148,7 +164,12 @@ class UserMemory:
             return int(str(deleted).split()[-1]) if deleted else 0
 
     async def search(
-        self, user_id: str, query: str = "", top_k: Optional[int] = None
+        self,
+        user_id: str,
+        query: str = "",
+        top_k: Optional[int] = None,
+        *,
+        session_id: str | None = None,
     ) -> list[RankedMemory]:
         # user_id 归一 int：列是 integer；生产经 semantic_memory 传 str(user_id)。
         user_id = int(user_id)
@@ -172,9 +193,10 @@ class UserMemory:
                        FROM memory.semantic_entry
                        WHERE user_id=$2 AND intent_embedding IS NOT NULL
                          AND {_ACTIVE_RECALL_FILTER}
+                         AND {_scope_filter(4)}
                        ORDER BY sem_sim DESC
                        LIMIT $3""",
-                    embedding, user_id, k * 3,
+                    embedding, user_id, k * 3, session_id,
                 )
                 results = [
                     self._row_to_memory(r, self._compute_score(
@@ -194,8 +216,9 @@ class UserMemory:
                                   access_count, last_access_time, status, scope, confidence
                            FROM memory.semantic_entry
                            WHERE user_id=$1 AND {_ACTIVE_RECALL_FILTER}
+                             AND {_scope_filter(3)}
                            ORDER BY last_access_time DESC LIMIT $2""",
-                        user_id, k * 3,
+                        user_id, k * 3, session_id,
                     )
                 else:
                     patterns = [f"%{kw}%" for kw in keywords]
@@ -205,8 +228,9 @@ class UserMemory:
                            FROM memory.semantic_entry
                            WHERE user_id=$1 AND content ILIKE ANY($2::text[])
                              AND {_ACTIVE_RECALL_FILTER}
+                             AND {_scope_filter(4)}
                            ORDER BY last_access_time DESC LIMIT $3""",
-                        user_id, patterns, k * 3,
+                        user_id, patterns, k * 3, session_id,
                     )
                 results = [
                     self._row_to_memory(r, self._compute_score(
@@ -255,8 +279,46 @@ class UserMemory:
             )
         return int(str(res).split()[-1]) if res else 0
 
+    async def supersede_active_by_contents(
+        self, user_id: str, contents: list[str]
+    ) -> int:
+        """§六：把指定的若干条 active stable_preference 置 superseded。
+
+        与 `supersede_stable_preferences`（同内容精确冲突）的分工：这里由**调用方**
+        决定「哪些旧偏好已经过时」——判定逻辑属于 domain（`app/memory/preferences.py`
+        的维度分类），infra 只执行写入，不反向依赖 domain。
+        """
+        if not contents:
+            return 0
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            res = await conn.execute(
+                "UPDATE memory.semantic_entry SET status='superseded', updated_at=NOW() "
+                "WHERE user_id=$1 AND memory_type='stable_preference' "
+                "AND status='active' AND content = ANY($2::text[])",
+                user_id, list(dict.fromkeys(contents)),
+            )
+        return int(str(res).split()[-1]) if res else 0
+
+    async def list_active_preference_contents(self, user_id: str) -> list[str]:
+        """当前 active 的偏好正文（维度冲突判定用；不下发向量、不算分）。"""
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT content FROM memory.semantic_entry "
+                "WHERE user_id=$1 AND memory_type='stable_preference' AND status='active'",
+                user_id,
+            )
+        return [r["content"] for r in rows]
+
     async def get_user_preferences(
-        self, user_id: str, top_k: Optional[int] = None
+        self,
+        user_id: str,
+        top_k: Optional[int] = None,
+        *,
+        session_id: str | None = None,
     ) -> list[RankedMemory]:
         # post-review fix：同 search()——top_k=0 表达「禁止召回」短路返回 []
         k = self._top_k if top_k is None else top_k
@@ -271,8 +333,9 @@ class UserMemory:
                    FROM memory.semantic_entry
                    WHERE user_id=$1 AND memory_type IN ('stable_preference', 'temporary_preference')
                      AND {_ACTIVE_RECALL_FILTER}
+                     AND {_scope_filter(3)}
                    ORDER BY last_access_time DESC LIMIT $2""",
-                user_id, k * 3,
+                user_id, k * 3, session_id,
             )
             results = [
                 self._row_to_memory(r, self._compute_score(

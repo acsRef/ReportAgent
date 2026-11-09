@@ -31,7 +31,7 @@ async def test_recall_structured_returns_typed_items(monkeypatch):
                  "target_metric": "amt", "success_count": 3, "failure_count": 0,
                  "access_count": 3, "score": 0.9}]
 
-    async def fake_user_search(self, user_id, query="", top_k=None):
+    async def fake_user_search(self, user_id, query="", top_k=None, *, session_id=None):
         return [_Rank(11, "用户偏好柱状图", "stable_preference", 0.8)]
 
     monkeypatch.setattr(
@@ -62,7 +62,7 @@ async def test_legacy_recall_delegates_to_structured_and_joins(monkeypatch):
                  "target_metric": "", "success_count": 1, "failure_count": 0,
                  "access_count": 1, "score": 0.5}]
 
-    async def fake_user_search(self, user_id, query="", top_k=None):
+    async def fake_user_search(self, user_id, query="", top_k=None, *, session_id=None):
         return [_Rank(11, "P", "stable_preference", 0.6)]
 
     monkeypatch.setattr(
@@ -85,7 +85,7 @@ async def test_context_runtime_step4_uses_structured(monkeypatch):
     async def fake_prepare(session_id, user_id):
         return "CTX"
     async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
-                                     top_k_preferences=3):
+        top_k_preferences=3, session_id=None):
         return [{"raw_text": "结构化召回", "kind": "query",
                  "source": "memory_query", "score": 0.9, "ref_id": 3}]
 
@@ -121,7 +121,7 @@ async def test_recall_structured_semantic_item_uses_memory_semantic_source(monke
     async def fake_search_similar(self, question, top_k=3, *, user_id):
         return []  # 不混入 query 类 item，单独钉 semantic 路径
 
-    async def fake_user_search(self, user_id, query="", top_k=None):
+    async def fake_user_search(self, user_id, query="", top_k=None, *, session_id=None):
         # memory_type='insight'（不在 _PREFERENCE_TYPES）→ kind='semantic' / source='memory_semantic'
         return [_Rank(22, "华东=region_east", "insight", 0.7)]
 

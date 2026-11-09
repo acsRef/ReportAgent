@@ -132,6 +132,39 @@ class QueryMemory:
                 entry_id,
             )
 
+    async def record_failure_detail(
+        self,
+        *,
+        user_id: int,
+        question: str,
+        failed_sql: str | None,
+        failure_category: str = "other",
+        error_message: str = "",
+        retry_count: int = 0,
+        target_metric: str = "",
+        session_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> int:
+        """§四：失败 SQL 的明细落 `memory.query_failure`（不进成功经验）。
+
+        与 `record_failure(entry_id)`（对已存在的成功行 +1 失败计数）分工不同：
+        这一条记录的是「这次跑挂了的那条 SQL 长什么样、错在哪、重试了几次」，
+        是新行，不是计数。2026-11-09（plan memory-system-conformance D2）。
+        """
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO memory.query_failure
+                   (user_id, session_id, question, failed_sql, failure_category,
+                    error_message, retry_count, target_metric, trace_id)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                   RETURNING id""",
+                int(user_id), session_id, question, failed_sql, failure_category,
+                (error_message or "")[:2000], int(retry_count), target_metric,
+                trace_id,
+            )
+        return row["id"]
+
     # --- Deprecated: delegate to UserMemory via MemoryManager ---
 
     async def save_semantic(
