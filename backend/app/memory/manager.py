@@ -27,7 +27,7 @@ from app.memory.lifecycle import (
     MemoryStatus,
 )
 from app.memory.admission import classify_scope, is_admissible
-from app.memory.preferences import conflicting_contents
+from app.memory.preferences import memory_key
 
 logger = logging.getLogger(__name__)
 
@@ -90,18 +90,10 @@ async def remember_inferred_facts(
             logger.warning("save inferred fact failed: %s", exc)
 
 
-async def remember_explicit_preference(
-    user_id: int | str, text: str, *, source: str = "user_turn",
-) -> int | None:
-    """Explicit user statement → active stable_preference / confidence=high（§五）。
-
-    非 explicit statement → 返回 None（§四 Insert/Update/**Discard**：不写 active）。
-    写前 supersede 旧 active 同 content（§六）。
-    """
 def remember_explicit_preference_plan(text: str):
-    """纯函数：给定一句话，返回 (要不要写, 写入参数)。便于单测与日志排查。
+    """纯函数：给定一句话，返回写入参数（或 None=不写）。便于单测与日志排查。
 
-    2026-11-09（plan memory-admission-and-consolidation）：此前这里只看「像不像偏好」，
+    2026-11-09（plan memory-admission-and-consolidation）：此前只看「像不像偏好」，
     写库时硬编码 `stable_preference / scope=user / 无 expires_at` —— 结果是
     「以后都用柱状图」和「这次先按周看」生命周期完全相同，`temporary_preference`
     在生产里永远不产生。现在由 `admission.classify_scope` 决定三档。
@@ -126,16 +118,19 @@ def remember_explicit_preference_plan(text: str):
 
 
 async def remember_explicit_preference(
-    user_id: int | str, text: str, *, source: str = "user_turn",
+    user_id: int | str,
+    text: str,
+    *,
+    source: str = "user_turn",
+    session_id: str | None = None,
 ) -> int | None:
-    """Explicit user statement → 按准入结论落 `active` 或 `candidate`（§五/§六）。
+    """Explicit user statement → 长期库 / 工作区 / 候选（§五/§六 + 准入三档）。
 
-    - 长期标记 → `active` / `stable_preference` / user / 无过期（当轮生效，不等批处理）；
-    - 会话标记 → `active` / `temporary_preference` / session / 24h 过期（同样当轮生效，
-      否则「这次先按周看」要等到明早才管用——那是坏体验）；
-    - 无作用域标记 → `candidate`（不召回，等离线固化攒跨会话证据，§五「推断不进 active」）。
+    - 长期标记（以后/默认/每次）→ **`memory.long_term_memory`**（按意图槽位 UPSERT，
+      同一维度只有一行，写侧不再需要 supersede 扫描）；
+    - 会话标记（这次/先/暂时）→ `semantic_entry`（active + session + 24h，当轮生效）；
+    - 无作用域标记 → `semantic_entry`（candidate，等离线固化攒证据）。
 
-    写前 supersede 旧 active：同内容（§六）+ 同维度（2026-11-09 D3）。
     非 explicit statement → 返回 None（§四 Insert/Update/**Discard**）。
     """
     plan = remember_explicit_preference_plan(text)
@@ -144,25 +139,36 @@ async def remember_explicit_preference(
     adm = plan["admission"]
     content = plan["content"]
     mm = MemoryManager()
-    # 只有要成为 user 级长期记忆时才动 supersede：session 级的「这次先…」不该顶掉长期偏好
-    if adm.writes_active and adm.scope == "user":
-        try:
-            await mm.supersede_stable_preference(str(user_id), content)
-        except Exception as exc:
-            logger.warning("supersede failed: %s", exc)
-        try:
-            active = await mm.list_active_preference_contents(str(user_id))
-            stale = conflicting_contents(content, active)
-            if stale:
-                await mm.supersede_active_by_contents(str(user_id), stale)
-        except Exception as exc:  # noqa: BLE001 - supersede 失败不该阻塞写入
-            logger.warning("dimension supersede failed: %s", exc)
+    if adm.is_long_term:
+        # 长期记忆进**独立库**（plan long-term-memory-table）。同槽位唯一 →
+        # 「柱状图 / 饼图」两条矛盾偏好并存从结构上消失（新值覆盖旧值，旧正文留 previous_content）。
+        result = await mm.remember_long_term(
+            user_id=user_id,
+            memory_key=memory_key(content, adm.memory_type),
+            content=content,
+            memory_type=adm.memory_type,
+            importance=0.8,
+            source=source,
+            confidence=CONFIDENCE_EXPLICIT_STATEMENT.value,
+        )
+        logger.info(
+            "long-term memory upserted: key=%s revision=%s replaced=%s",
+            result["memory_key"], result["revision"], result["replaced"],
+        )
+        return result["id"]
+    # 会话级却没给 session_id → 存了也召不回（_scope_filter 要求 session 匹配），
+    # 降级成 candidate 更诚实：不假装“已记住”。
+    scope, status = adm.scope, adm.status
+    if adm.scope == "session" and not session_id:
+        logger.warning("session-scoped preference without session_id → candidate: %r", text[:40])
+        scope, status = "user", "candidate"
     return await mm.remember_preference(
         user_id=str(user_id), content=content, memory_type=adm.memory_type,
         importance=0.8 if adm.writes_active else 0.5, source=source,
-        scope=adm.scope,
-        status=adm.status,
+        scope=scope,
+        status=status,
         confidence=CONFIDENCE_EXPLICIT_STATEMENT.value,
+        session_id=session_id,
         expires_at=plan["expires_at"],
     )
 

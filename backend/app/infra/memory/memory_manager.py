@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.infra.memory.query_memory import QueryMemory
+from app.infra.memory.long_term import LongTermMemory
 from app.infra.memory.user_memory import UserMemory
 
 # memory_type → RecallItem.kind 映射（业务定义/事实 vs 偏好）
@@ -11,6 +12,19 @@ class MemoryManager:
     def __init__(self):
         self._query_memory = QueryMemory()
         self._user_memory = UserMemory()
+        self._long_term = LongTermMemory()
+
+    # --- 长期记忆库（plan 2026-11-09-long-term-memory-table）--------------------
+
+    async def remember_long_term(self, **kwargs) -> dict:
+        """写/覆盖一个意图槽位（`memory_key` 唯一）。"""
+        return await self._long_term.upsert(**kwargs)
+
+    async def list_long_term(self, user_id) -> list[dict]:
+        return await self._long_term.list_all(user_id)
+
+    async def expire_long_term(self, user_id, *, days: int = 180) -> int:
+        return await self._long_term.expire_stale(user_id, days=days)
 
     async def recall_structured(
         self,
@@ -135,6 +149,9 @@ class MemoryManager:
 
     async def promote_candidate(self, user_id, entry_id: int, **kwargs) -> None:
         await self._user_memory.promote_candidate(user_id, entry_id, **kwargs)
+
+    async def drop_candidate(self, user_id, entry_id: int) -> None:
+        await self._user_memory.drop_candidate(user_id, entry_id)
 
     async def expire_due_preferences(self, user_id, *, now=None) -> int:
         return await self._user_memory.expire_due(user_id, now=now)

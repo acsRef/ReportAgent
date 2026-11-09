@@ -59,6 +59,7 @@ def _cleanup(user_id: int) -> None:
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute("DELETE FROM memory.semantic_entry WHERE user_id=%s", (user_id,))
+    cur.execute("DELETE FROM memory.long_term_memory WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM memory.query_template WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM memory.query_failure WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM app.users WHERE id=%s", (user_id,))
@@ -96,6 +97,20 @@ def _semantic_rows(user_id: int, *, status: str | None = None) -> list[dict]:
     conn.close()
     return rows
 
+
+
+def _lt_rows(user_id: int) -> list[dict]:
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, memory_key, content, revision, previous_content, confidence, evidence_count "
+        "FROM memory.long_term_memory WHERE user_id=%s ORDER BY id",
+        (user_id,),
+    )
+    cols = [c[0] for c in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    conn.close()
+    return rows
 
 def _failure_rows(user_id: int) -> list[dict]:
     conn = _conn()
@@ -256,8 +271,10 @@ def test_c3_restating_same_preference_keeps_single_active(monkeypatch):
             await remember_explicit_preference(uid, "以后都用柱状图显示")
 
         _run(body())
-        rows = _semantic_rows(uid, status="active")
-        assert len(rows) == 1, f"同内容重申后 active 行应唯一: {rows}"
+        rows = _lt_rows(uid)
+        assert len(rows) == 1, f"同内容重申后长期库应唯一: {rows}"
+        assert rows[0]["revision"] == 1, "同内容不该涨 revision（那是改口径）"
+        assert rows[0]["evidence_count"] >= 2, f"重申应累加证据: {rows}"
     finally:
         _cleanup(uid)
 
@@ -282,11 +299,12 @@ def test_c4_conflicting_preference_supersedes_old_active(monkeypatch):
             await remember_explicit_preference(uid, "以后都用饼图显示")
 
         _run(body())
-        active = _semantic_rows(uid, status="active")
-        assert len(active) == 1, f"§六：新旧偏好冲突时旧应 superseded，实际 active={active}"
-        assert "饼图" in active[0]["content"], active
-        superseded = _semantic_rows(uid, status="superseded")
-        assert any("柱状图" in r["content"] for r in superseded), superseded
+        rows = _lt_rows(uid)
+        assert len(rows) == 1, f"同槽位只可能一行（结构约束）: {rows}"
+        content, revision, previous = rows[0]["content"], rows[0]["revision"], rows[0]["previous_content"]
+        assert "饼图" in content, rows
+        assert revision == 2, f"改口径应 revision+1: {rows}"
+        assert "柱状图" in (previous or ""), f"旧值应留在 previous_content: {rows}"
     finally:
         _cleanup(uid)
 
@@ -304,8 +322,9 @@ def test_c4_cross_dimension_preference_is_kept(monkeypatch):
             await remember_explicit_preference(uid, "以后都用饼图显示")
 
         _run(body())
-        active = [r["content"] for r in _semantic_rows(uid, status="active")]
-        assert len(active) == 2, f"跨维度偏好不应被 supersede: {active}"
+        rows = _lt_rows(uid)
+        assert len(rows) == 2, f"跨维度落两个槽位（粒度 / 呈现）: {rows}"
+        assert {r["memory_key"] for r in rows} == {"pref:granularity", "pref:chart"}
     finally:
         _cleanup(uid)
 

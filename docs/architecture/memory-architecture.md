@@ -5,6 +5,13 @@
 
 ## 一、四类记忆，职责分离
 
+> **存储注记（2026-11-09，plan `long-term-memory-table`）**：长期记忆有**独立表**
+> `memory.long_term_memory`，唯一键 `(user_id, memory_key)`；`memory_key` 是意图槽位
+> （`pref:chart` / `pref:granularity` / `fact:<内容指纹>`）。同槽位只可能一行 →
+> 「同一维度两条矛盾偏好同时 active」由**结构**排除，不靠 supersede 扫描。
+> `memory.semantic_entry` 退化为**工作区**：候选队列（待固化）+ 会话级临时口径（`scope=session` + TTL）。
+> 召回同时读两库并按语义带排序合并。
+
 | 类型 | 职责 | 关键规则 |
 |---|---|---|
 | **Session State** | 当前分析正在发生什么（year=2024、region=华东…） | 当前 session 有效、用户修改立即覆盖、不属于长期记忆 |

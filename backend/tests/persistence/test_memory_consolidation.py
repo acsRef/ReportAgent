@@ -52,6 +52,7 @@ def _cleanup(user_id: int) -> None:
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute("DELETE FROM memory.semantic_entry WHERE user_id=%s", (user_id,))
+    cur.execute("DELETE FROM memory.long_term_memory WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM memory.consolidation_cursor WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM memory.consolidation_run WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM app.users WHERE id=%s", (user_id,))
@@ -64,6 +65,20 @@ def _rows(user_id: int) -> list[dict]:
     cur.execute(
         "SELECT id, content, memory_type, status, scope, session_id, expires_at, promoted_at "
         "FROM memory.semantic_entry WHERE user_id=%s ORDER BY id",
+        (user_id,),
+    )
+    cols = [c[0] for c in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def _lt_rows(user_id: int) -> list[dict]:
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, memory_key, content, memory_type, confidence, revision, evidence_count "
+        "FROM memory.long_term_memory WHERE user_id=%s ORDER BY id",
         (user_id,),
     )
     cols = [c[0] for c in cur.description]
@@ -133,12 +148,12 @@ def test_candidate_with_long_marker_promotes_to_user_scoped(monkeypatch):
 
         summary = _run(consolidate(uid))
         assert summary["promoted"] == 1, summary
-        row = _rows(uid)[0]
-        assert row["status"] == "active"
-        assert row["scope"] == "user"
-        assert row["memory_type"] == "stable_preference"
-        assert row["expires_at"] is None
-        assert row["promoted_at"] is not None
+        # 长期标记 → 搬进长期库，候选行搬完即删（工作队列语义）
+        lt = _lt_rows(uid)
+        assert len(lt) == 1, lt
+        assert lt[0]["memory_key"] == "pref:chart"
+        assert lt[0]["memory_type"] == "stable_preference"
+        assert _rows(uid) == [], "候选行应已被搬走"
     finally:
         _cleanup(uid)
 
@@ -216,7 +231,7 @@ def test_second_run_is_idempotent(monkeypatch):
         second = _run(consolidate(uid))
         assert first["promoted"] == 1
         assert (second["considered"], second["promoted"]) == (0, 0), second
-        assert len(_rows(uid)) == 1, "重跑不得复制行"
+        assert len(_lt_rows(uid)) == 1, "重跑不得复制行"
         # 两次都记账（运维要能看出「跑过、没活干」）
         assert len(_runs(uid)) == 2
     finally:
@@ -290,7 +305,7 @@ def test_max_items_caps_one_run_and_next_run_continues(monkeypatch):
         second = _run(consolidate(uid, max_items=2))
         assert first["promoted"] == 2, first
         assert second["promoted"] == 1, second
-        assert all(r["promoted_at"] is not None for r in _rows(uid))
+        assert len(_lt_rows(uid)) == 3, _lt_rows(uid)
     finally:
         _cleanup(uid)
 
@@ -330,15 +345,11 @@ def test_repeated_inferred_fact_promotes_after_enough_evidence(monkeypatch):
 
         summary = _run(consolidate(uid))
         assert summary["promoted"] == 1, summary
-        row = _rows(uid)[0]
-        assert row["status"] == "active"
-        assert row["scope"] == "user"
+        lt = _lt_rows(uid)
+        assert len(lt) == 1, lt
+        assert lt[0]["memory_type"] == "stable_preference"
         # 证据升级 ≠ 用户明说：置信度必须是 medium，不能冒充 high
-        conn = _conn()
-        cur = conn.cursor()
-        cur.execute("SELECT confidence FROM memory.semantic_entry WHERE user_id=%s", (uid,))
-        assert cur.fetchone()[0] == "medium"
-        conn.close()
+        assert lt[0]["confidence"] == "medium", lt
     finally:
         _cleanup(uid)
 

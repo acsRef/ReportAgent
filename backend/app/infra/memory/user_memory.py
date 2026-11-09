@@ -6,6 +6,7 @@ import math
 from typing import Optional
 
 from app.infra.db.postgres import get_pool
+from app.infra.memory.long_term import LongTermMemory
 from app.infra.memory.scoring import lfu, lru, rank_key
 from app.embedding.service import get_embedder
 
@@ -62,6 +63,9 @@ class RankedMemory:
         self.status = status
         self.scope = scope
         self.confidence = confidence
+        # 这条来自哪个库：`semantic`（工作区：候选/会话级/历史）或 `long_term`（长期库）。
+        # record_access 靠它决定更新哪张表的热度（plan long-term-memory-table）。
+        self.store = "semantic"
 
 
 class UserMemory:
@@ -208,7 +212,7 @@ class UserMemory:
                        LIMIT $3""",
                     embedding, user_id, k * 3, session_id,
                 )
-                scored = [self._score_entry(r, r["sem_sim"], now=now) for r in rows]
+                scored = [self._score_entry(r, r["sem_sim"], now=now, store="semantic") for r in rows]
             else:
                 keywords = [w for w in query.lower().replace(",", " ").split() if len(w) > 1] if query else []
                 if not keywords:
@@ -233,18 +237,31 @@ class UserMemory:
                            ORDER BY last_access_time DESC LIMIT $3""",
                         user_id, patterns, k * 3, session_id,
                     )
-                scored = [self._score_entry(r, 0.0, now=now) for r in rows]
+                scored = [self._score_entry(r, 0.0, now=now, store="semantic") for r in rows]
+
+        # 2026-11-09（plan long-term-memory-table D2）：召回**合并两库**——
+        # 长期库（memory.long_term_memory）+ 工作区（semantic_entry 里 active 的会话级/历史行）。
+        # 两段都是 user_id 等值索引查，代价远小于一次 embedding 调用。
+        long_term_rows = await LongTermMemory().search(user_id, query, top_k=k)
+        scored.extend(
+            self._score_entry(r, r.get("sem_sim") or 0.0, now=now, store="long_term")
+            for r in long_term_rows
+        )
 
         # 排序按 (语义带, 带内热度)——热度只能裁决平局（理由见 infra/memory/scoring.py）
         scored.sort(key=lambda pair: pair[0], reverse=True)
         top = [mem for _, mem in scored[:k]]
 
         for m in top:
-            await self.record_access(m.id)
+            await self.record_access(m.id, store=m.store)
 
         return top
 
-    async def record_access(self, entry_id: int) -> None:
+    async def record_access(self, entry_id: int, *, store: str = "semantic") -> None:
+        """热度计数（LFU/LRU）。两库分别记——否则长期记忆热度永远不涨。"""
+        if store == "long_term":
+            await LongTermMemory().record_access(entry_id)
+            return
         pool = get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
@@ -335,7 +352,7 @@ class UserMemory:
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [mem for _, mem in scored[:k]]
 
-    def _score_entry(self, row, semantic_similarity: float, *, now=None):
+    def _score_entry(self, row, semantic_similarity: float, *, now=None, store="semantic"):
         """一行 → (排序键, RankedMemory)。
 
         排序键是 `(语义带, 带内热度)`：热度（LFU/LRU）只能在语义打平时裁决，
@@ -351,7 +368,9 @@ class UserMemory:
             + lru(_hours_since(last_access, now)) * 0.1
         )
         score = primary + aux
-        return rank_key(primary, aux), self._row_to_memory(row, score)
+        memory = self._row_to_memory(row, score)
+        memory.store = store
+        return rank_key(primary, aux), memory
 
     # --- 离线固化（plan 2026-11-09-memory-admission-and-consolidation）---------
 
@@ -373,6 +392,17 @@ class UserMemory:
                 user_id, limit,
             )
         return [dict(r) for r in rows]
+
+    async def drop_candidate(self, user_id: str, entry_id: int) -> None:
+        """候选行搬进长期库后删掉——候选池是工作队列，不是历史（plan long-term-memory-table）。"""
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM memory.semantic_entry WHERE id=$1 AND user_id=$2 "
+                "AND status='candidate'",
+                entry_id, user_id,
+            )
 
     async def promote_candidate(
         self,

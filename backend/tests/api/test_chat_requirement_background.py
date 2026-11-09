@@ -351,7 +351,7 @@ async def test_explicit_preference_short_circuits_without_graph(monkeypatch):
     _patch(monkeypatch, FakeGraph({}), calls)
     monkeypatch.setattr("app.main.build_requirement_analysis_graph", _boom)
 
-    async def fake_reply(query: str, user_id: int):
+    async def fake_reply(query: str, user_id: int, *, session_id=None):
         return "好的，已记住偏好：" + query
 
     monkeypatch.setattr("app.main._maybe_explicit_preference_reply", fake_reply)

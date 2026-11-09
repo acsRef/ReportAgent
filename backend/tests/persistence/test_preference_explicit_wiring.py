@@ -63,6 +63,7 @@ def _cleanup(user_id: int):
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute("DELETE FROM memory.semantic_entry WHERE user_id=%s", (user_id,))
+    cur.execute("DELETE FROM memory.long_term_memory WHERE user_id=%s", (user_id,))
     cur.execute("DELETE FROM app.users WHERE id=%s", (user_id,))
     conn.close()
 
@@ -97,13 +98,15 @@ def test_repeat_preference_statement_supersedes_to_single_active(monkeypatch):
         conn = _conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT count(*), count(*) FILTER (WHERE status='active') "
-            "FROM memory.semantic_entry WHERE user_id=%s AND content LIKE %s",
+            "SELECT count(*), max(revision) FROM memory.long_term_memory "
+            "WHERE user_id=%s AND content LIKE %s",
             (user_id, f"%{marker}%"),
         )
-        total, active = cur.fetchone()
+        total, revision = cur.fetchone()
         conn.close()
-        assert total == 1 and active == 1, f"重申应 supersede 到单条 active: total={total} active={active}"
+        # 长期库按意图槽位唯一：重申同一句 → 仍是一行，且不涨 revision
+        assert total == 1, f"重申应只有一行（槽位唯一）: total={total}"
+        assert revision == 1, f"同内容重申不该涨 revision: revision={revision}"
     finally:
         _cleanup(user_id)
 
@@ -147,15 +150,15 @@ def test_ui_preference_statement_writes_active_and_recallable(monkeypatch):
         conn = _conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT memory_type, status, confidence, scope FROM memory.semantic_entry "
+            "SELECT memory_type, confidence, memory_key FROM memory.long_term_memory "
             "WHERE user_id=%s AND content LIKE %s",
             (user_id, f"%{marker}%"),
         )
         rows = cur.fetchall()
         conn.close()
-        assert rows, "UI 偏好句未写入记忆行"
-        assert all(r[1] == "active" and r[2] == "high"
-                   and r[0] == "stable_preference" and r[3] == "user" for r in rows), (
+        # 2026-11-09（plan long-term-memory-table）：长期偏好进独立库，按意图槽位唯一
+        assert rows, "UI 偏好句未写入长期库"
+        assert all(r[0] == "stable_preference" and r[1] == "high" for r in rows), (
             f"行属性不符 §五: {rows}"
         )
 

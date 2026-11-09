@@ -49,36 +49,47 @@ def mm_spy(monkeypatch):
         superseded.append((user_id, key))
         return 1
 
+    long_term: list = []
+
+    async def fake_remember_long_term(self, **kwargs):
+        long_term.append(kwargs)
+        return {"id": 1, "revision": 1, "replaced": False,
+                "memory_key": kwargs.get("memory_key", "")}
+
     monkeypatch.setattr(
         "app.infra.memory.memory_manager.MemoryManager.remember_preference",
         fake_remember,
+    )
+    monkeypatch.setattr(
+        "app.infra.memory.memory_manager.MemoryManager.remember_long_term",
+        fake_remember_long_term,
     )
     monkeypatch.setattr(
         "app.infra.memory.memory_manager.MemoryManager.supersede_stable_preference",
         fake_supersede,
         raising=False,
     )
-    return saved, superseded
+    return saved, superseded, long_term
 
 
 @pytest.mark.asyncio
 async def test_explicit_preference_writes_active_high(mm_spy):
     from app.memory.manager import remember_explicit_preference
-    saved, superseded = mm_spy
+    saved, superseded, long_term = mm_spy
     rid = await remember_explicit_preference(1, "以后都用柱状图显示", source="user_turn")
     assert rid is not None
-    assert saved and saved[0]["status"] == "active"
-    assert saved[0]["confidence"] == "high"
-    assert saved[0]["memory_type"] == "stable_preference"
-    assert saved[0]["scope"] == "user"
-    # supersede 旧 active 同键被调用
-    assert superseded, "写新 active stable 前应先 supersede 旧 active"
+    # 2026-11-09（plan long-term-memory-table）：长期标记直接进**长期库**，按意图槽位 UPSERT，
+    # 不再写 semantic_entry（工作区只留候选/会话级）——唯一槽位取代了 supersede 扫描。
+    assert long_term and long_term[0]["memory_key"] == "pref:chart"
+    assert long_term[0]["confidence"] == "high"
+    assert long_term[0]["memory_type"] == "stable_preference"
+    assert saved == [], "长期偏好不应再落 semantic_entry"
 
 
 @pytest.mark.asyncio
 async def test_non_explicit_preference_is_discarded(mm_spy):
     from app.memory.manager import remember_explicit_preference
-    saved, _ = mm_spy
+    saved, _, long_term = mm_spy
     rid = await remember_explicit_preference(1, "帮我查下华东销售", source="user_turn")
     assert rid is None          # §四 Discard：非 explicit 不写 active
     assert saved == []
@@ -87,7 +98,7 @@ async def test_non_explicit_preference_is_discarded(mm_spy):
 @pytest.mark.asyncio
 async def test_inferred_facts_write_as_candidate(mm_spy):
     from app.memory.manager import remember_inferred_facts
-    saved, _ = mm_spy
+    saved, _, long_term = mm_spy
     await remember_inferred_facts(1, ["字段映射销售额=total_amount", "用户偏好柱状图"])
     assert saved and all(s["status"] == "candidate" for s in saved)  # §五 line 49
     assert all(s["confidence"] == "low" for s in saved)
@@ -97,7 +108,7 @@ async def test_inferred_facts_write_as_candidate(mm_spy):
 async def test_conversation_facts_route_to_candidate(mm_spy):
     # 修 §五 违规：compress 抽的 LLM-inferred fact 现落 candidate（非 active）
     from app.memory.manager import remember_conversation_facts
-    saved, _ = mm_spy
+    saved, _, long_term = mm_spy
     updates = {
         "extracted_schemas": [{"db_field": "total_amount"}],
         "extracted_preferences": ["偏好柱状图"],

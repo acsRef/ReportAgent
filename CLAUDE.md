@@ -128,6 +128,11 @@ State 五块拆分与字段所有权：RequestState / RequirementState / Executi
 > ② **有证据的推断可以升级**：同一说法被观察到 ≥3 次（`semantic_entry.evidence_count`）→ 批处理升级为 active，但 confidence **只到 medium**，`high` 永远只留给用户明确说的那句；
 > ③ **判定移出热路径**：晋级/过期/同维度收敛由 `app/memory/consolidation.py`（CLI `python -m app.jobs.memory_consolidation --all-users --dry-run`）每日跑一次，用 candidate 队列 + `promoted_at` 保证幂等与断点续跑；进程内定时器暂不启用（部署有 cron 就用 CLI）。
 > 因此「无 promotion pipeline」应理解为**无自动行为 promotion**，证据型 promotion 已存在且只在批处理里发生。
+>
+> **存储（2026-11-09 同日）**：长期记忆独立成表 `memory.long_term_memory`，唯一键 `(user_id, memory_key)`；
+> `memory_key` 是**意图槽位**（`pref:chart` / `pref:granularity` / `fact:<内容指纹>`），
+> 冲突写法从 supersede 链改为 **UPSERT 覆盖**（`revision+1`、旧值留 `previous_content`）。
+> `memory.semantic_entry` 退化为工作区（候选队列 + 会话级 TTL），召回时两库合并、热度分表记。
 
 全部细则见 [memory-architecture.md](docs/architecture/memory-architecture.md)。
 

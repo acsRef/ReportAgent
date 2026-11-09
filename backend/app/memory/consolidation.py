@@ -22,7 +22,7 @@ import logging
 from app.infra.memory.memory_manager import MemoryManager
 from app.memory.admission import classify_scope
 from app.memory.lifecycle import CONFIDENCE_EVIDENCE, CONFIDENCE_EXPLICIT_STATEMENT
-from app.memory.preferences import preference_dimension
+from app.memory.preferences import memory_key, preference_dimension
 
 logger = logging.getLogger(__name__)
 
@@ -94,13 +94,18 @@ async def consolidate(
                 summary["promoted"] += 1
                 continue
             try:
-                await mm.promote_candidate(
-                    int(user_id), row["id"],
-                    memory_type="stable_preference", scope="user",
+                await mm.remember_long_term(
+                    user_id=int(user_id),
+                    memory_key=memory_key(row["content"] or "", "stable_preference"),
+                    content=row["content"] or "",
+                    memory_type="stable_preference",
+                    importance=0.8,
+                    source="consolidation:evidence",
                     # 证据升级只给 medium，**永不给 high**：high 只留给用户明确说的那句
                     confidence=CONFIDENCE_EVIDENCE.value,
-                    expires_at=None,
+                    origin_id=row["id"],
                 )
+                await mm.drop_candidate(int(user_id), row["id"])
                 summary["promoted"] += 1
             except Exception as exc:  # noqa: BLE001
                 summary["errors"] += 1
@@ -119,12 +124,28 @@ async def consolidate(
             summary["promoted"] += 1
             continue
         try:
-            await mm.promote_candidate(
-                int(user_id), row["id"],
-                memory_type=adm.memory_type, scope=adm.scope,
-                confidence=CONFIDENCE_EXPLICIT_STATEMENT.value,
-                expires_at=expires_at,
-            )
+            if adm.is_long_term:
+                # 长期标记的候选 → 长期库（按槽位 UPSERT，同维度自然只有一行），
+                # 候选行是工作队列，搬完即删（plan long-term-memory-table D4）。
+                await mm.remember_long_term(
+                    user_id=int(user_id),
+                    memory_key=memory_key(row["content"] or "", adm.memory_type),
+                    content=row["content"] or "",
+                    memory_type=adm.memory_type,
+                    importance=0.8,
+                    source="consolidation:marker",
+                    confidence=CONFIDENCE_EXPLICIT_STATEMENT.value,
+                    origin_id=row["id"],
+                )
+                await mm.drop_candidate(int(user_id), row["id"])
+            else:
+                # 会话级 → 工作区里置 active + TTL（不搬库：它本来就该过期）
+                await mm.promote_candidate(
+                    int(user_id), row["id"],
+                    memory_type=adm.memory_type, scope=adm.scope,
+                    confidence=CONFIDENCE_EXPLICIT_STATEMENT.value,
+                    expires_at=expires_at,
+                )
             summary["promoted"] += 1
         except Exception as exc:  # noqa: BLE001
             summary["errors"] += 1

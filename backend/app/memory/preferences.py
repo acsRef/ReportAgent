@@ -17,6 +17,7 @@ V1 的折中（plan memory-system-conformance D3）：用一个**确定性词表
 """
 from __future__ import annotations
 
+import hashlib
 import re
 
 # 维度 → 关键词家族。顺序无依赖；命中多个维度时取**第一个命中**（互斥语义）。
@@ -70,3 +71,35 @@ def conflicting_contents(
 
 # 供测试/文档用的正则：确认「维度」概念不会被误当成自由文本匹配
 _DIMENSION_RE = re.compile("|".join(sorted(_DIMENSION_KEYWORDS, key=len, reverse=True)))
+
+# ---------------------------------------------------------------- 意图槽位（memory_key）
+
+def _normalize_for_key(content: str) -> str:
+    """事实指纹用的归一化：去空白、去标点、小写。
+
+    只做「同一个句子换个空格/标点」这一层归一——**不做同义归并**（那需要 embedding，
+    属于语义归并层的事，见 plan 的 NOT doing）。因此：
+    - 偏好有维度 → 落固定槽（`pref:chart` / `pref:granularity`）；
+    - 事实/无维度 → 落内容指纹槽（`fact:<sha1>`），等价于“同句去重、异句共存”。
+    """
+    return re.sub(r"[\s，。、；：！？,.;:!?\"'（）()\[\]【】]", "", (content or "").lower())
+
+
+def memory_key(content: str, memory_type: str = "stable_preference") -> str:
+    """把一条长期记忆归到**唯一槽位**（`memory.long_term_memory` 的唯一键之一）。
+
+    槽位化是「同一维度的两条矛盾偏好同时 active」这类冲突的**结构解**：
+    与其事后扫描收敛，不如让它们根本无处共存——新值 UPSERT 覆盖旧值。
+
+    | 输入 | 槽位 |
+    |---|---|
+    | 含图表词（柱状图/饼图/表格…） | `pref:chart` |
+    | 含粒度词（按月/按周…） | `pref:granularity` |
+    | 偏好但无维度 | `fact:<sha1(归一化正文)>`（同句去重，异句共存） |
+    | 事实/业务定义 | `fact:<sha1(归一化正文)>` |
+    """
+    dimension = preference_dimension(content)
+    if dimension:
+        return f"pref:{dimension}"
+    digest = hashlib.sha1(_normalize_for_key(content).encode("utf-8")).hexdigest()
+    return f"fact:{digest[:24]}"

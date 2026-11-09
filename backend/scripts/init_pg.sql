@@ -407,3 +407,33 @@ BEGIN
     END IF;
 END $$;
 
+
+-- 长期记忆独立表（plan 2026-11-09-long-term-memory-table）。
+-- 为什么要单独一张：semantic_entry 混着「候选队列 / 会话级临时 / 长期」三类，靠
+-- status+scope+expires_at 表达生命周期，冲突收敛只能靠代码（写侧 + 批处理两处都要维护）。
+-- 这里用 UNIQUE(user_id, memory_key) 把「同一意图槽位只能有一条生效」变成**结构约束**：
+-- 图表偏好一个槽、粒度一个槽、每条事实一个内容指纹槽；换说法/换取值 = UPSERT 覆盖，
+-- 旧内容留在 previous_content（一步回溯），revision 计数。
+CREATE TABLE IF NOT EXISTS memory.long_term_memory (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL,
+    memory_key VARCHAR(96) NOT NULL,
+    content TEXT NOT NULL,
+    memory_type VARCHAR(32) NOT NULL,
+    importance_score REAL DEFAULT 0.8,
+    intent_embedding VECTOR(1536),
+    source VARCHAR(64),
+    confidence VARCHAR(16) DEFAULT 'high',
+    evidence_count INT DEFAULT 1,
+    revision INT DEFAULT 1,
+    previous_content TEXT,
+    origin_id INT,
+    access_count INT DEFAULT 0,
+    last_access_time TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (user_id, memory_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_long_term_user
+    ON memory.long_term_memory (user_id);

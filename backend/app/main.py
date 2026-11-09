@@ -662,7 +662,7 @@ async def chat(request: ChatRequest, req: Request, user: dict = Depends(get_curr
 
 
 async def _maybe_explicit_preference_reply(
-    user_query: str, user_id: int,
+    user_query: str, user_id: int, *, session_id: str | None = None,
 ) -> str | None:
     """P16.5：显式偏好语句（§五）的图前短路回复。
 
@@ -680,7 +680,7 @@ async def _maybe_explicit_preference_reply(
         if extract_explicit_preference(user_query) is None:
             return None
         try:
-            await remember_explicit_preference(user_id, user_query)
+            await remember_explicit_preference(user_id, user_query, session_id=session_id)
             return f"好的，已记住偏好：{user_query}"
         except Exception as exc:  # noqa: BLE001 - 记忆写入失败不拦主链
             logger.warning("remember_explicit_preference failed: %s", exc)
@@ -967,7 +967,9 @@ async def _chat_requirement_analysis(
     requirement|report → done；失败 → error → done。
     """
     # P16.5 图前短路：纯正则 + 一次写入，不后台化（不需要图、不产 draft）。
-    reply = await _maybe_explicit_preference_reply(request.user_query, user["id"])
+    reply = await _maybe_explicit_preference_reply(
+        request.user_query, user["id"], session_id=session_id,
+    )
     if reply is not None:
         return EventSourceResponse(_iter_events(_light_reply_events(reply)))
 
