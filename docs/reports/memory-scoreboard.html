@@ -41,7 +41,7 @@ th.n,td.n{text-align:right}
 </style></head>
 <body><div class="wrap">
 <h1>Memory 召回质量与稳定性 · scoreboard</h1>
-<div class="sub">生成于 2026-11-09 20:14:21 ·
+<div class="sub">生成于 2026-11-09 20:39:20 ·
 数据集 <code>memory_gold_cases.json</code>（25 cases / 25 记忆）·
 重复 1 轮 · 判决 <span class="badge ok">PASS</span></div>
 
@@ -103,11 +103,11 @@ th.n,td.n{text-align:right}
     <td class="n">96.0%</td>
     <td class="n">0.900</td></tr>
 <tr><td>预热到 8 次访问（目标 others）</td>
-    <td class="n">36.0%</td>
-    <td class="n">56.0%</td>
-    <td class="n">0.471</td></tr>
+    <td class="n">68.0%</td>
+    <td class="n">92.0%</td>
+    <td class="n">0.793</td></tr>
 </tbody></table></div>
-<div class="note">被热度挤掉的 case：<code>q1, q2, q3, q8, q9, q10, q12, q15, q25, q30</code>；
+<div class="note">被热度挤掉的 case：<code>q1</code>；
 被热度救回的：<code>无</code>。
 召回分里 LFU 与 LRU 各占 0.1，而 `record_access` 每次召回就改写它们——所以
 <b>冷启动数字只说明「语义空间够不够近」，说明不了「热度会不会把对的挤下去」</b>。
@@ -121,7 +121,7 @@ th.n,td.n{text-align:right}
 
 <h2>复现</h2>
 <pre>D:/miniConda/envs/agent/python.exe evaluation/gold_memory_runner.py --repeat 1 --degrade --warm 8 --html docs/reports/memory-scoreboard.html</pre>
-<div class="sub">快照：<code>memory_gold_20261109_201421.json</code> ·
+<div class="sub">快照：<code>memory_gold_20261109_203920.json</code> ·
 本报告只回答「<b>召回对不对、稳不稳</b>」；「召回有没有真的改变答案」属于行为层（L2），
 需要 ON/OFF 配对真 LLM 实验，不在这份报告里。</div>
 </div></body></html>

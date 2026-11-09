@@ -229,3 +229,30 @@ D:/miniConda/envs/agent/python.exe evaluation/gold_memory_runner.py --repeat 1
 ①降低 LFU/LRU 合计权重并在同义区间内才生效；
 ②把 LFU/LRU 降级为**同分裁决**（语义差超过 ε 时不参与）；
 ③对 `access_count` 做全局归一化（除以该用户最大访问数）而不是绝对对数。
+### 方案 B 已落地（同日）：热度只做同分裁决
+
+用户拍板 B。新增 `backend/app/infra/memory/scoring.py`：
+
+- `band_index(primary)`：把 primary（`0.6×语义 + 0.2×重要性`）切成 `BAND_WIDTH=0.05` 的带；
+- `rank_key(primary, aux)` → `(带序号, 带内热度)`：**跨带时热度完全无效**，带内才裁决；
+- `lfu()` / `lru()` 沿用既有口径（log1p/10、72h 半衰），aux 钳在 `0.2`；
+- `UserMemory.search` / `get_user_preferences` / `QueryMemory.search_similar` 全部改用 `rank_key` 排序；
+  **`score` 展示值不变**（模型和前端看到的「相关度」还是原来的加权和）——变的只有排序键。
+
+换算成可解释的阈值：`0.05 / 0.6 ≈ 0.083` 相似度，即**语义差 8 个百分点以内算打平**，
+8 个百分点以上一律语义优先。
+
+**验收（同一 `--warm 8 --warm-target others` 口径）**：
+
+| 指标 | 修前 | 修后 |
+|---|---|---|
+| Recall@1 | 36.0% | **68.0%** |
+| Recall@3 | 56.0% | **92.0%** |
+| 被挤掉的 case | 10（q1 q2 q3 q8 q9 q10 q12 q15 q25 q30） | **1（q1）** |
+
+9/10 恢复。剩下的 `q1` 是「柱状图 + 区域年度 + 2024峰值」三金标同时要位置的 case，
+竞争者落进同一个语义带被裁决掉——这是方案 B 的**设计内**代价（真打平时本来该由热度说话）。
+`Recall@1` 仍低于冷启动的 84%，同理：带内顺序现在偏向热行，这是「同分由热度裁决」的直接结果。
+
+契约钉子：`backend/tests/contracts/test_memory_scoring_tiebreak.py`（4 例，纯函数，无 DB）——
+同带内热度生效 / 跨带热度无效 / 带宽度可解释成 0.083 相似度 / lfu·lru 口径与钳位。

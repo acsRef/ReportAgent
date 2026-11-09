@@ -6,6 +6,7 @@ import math
 from typing import Optional
 
 from app.infra.db.postgres import get_pool
+from app.infra.memory.scoring import lfu, lru, rank_key
 from app.embedding.service import get_embedder
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,14 @@ USER_MEMORY_CAP = 200
 # P4b §五/§六：召回只取 active 且未过期（candidate/superseded/expired 一律排除）。
 # 字面片段（无 bind 参数）→ 不影响各查询 $n 占位编号。
 _ACTIVE_RECALL_FILTER = "status = 'active' AND (expires_at IS NULL OR expires_at > NOW())"
+
+
+def _hours_since(ts: Optional[datetime.datetime], now=None) -> float | None:
+    """距今天数（小时）；None 表示「从未访问」→ 热度 0。"""
+    if ts is None:
+        return None
+    ref = now or datetime.datetime.now()
+    return max((ref - ts).total_seconds() / 3600.0, 0.0)
 
 
 def _scope_filter(session_param: int) -> str:
@@ -198,16 +207,7 @@ class UserMemory:
                        LIMIT $3""",
                     embedding, user_id, k * 3, session_id,
                 )
-                results = [
-                    self._row_to_memory(r, self._compute_score(
-                        semantic_similarity=r["sem_sim"],
-                        importance_score=r["importance_score"] or 0.0,
-                        access_count=r["access_count"] or 0,
-                        last_access_time=r.get("last_access_time"),
-                        now=now,
-                    ))
-                    for r in rows
-                ]
+                scored = [self._score_entry(r, r["sem_sim"], now=now) for r in rows]
             else:
                 keywords = [w for w in query.lower().replace(",", " ").split() if len(w) > 1] if query else []
                 if not keywords:
@@ -232,19 +232,11 @@ class UserMemory:
                            ORDER BY last_access_time DESC LIMIT $3""",
                         user_id, patterns, k * 3, session_id,
                     )
-                results = [
-                    self._row_to_memory(r, self._compute_score(
-                        semantic_similarity=0.0,
-                        importance_score=r["importance_score"] or 0.0,
-                        access_count=r["access_count"] or 0,
-                        last_access_time=r.get("last_access_time"),
-                        now=now,
-                    ))
-                    for r in rows
-                ]
+                scored = [self._score_entry(r, 0.0, now=now) for r in rows]
 
-        results.sort(key=lambda x: x.score, reverse=True)
-        top = results[:k]
+        # 排序按 (语义带, 带内热度)——热度只能裁决平局（理由见 infra/memory/scoring.py）
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        top = [mem for _, mem in scored[:k]]
 
         for m in top:
             await self.record_access(m.id)
@@ -337,19 +329,28 @@ class UserMemory:
                    ORDER BY last_access_time DESC LIMIT $2""",
                 user_id, k * 3, session_id,
             )
-            results = [
-                self._row_to_memory(r, self._compute_score(
-                    semantic_similarity=0.0,
-                    importance_score=r["importance_score"] or 0.0,
-                    access_count=r["access_count"] or 0,
-                    last_access_time=r.get("last_access_time"),
-                    now=now,
-                ))
-                for r in rows
-            ]
+            scored = [self._score_entry(r, 0.0, now=now) for r in rows]
 
-        results.sort(key=lambda x: x.score, reverse=True)
-        return results[:k]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [mem for _, mem in scored[:k]]
+
+    def _score_entry(self, row, semantic_similarity: float, *, now=None):
+        """一行 → (排序键, RankedMemory)。
+
+        排序键是 `(语义带, 带内热度)`：热度（LFU/LRU）只能在语义打平时裁决，
+        不能跨带反超（2026-11-09，plan memory-recall-scoreboard 追加）。
+        `score` 字段仍是原来的加权和，前端/模型看到的「相关度」不变。
+        """
+        importance = row["importance_score"] or 0.0
+        access_count = row["access_count"] or 0
+        last_access = row.get("last_access_time")
+        primary = max(semantic_similarity, 0.0) * 0.6 + min(importance, 1.0) * 0.2
+        aux = (
+            lfu(access_count) * 0.1
+            + lru(_hours_since(last_access, now)) * 0.1
+        )
+        score = primary + aux
+        return rank_key(primary, aux), self._row_to_memory(row, score)
 
     def _row_to_memory(self, row, score: float) -> RankedMemory:
         return RankedMemory(

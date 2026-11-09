@@ -6,6 +6,7 @@ import math
 from typing import Optional
 
 from app.infra.db.postgres import get_pool
+from app.infra.memory.scoring import rank_key
 from app.embedding.service import get_embedder
 
 
@@ -96,8 +97,12 @@ class QueryMemory:
             success_rate = r["success_count"] / max(r["success_count"] + (r.get("failure_count") or 0), 1)
             freq = min(math.log1p(r.get("access_count") or 1) / 10.0, 1.0)
             recency = self._recency_score(r.get("last_used_at"), now)
-            score = (r.get("sem_sim", 0.0) or 0.0) * 0.5 + success_rate * 0.3 + freq * 0.1 + recency * 0.1
-
+            sem = r.get("sem_sim", 0.0) or 0.0
+            # 与 UserMemory 同一套取舍（infra/memory/scoring.py）：语义+成功率是 primary，
+            # 频次+最近性只能在**同一语义带**内裁决平局。
+            primary = sem * 0.5 + success_rate * 0.3
+            aux = freq * 0.1 + recency * 0.1
+            score = primary + aux
             ranked.append({
                 "id": r["id"],
                 "question": r["question"],
@@ -107,12 +112,15 @@ class QueryMemory:
                 "failure_count": r.get("failure_count") or 0,
                 "access_count": r.get("access_count") or 0,
                 "score": round(score, 4),
+                "_rank": rank_key(primary, aux),
             })
 
             # record access async (fire & forget within same method for simplicity)
             await self.record_access(r["id"])
 
-        ranked.sort(key=lambda x: x["score"], reverse=True)
+        ranked.sort(key=lambda x: x["_rank"], reverse=True)
+        for item in ranked:
+            item.pop("_rank", None)
         return ranked[:top_k]
 
     async def record_access(self, entry_id: int) -> None:
