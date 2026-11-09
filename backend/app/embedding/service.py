@@ -96,6 +96,14 @@ class EmbeddingService:
             logger.warning("Embedding failed, falling back to keyword search: %s", exc)
             return None
 
+    def clear_cache(self) -> None:
+        """清空进程内向量缓存。
+
+        仅供评测/复现使用（`evaluation/gold_memory_runner.py --repeat`）：不清缓存时
+        第二轮起直接命中 LRU，「同输入重跑一致」测到的是缓存，不是真实世界的行为。
+        """
+        self._cache.clear()
+
     # --- 私有实现 ---
 
     async def _embed_text(self, text: str) -> list[float]:

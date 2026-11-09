@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>Memory 召回质量与稳定性 · scoreboard</title>
+<style>
+:root{--canvas:#f7f6f2;--paper:#fff;--ink:#1f2422;--muted:#6b7672;--line:#e2e0d8;
+--teal:#2f6f63;--amber:#a9741a;--red:#a6363b;--green:#2c6e4f;
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);
+font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+font-size:13.5px;line-height:1.6;padding:28px 32px 60px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:26px 0 10px;letter-spacing:.02em}
+.sub{color:var(--muted);font-size:12px;margin-bottom:18px}
+.kpis{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.kpi{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px 16px;min-width:112px}
+.kpi .k{font-size:11px;color:var(--muted);letter-spacing:.04em}
+.kpi .v{font:600 19px/1.2 var(--mono)}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:12px;
+margin-bottom:16px;overflow:hidden}
+table{width:100%;border-collapse:collapse}
+th,td{padding:7px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;color:var(--muted);letter-spacing:.05em;font-weight:600;
+background:#fbfaf6;text-transform:uppercase}
+tr:last-child td{border-bottom:none}
+td.num{font-family:var(--mono);text-align:right;white-space:nowrap}
+.badge{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;
+border:1px solid var(--line);color:var(--muted)}
+.badge.ok{color:var(--green);border-color:#bfe0cc;background:#f1f9f4}
+.badge.bad{color:var(--red);border-color:#f0c8ca;background:#fdf3f3}
+.badge.obs{color:var(--amber);border-color:#eddcb8;background:#fdf8ec}
+.bar{height:6px;border-radius:3px;background:#ecebe3;position:relative;min-width:80px}
+.bar>i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--teal)}
+code{font-family:var(--mono);font-size:11.5px;background:#eef2ef;padding:1px 5px;border-radius:4px}
+pre{background:#f8faf8;border:1px solid var(--line);border-radius:8px;padding:10px;
+overflow:auto;max-height:240px;margin:6px 0 0;font-family:var(--mono);font-size:11.5px}
+.note{background:#fdf8ec;border:1px solid #eddcb8;border-radius:10px;padding:10px 14px;
+font-size:12.5px;margin:10px 0}
+.wrap{max-width:1080px}
+th.n,td.n{text-align:right}
+</style></head>
+<body><div class="wrap">
+<h1>Memory 召回质量与稳定性 · scoreboard</h1>
+<div class="sub">生成于 2026-11-09 19:00:08 ·
+数据集 <code>memory_gold_cases.json</code>（25 cases / 25 记忆）·
+重复 3 轮 · 判决 <span class="badge ok">PASS</span></div>
+
+<div class="kpis">
+  <div class="kpi"><div class="k">Recall@1</div><div class="v">84.0%</div></div>
+  <div class="kpi"><div class="k">Recall@3</div><div class="v">96.0%</div></div>
+  <div class="kpi"><div class="k">MRR</div><div class="v">0.900</div></div>
+  <div class="kpi"><div class="k">Clean</div><div class="v">100.0%</div></div>
+  <div class="kpi"><div class="k">stable top-1</div><div class="v">100.0%</div></div>
+  <div class="kpi"><div class="k">mean Jaccard</div><div class="v">94.2%</div></div>
+</div>
+
+<h2>一、判据（gate）</h2>
+<div class="card"><table>
+<thead><tr><th>指标</th><th class="n">实测</th><th class="n">阈值</th><th>结论</th></tr></thead>
+<tbody><tr><td>Recall@1</td><td class='num'>0.840</td><td class='num'><code>&gt;= 0.80</code></td><td><span class='badge ok'>PASS</span></td></tr><tr><td>Recall@3</td><td class='num'>0.960</td><td class='num'><code>&gt;= 0.95</code></td><td><span class='badge ok'>PASS</span></td></tr><tr><td>MRR</td><td class='num'>0.900</td><td class='num'><code>&gt;= 0.85</code></td><td><span class='badge ok'>PASS</span></td></tr><tr><td>Clean</td><td class='num'>1.000</td><td class='num'><code>&gt;= 1.00</code></td><td><span class='badge ok'>PASS</span></td></tr><tr><td>spread(Recall@1)</td><td class='num'>0.000</td><td class='num'><code>&lt;= 0.10</code></td><td><span class='badge ok'>PASS</span></td></tr><tr><td>stable top-1</td><td class='num'>1.000</td><td class='num'><code>&gt;= 0.90</code></td><td><span class='badge ok'>PASS</span></td></tr><tr><td>mean Jaccard</td><td class='num'>0.942</td><td class='num'><code>&gt;= 0.90</code></td><td><span class='badge ok'>PASS</span></td></tr><tr><td>degrade: 不抛异常</td><td class='num'>1.000</td><td class='num'><code>= 1.0</code></td><td><span class='badge ok'>PASS</span></td></tr><tr><td>degrade: 降级告警可见</td><td class='num'>44.000</td><td class='num'><code>&gt; 0</code></td><td><span class='badge ok'>PASS</span></td></tr></tbody></table></div>
+
+<h2>二、分层（同一份召回，三种切法）</h2>
+<div class="card"><table>
+<thead><tr><th>维度</th><th>分桶</th><th class="n">样本</th><th class="n">命中率</th>
+<th class="n">MRR</th><th>分布</th></tr></thead>
+<tbody><tr><td>agent</td><td>confirmed_execution_sql_agent</td><td class='n'>30</td><td class='n'>100.0%</td><td class='n'>90.0%</td><td><div class="bar"><i style="width:100%"></i></div></td></tr><tr><td>agent</td><td>report_plan_analysis</td><td class='n'>27</td><td class='n'>100.0%</td><td class='n'>94.4%</td><td><div class="bar"><i style="width:100%"></i></div></td></tr><tr><td>agent</td><td>requirement_analyze</td><td class='n'>18</td><td class='n'>83.3%</td><td class='n'>83.3%</td><td><div class="bar"><i style="width:83%"></i></div></td></tr><tr><td>scope</td><td>query</td><td class='n'>24</td><td class='n'>100.0%</td><td class='n'>93.8%</td><td><div class="bar"><i style="width:100%"></i></div></td></tr><tr><td>scope</td><td>semantic</td><td class='n'>45</td><td class='n'>93.3%</td><td class='n'>90.0%</td><td><div class="bar"><i style="width:93%"></i></div></td></tr><tr><td>scope</td><td>semantic+query</td><td class='n'>6</td><td class='n'>100.0%</td><td class='n'>75.0%</td><td><div class="bar"><i style="width:100%"></i></div></td></tr><tr><td>gold_type</td><td>fact</td><td class='n'>33</td><td class='n'>90.9%</td><td class='n'>71.2%</td><td><div class="bar"><i style="width:91%"></i></div></td></tr><tr><td>gold_type</td><td>preference</td><td class='n'>39</td><td class='n'>92.3%</td><td class='n'>74.4%</td><td><div class="bar"><i style="width:92%"></i></div></td></tr><tr><td>gold_type</td><td>query</td><td class='n'>30</td><td class='n'>100.0%</td><td class='n'>79.5%</td><td><div class="bar"><i style="width:100%"></i></div></td></tr></tbody></table></div>
+<div class="note">分层是这份报告的重点：总分 96% 可能掩盖「法务类事实一个都没召回」。
+<b>gold_type</b> 按金标 key 聚合（一个 case 可同时有偏好与事实两种金标）。</div>
+
+<h2>三、稳定性（每轮清空 embedding 缓存）</h2>
+<div class="card"><table>
+<thead><tr><th class="n">轮次</th><th class="n">Recall@1</th><th class="n">Recall@3</th>
+<th class="n">MRR</th><th class="n">Clean</th></tr></thead>
+<tbody><tr><td class='n'>#1</td><td class='n'>84.0%</td><td class='n'>96.0%</td><td class='n'>0.900</td><td class='n'>100.0%</td></tr><tr><td class='n'>#2</td><td class='n'>84.0%</td><td class='n'>96.0%</td><td class='n'>0.900</td><td class='n'>100.0%</td></tr><tr><td class='n'>#3</td><td class='n'>84.0%</td><td class='n'>96.0%</td><td class='n'>0.900</td><td class='n'>100.0%</td></tr></tbody></table></div>
+<div class="card"><table>
+<thead><tr><th>最不稳的 case</th><th class="n">跨轮 Jaccard</th><th>top-1</th>
+<th class="n">召回条数/轮</th></tr></thead>
+<tbody><tr><td><code>q20</code></td><td class='n'>55.6%</td><td>稳定</td><td class='n'>[2, 2, 2]</td></tr><tr><td><code>q1</code></td><td class='n'>66.7%</td><td>稳定</td><td class='n'>[3, 3, 3]</td></tr><tr><td><code>q4</code></td><td class='n'>66.7%</td><td>稳定</td><td class='n'>[3, 3, 3]</td></tr><tr><td><code>q18</code></td><td class='n'>66.7%</td><td>稳定</td><td class='n'>[3, 3, 3]</td></tr><tr><td><code>q2</code></td><td class='n'>100.0%</td><td>稳定</td><td class='n'>[3, 3, 3]</td></tr><tr><td><code>q3</code></td><td class='n'>100.0%</td><td>稳定</td><td class='n'>[3, 3, 3]</td></tr></tbody></table></div>
+<div class="note">清缓存是必须的：不清的话第二轮起向量直接命中进程内 LRU，
+测出来的「稳定」是<b>缓存稳定</b>。</div>
+
+<h2>四、降级探针（强制 embedding 失败）</h2>
+<div class="card"><table>
+<thead><tr><th>项</th><th>实测</th></tr></thead>
+<tbody>
+<tr><td>是否抛异常</td><td><span class="badge ok">没抛（符合预期）</span>
+ </td></tr>
+<tr><td>降级告警次数</td><td><code>44</code>
+ （<code>Embedding failed, falling back to keyword search</code>）</td></tr>
+<tr><td>降级后仍有召回的 case 占比</td><td><code>28.0%</code></td></tr>
+<tr><td>降级后 Recall@3</td><td><code>28.0%</code></td></tr>
+</tbody></table></div>
+<div class="note">降级「优雅」与否看中间那两行：有告警 = 可定位；但
+<b>有召回的 case 占比</b>才说明还剩多少能力。keyword 分支按空白字符切词，
+中文 query 没有空格 → 整句当一个 token → 语义记忆可能等于全失效。</div>
+
+<h2>五、逐例明细</h2>
+<div class="card"><table>
+<thead><tr><th>case</th><th>agent</th><th>scope</th><th>gold</th>
+<th>名次</th><th>forbidden 命中</th></tr></thead>
+<tbody><tr><td><code>q1</code></td><td>report_plan_analysis</td><td>semantic</td><td>pref_report_bar、pref_region_annual、fact_2024_peak</td><td>[1, 2]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q2</code></td><td>report_plan_analysis</td><td>semantic</td><td>pref_report_pie、pref_region_annual</td><td>[1, 3]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q3</code></td><td>report_plan_analysis</td><td>semantic</td><td>pref_report_table</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q4</code></td><td>report_plan_analysis</td><td>semantic</td><td>pref_region_monthly</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q5</code></td><td>report_plan_analysis</td><td>semantic</td><td>pref_amount_decimal</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q6</code></td><td>report_plan_analysis</td><td>semantic</td><td>pref_report_table、pref_return_table</td><td>[2, 1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q8</code></td><td>report_plan_analysis</td><td>semantic</td><td>fact_region_three、pref_region_annual</td><td>[2, 1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q9</code></td><td>report_plan_analysis</td><td>semantic</td><td>pref_report_bar、pref_report_table</td><td>[3, 2]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q10</code></td><td>report_plan_analysis</td><td>semantic</td><td>fact_gmv_net</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q12</code></td><td>requirement_analyze</td><td>semantic</td><td>fact_region_three、pref_region_annual</td><td>[3, 1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q13</code></td><td>requirement_analyze</td><td>semantic</td><td>fact_gmv_net</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q15</code></td><td>requirement_analyze</td><td>semantic</td><td>fact_store_top</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q16</code></td><td>requirement_analyze</td><td>semantic</td><td>fact_return_rate</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q17</code></td><td>requirement_analyze</td><td>semantic</td><td>fact_gmv_net</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q18</code></td><td>requirement_analyze</td><td>semantic</td><td>fact_promo_q3</td><td>[]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q19</code></td><td>confirmed_execution_sql_agent</td><td>query</td><td>qry_region_sales</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q20</code></td><td>confirmed_execution_sql_agent</td><td>query</td><td>qry_region_sales</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q21</code></td><td>confirmed_execution_sql_agent</td><td>query</td><td>qry_monthly_trend</td><td>[2]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q22</code></td><td>confirmed_execution_sql_agent</td><td>query</td><td>qry_store_rank</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q23</code></td><td>confirmed_execution_sql_agent</td><td>query</td><td>qry_promo_effect</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q24</code></td><td>confirmed_execution_sql_agent</td><td>query</td><td>qry_return_monthly</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q25</code></td><td>confirmed_execution_sql_agent</td><td>semantic+query</td><td>fact_gmv_net、qry_region_sales</td><td>[2, 5]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q27</code></td><td>confirmed_execution_sql_agent</td><td>query</td><td>qry_region_quarter</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q28</code></td><td>confirmed_execution_sql_agent</td><td>query</td><td>qry_region_sales</td><td>[1]</td><td><span class='badge ok'>0</span></td></tr><tr><td><code>q30</code></td><td>confirmed_execution_sql_agent</td><td>semantic+query</td><td>fact_store_top、qry_store_rank</td><td>[1, 4]</td><td><span class='badge ok'>0</span></td></tr></tbody></table></div>
+
+<h2>复现</h2>
+<pre>D:/miniConda/envs/agent/python.exe evaluation/gold_memory_runner.py --repeat 3 --degrade --html docs/reports/memory-scoreboard.html</pre>
+<div class="sub">快照：<code>memory_gold_20261109_190008.json</code> ·
+本报告只回答「<b>召回对不对、稳不稳</b>」；「召回有没有真的改变答案」属于行为层（L2），
+需要 ON/OFF 配对真 LLM 实验，不在这份报告里。</div>
+</div></body></html>
