@@ -145,6 +145,12 @@ CREATE INDEX IF NOT EXISTS idx_query_failure_user_time
 --    （候选池 = status='candidate' AND promoted_at IS NULL，天然可重跑）。
 ALTER TABLE memory.semantic_entry ADD COLUMN IF NOT EXISTS promoted_at TIMESTAMP;
 
+-- ④ 证据计数（plan memory-admission-and-consolidation D6，用户批准修订 §五）：
+-- 同一 content 被反复观察到（跨轮次/跨会话）时 +1。它与 access_count 分工不同：
+-- access_count 是**召回热度**（读侧），evidence_count 是**写入侧证据**（同一个说法被说了几次）。
+-- 写侧去重是「同内容更新」，不加这一列就永远数不出「这条被说过 3 次」。
+ALTER TABLE memory.semantic_entry ADD COLUMN IF NOT EXISTS evidence_count INT DEFAULT 1;
+
 -- ② 每个用户一个游标：只用于「上次成功跑到什么时候」，供运维判断批处理落后多久。
 CREATE TABLE IF NOT EXISTS memory.consolidation_cursor (
     user_id INT PRIMARY KEY,

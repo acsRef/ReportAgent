@@ -21,7 +21,7 @@ import logging
 
 from app.infra.memory.memory_manager import MemoryManager
 from app.memory.admission import classify_scope
-from app.memory.lifecycle import CONFIDENCE_EXPLICIT_STATEMENT
+from app.memory.lifecycle import CONFIDENCE_EVIDENCE, CONFIDENCE_EXPLICIT_STATEMENT
 from app.memory.preferences import preference_dimension
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ async def consolidate(
     *,
     dry_run: bool = False,
     max_items: int = 200,
+    min_evidence: int = 3,
     now: datetime.datetime | None = None,
 ) -> dict:
     """对单个用户跑一次固化，返回记账字典（也写进 `memory.consolidation_run`）。
@@ -76,9 +77,34 @@ async def consolidate(
     for row in candidates:
         summary["considered"] += 1
         adm = classify_scope(row["content"] or "")
+        evidence = int(row.get("evidence_count") or 1)
         if not adm.writes_active:
-            # 没有作用域标记：继续留队等证据（§五 不允许推断升级）
-            summary["skipped"] += 1
+            # 无作用域标记：默认留队；**但证据够了就升级**（D6，§五 修订，用户 2026-11-09 批准）
+            if evidence < min_evidence:
+                summary["skipped"] += 1
+                continue
+            summary["actions"].append({
+                "entry_id": row["id"], "content": row["content"][:60],
+                "scope": "user", "memory_type": "stable_preference",
+                "confidence": CONFIDENCE_EVIDENCE.value,
+                "evidence_count": evidence,
+                "reason": "evidence-promotion",
+            })
+            if dry_run:
+                summary["promoted"] += 1
+                continue
+            try:
+                await mm.promote_candidate(
+                    int(user_id), row["id"],
+                    memory_type="stable_preference", scope="user",
+                    # 证据升级只给 medium，**永不给 high**：high 只留给用户明确说的那句
+                    confidence=CONFIDENCE_EVIDENCE.value,
+                    expires_at=None,
+                )
+                summary["promoted"] += 1
+            except Exception as exc:  # noqa: BLE001
+                summary["errors"] += 1
+                logger.warning("consolidate: evidence promote failed id=%s: %s", row["id"], exc)
             continue
         expires_at = (
             started + datetime.timedelta(hours=adm.ttl_hours) if adm.ttl_hours else None

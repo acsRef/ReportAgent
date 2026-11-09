@@ -37,5 +37,11 @@ CONFIDENCE_EXPLICIT_DEFINITION = MemoryConfidence.HIGH
 # LLM-inferred preference → status=candidate（不进 active）；confidence 记 low
 CONFIDENCE_LLM_INFERRED = MemoryConfidence.LOW
 
+# 2026-11-09（plan memory-admission-and-consolidation D6，用户批准修订 §五）：
+# **有证据的推断**可以升级为 active，但置信度只到 medium —— high 永远只给
+# 「用户明确说的那一句」。证据 = 同一说法在后续轮次被观察到 ≥ N 次
+# （`semantic_entry.evidence_count`，与召回热度 access_count 分开计）。
+CONFIDENCE_EVIDENCE = MemoryConfidence.MEDIUM
+
 # 可召回状态：只有 active（candidate/superseded/expired 一律不召回）
 RECALLABLE_STATUSES: frozenset[str] = frozenset({MemoryStatus.ACTIVE.value})

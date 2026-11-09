@@ -45,6 +45,18 @@ Task Outcome → Memory Write Decision → Insert / Update / Discard
 
 ## 五、V1 简化（冻结）
 
+> **修订（2026-11-09，用户批准，plan `2026-11-09-memory-admission-and-consolidation`）**：
+> 本节三条不再全部成立，改写如下（历史原文保留在下方，作追溯）：
+>
+> | 原文 | 现状 |
+> |---|---|
+> | 无 promotion pipeline | **有，但只在离线批处理里**：`app/memory/consolidation.py` 每日跑一次。热路径仍然不做 promotion |
+> | confidence 规则固定（inferred 一律 low、不进 active） | `explicit → high` 不变；**新增证据型**：同一说法被观察到 ≥ N 次（`semantic_entry.evidence_count`）→ 批处理升级为 active，confidence = **medium**（never high） |
+> | temporary_preference 绑 session、任务结束可过期 | **写入侧开始真的产生它**（`app/memory/admission.py` 的会话标记：这次/先/暂时/本次 → `active` + `scope=session` + 24h TTL）；此前生产恒为空 |
+>
+> 另外新增**写入侧准入**这一层（原文没有）：记不记（闸 1 拒绝一次性任务参数/单条数据引用/提问/寒暄）、
+> 记给谁记多久（闸 2 长期 vs 会话 vs 无标记 → candidate）。判据全部确定性，模型仍只能“提候选”。
+
 - **行为偏好自动 promotion 降级不做**。第一版只有 `Explicit user statement → stable_preference`（"以后都用柱状图"直接存）；行为证据**不自动**变成长期记忆。candidate/evidence_count/promotion 机制留到有时间再做。
 - **Confidence 不让 LLM 自己拍**。规则固定：`explicit_user_statement → confidence = high`；`explicit_business_definition → confidence = high`；`LLM inferred preference → 不进入 active long-term memory`。先把 Memory 做成「可靠记忆」而不是「猜测记忆」，以此控制 memory pollution。
 - **temporary_preference 绑定 session_id，任务结束可过期**；Session State 与 TemporaryPreference 逻辑上分开、存储上第一版统一放 `agent.session`（字段区分），等 Evaluation 证明需要独立生命周期再拆表。

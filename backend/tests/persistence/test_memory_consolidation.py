@@ -293,3 +293,66 @@ def test_max_items_caps_one_run_and_next_run_continues(monkeypatch):
         assert all(r["promoted_at"] is not None for r in _rows(uid))
     finally:
         _cleanup(uid)
+
+
+# ------------------------------------------------- 证据升级（D6，§五 修订）
+
+
+def test_repeated_inferred_fact_promotes_after_enough_evidence(monkeypatch):
+    """同一说法被观察到 3 次 → 批处理升级为 active，但置信度只到 medium。"""
+    _patch_embedders(monkeypatch)
+    uid = _make_user()
+    try:
+        from app.infra.memory.memory_manager import MemoryManager
+
+        # 同内容重复写入 = evidence_count 累加（写侧去重是同内容更新，不是新增行）
+        for _ in range(3):
+            _run(
+                MemoryManager().remember_preference(
+                    user_id=str(uid), content="净销售额是扣退款后的口径",
+                    memory_type="insight", importance=0.5, source="context_compress",
+                    scope="user", status="candidate", confidence="low",
+                )
+            )
+        rows_before = _rows(uid)
+        assert len(rows_before) == 1, "同内容不应产生多行"
+        conn = _conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT evidence_count, confidence FROM memory.semantic_entry WHERE user_id=%s",
+            (uid,),
+        )
+        evidence, _ = cur.fetchone()
+        conn.close()
+        assert evidence == 3, f"证据计数应累加到 3，实际 {evidence}"
+
+        from app.memory.consolidation import consolidate
+
+        summary = _run(consolidate(uid))
+        assert summary["promoted"] == 1, summary
+        row = _rows(uid)[0]
+        assert row["status"] == "active"
+        assert row["scope"] == "user"
+        # 证据升级 ≠ 用户明说：置信度必须是 medium，不能冒充 high
+        conn = _conn()
+        cur = conn.cursor()
+        cur.execute("SELECT confidence FROM memory.semantic_entry WHERE user_id=%s", (uid,))
+        assert cur.fetchone()[0] == "medium"
+        conn.close()
+    finally:
+        _cleanup(uid)
+
+
+def test_single_inferred_fact_is_not_promoted(monkeypatch):
+    """只出现一次 → 证据不足，继续留队（§五 的保守面不变）。"""
+    _patch_embedders(monkeypatch)
+    uid = _make_user()
+    try:
+        _seed_candidate(uid, "净销售额是扣退款后的口径")
+        from app.memory.consolidation import consolidate
+
+        summary = _run(consolidate(uid, min_evidence=3))
+        assert (summary["promoted"], summary["skipped"]) == (0, 1), summary
+        assert _rows(uid)[0]["status"] == "candidate"
+    finally:
+        _cleanup(uid)

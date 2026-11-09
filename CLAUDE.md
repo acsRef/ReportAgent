@@ -123,6 +123,12 @@ State 五块拆分与字段所有权：RequestState / RequirementState / Executi
 
 四类记忆（Session / Conversation / Semantic / Query）职责分离；读取时机 Recall Before Agent + Selective Recall 四触发条件；写入时机 Write After Reliable Event；V1 简化三条（无 promotion pipeline、confidence 规则固定、temporary_preference 绑 session）；Lifecycle 状态机 candidate→active→superseded/expired；Conflict Priority 固定序——**Schema 永远不能被 Memory 覆盖**。
 
+> **修订（2026-11-09，用户批准，plan `2026-11-09-memory-admission-and-consolidation`）**：V1 三条里两条被放宽，一条被补齐——
+> ① **写入侧准入**：`app/memory/admission.py` 决定「记不记 / 记给谁 / 记多久」——长期标记（以后/默认/每次）→ active+user 无期限；会话标记（这次/先/暂时）→ active+session+24h（此前 `temporary_preference` 生产恒为空）；无标记 → candidate；
+> ② **有证据的推断可以升级**：同一说法被观察到 ≥3 次（`semantic_entry.evidence_count`）→ 批处理升级为 active，但 confidence **只到 medium**，`high` 永远只留给用户明确说的那句；
+> ③ **判定移出热路径**：晋级/过期/同维度收敛由 `app/memory/consolidation.py`（CLI `python -m app.jobs.memory_consolidation --all-users --dry-run`）每日跑一次，用 candidate 队列 + `promoted_at` 保证幂等与断点续跑；进程内定时器暂不启用（部署有 cron 就用 CLI）。
+> 因此「无 promotion pipeline」应理解为**无自动行为 promotion**，证据型 promotion 已存在且只在批处理里发生。
+
 全部细则见 [memory-architecture.md](docs/architecture/memory-architecture.md)。
 
 > 现状（2026-08-29 P4c 后）：P3/P4a/P4b 骨架已落（p3 分支 614 passed / 0 failed）；P4c 在 p4c 分支（5 commit: 9fefa44 graph caller 翻转 / 8b16835 主链 smoke / 7d58eb0 selective 收益 / 23331aa assembler real Filter & Budget / 78bd6b7 golden before/after）——4 graph caller（requirement_analysis_graph._requirement_parse + confirmed_execution_graph._confirmed_sql_agent + requirement_parser.parse_requirement + sql_graph._plan/_generate_sql）真接 `ContextRuntime.build()`；assembler 真实装 dedup by `(source, ref_id)` + §七 kind 排序（query > semantic > preference）+ Token Budget 截断（`P4C_ASSEMBLER_TOKEN_BUDGET` env，默认 4000 tokens ≈ 12000 chars）；SelectiveRecallPolicy §二四触发 + §三分流 在主链真触发；facade `build_session_context` 兼容路径保留（外部 import 仍可用）。**离线 proxy**：新增契约层 41/41 PASS + 既有 contract suite 84/84 PASS + `evaluation/tests/test_schema.py` 40/40 PASS。真端到端 baseline runner（`evaluation/runner.py`）留 P12 手动门（CLAUDE.md §15）。对比结论见 [docs/p4c-golden-before-after.md](docs/p4c-golden-before-after.md)。

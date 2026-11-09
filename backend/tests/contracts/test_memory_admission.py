@@ -133,3 +133,33 @@ def test_policy_extracts_session_marker_wording(text):
     adm = classify_scope(text)
     assert adm.reason == "session-marker"
     assert adm.scope == "session"
+
+
+# --- 闸 1（完整版）：一次性任务参数 / 单条数据引用 / 提问 ----------------------
+
+@pytest.mark.parametrize(
+    "text,reason",
+    [
+        ("看下 2024 年的销售额", "task-parameter"),
+        ("查一下 3 月的明细", "task-parameter"),
+        ("分析2025年各区域表现", "task-parameter"),
+        ("这个数字是多少来着", "deictic-reference"),
+        ("刚才那个结果重算一下", "deictic-reference"),
+        ("为什么跌了", "question"),
+        ("能不能按周看", "question"),
+    ],
+)
+def test_gate1_rejects_non_memory_utterances(text, reason):
+    ok, why = is_admissible(text)
+    assert ok is False, f"{text} 不该进记忆"
+    assert why == reason
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["以后都用柱状图显示", "这次先按周看", "净销售额是扣退款后的口径", "默认按月的粒度来"],
+)
+def test_gate1_keeps_durable_statements(text):
+    ok, why = is_admissible(text)
+    assert ok is True, f"{text} 是值得记的，被误杀了：{why}"
+    assert why == "ok"

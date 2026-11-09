@@ -107,7 +107,8 @@ class UserMemory:
                 )
                 await conn.execute(
                     "UPDATE memory.semantic_entry SET access_count=access_count+1, "
-                    "last_access_time=NOW()"
+                    "last_access_time=NOW(), "
+                    "evidence_count=COALESCE(evidence_count, 1) + 1"
                     + (", memory_type=$5, status=$2, confidence=$3, scope=$4, updated_at=NOW()" if promote else "")
                     + " WHERE id=$1",
                     *( (existing["id"], status, confidence, scope, memory_type) if promote else (existing["id"],) ),
@@ -364,7 +365,8 @@ class UserMemory:
         pool = get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                """SELECT id, content, session_id, created_at
+                """SELECT id, content, session_id, created_at,
+                          COALESCE(evidence_count, 1) AS evidence_count
                    FROM memory.semantic_entry
                    WHERE user_id=$1 AND status='candidate' AND promoted_at IS NULL
                    ORDER BY created_at ASC LIMIT $2""",

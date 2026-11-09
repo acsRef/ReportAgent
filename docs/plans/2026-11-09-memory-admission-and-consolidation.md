@@ -208,3 +208,62 @@ dry-run：considered=2 promoted=1 skipped=1（只算不写）
 - 闸 1 完整拒绝词表：等你过一遍（尤其“一次性任务参数”这一条）。
 - 语义近似 supersede（措辞不同但同义）：要 embedding 阈值与误杀评估。
 - 进程内每日定时器：CLI 已验证可用，进程内循环留到你确认部署形态后再开（默认关）。
+## 追加（2026-11-09 晚）：D6 证据升级 + 闸 1 完整表 + 手动验证脚本
+
+用户拍板：定时器先不做；**把另外两件（推断升级、闸 1 完整词表）做掉，并专门写个测试用的脚本**。
+
+### ① D6 证据升级（修订 §五，已写进 CLAUDE.md §6 与 memory-architecture.md §五）
+
+- 新增列 `semantic_entry.evidence_count`（默认 1）：写侧「同内容更新」时 +1。
+  它与 `access_count` 分工不同——后者是**召回热度**（读侧），前者是**写入侧证据**（同一说法被说了几次）。
+  不加这一列就永远数不出「这条被说过 3 次」：写侧去重是同内容 UPDATE，不新增行。
+- 批处理规则：无作用域标记的 candidate 若 `evidence_count >= min_evidence`（默认 3）→
+  晋级 `active` / `user` / `stable_preference`，confidence = **medium**（新增 `CONFIDENCE_EVIDENCE`），
+  `high` 永远只留给用户明确说的那句。证据不足 → 继续留队。
+- 为什么证据够了才升级：一次 LLM 抽取的可靠性远低于用户明说；重复出现是**唯一**能低成本拿到的
+  跨会话佐证。这条把 §五 从「inferred 永不 active」放宽成「有证据可以，但置信度封顶 medium」。
+
+### ② 闸 1 完整拒绝表（`app/memory/admission.py`，已加 11 条样本测试）
+
+| reason | 命中示例 | 为什么 |
+|---|---|---|
+| `task-parameter` | 「看下 2024 年的销售额」「查一下 3 月的明细」 | 一次性任务参数属于 Session State，不是记忆 |
+| `deictic-reference` | 「这个数字」「刚才那个结果」 | 单条数据引用，没有跨会话价值 |
+| `question` | 「为什么跌了」「能不能按周看」 | 提问不是事实 |
+| `greeting` / `too-short` / `empty` | 「你好」「看图」 | 无信息量 |
+
+反例测试同时钉住**不能误杀**的四句（「以后都用柱状图显示」「这次先按周看」「净销售额是扣退款后的口径」「默认按月的粒度来」）——
+误杀的代价是「该记的口径永远丢了」，比多记一条贵得多。
+
+### ③ 专门的手动验证脚本（用户要的“测试用”）
+
+`evaluation/memory_consolidation_scenario.py`：把一段**三天三会话**的对话序列灌进临时用户，
+打印「原话 → 准入判定 → 落库形态」，再跑 dry-run 与真跑，最后打印固化前后对照。默认跑完即删，
+`--keep` 保留、`--plan-only` 只演不写、`--min-evidence` 调阈值。
+
+真机输出（节选）：
+
+```
+原话                  入口      准入  理由             落库形态
+以后都用柱状图显示       explicit  记    ok              active/user
+看下 2024 年的销售额    explicit  不记   task-parameter  —
+这次先按周看            explicit  记    ok              active/session/24h
+净销售额是扣退款后的口径  inferred  记    ok              candidate/user（×3 → 证据=3）
+柱状图挺好的            inferred  记    ok              candidate/user（证据=1）
+为什么华东掉得这么快      explicit  不记   question        —
+
+dry-run：considered=2 promoted=1 skipped=1
+真跑：  promoted=1 → 净销售额… 晋级 active/user，confidence=medium（证据 3）
+        柱状图挺好的 仍是 candidate/low
+```
+
+### 回归
+
+`pytest backend/tests/contracts backend/tests/persistence -k "memory or admission or consolidation or recall or scoring or preference"`
+→ **192 passed**；单独两个新文件：准入矩阵 **36 passed**、固化行为 **10 passed**。
+
+### 更新后的「仍未做」
+
+- 语义近似 supersede（措辞不同但同义）：要 embedding 阈值与误杀评估。
+- 进程内定时器：按用户要求暂不做，部署侧用 cron 调 CLI。
+- 证据口径目前只按 `content` 精确聚合：换个说法说三遍不会累加（这正是语义 supersede 的同一块地基）。
