@@ -3,7 +3,7 @@ import { startContractBackend, stopBackend } from '../helpers/llm-mock'
 import { auth } from '../helpers/auth'
 import { WorkbenchPage } from '../helpers/page-objects'
 
-test.describe('02-clarification — 缺字段 → PATCH 补全 → 确认 → 报告', () => {
+test.describe('02-clarification — 缺字段 → 一次一问作答 → 确认 → 报告', () => {
   test.beforeAll(async () => {
     await startContractBackend('clarification')
   }, { timeout: 120_000 })
@@ -11,7 +11,7 @@ test.describe('02-clarification — 缺字段 → PATCH 补全 → 确认 → �
     await stopBackend()
   })
 
-  test('缺指标字段时渲染缺失组，补全后确认生成报告', async ({ page }) => {
+  test('缺指标时先问一次（不是整卡表单），答完出确认条并生成报告', async ({ page }) => {
     await auth(page)
     const wb = new WorkbenchPage(page)
     await wb.open()
@@ -20,20 +20,18 @@ test.describe('02-clarification — 缺字段 → PATCH 补全 → 确认 → �
     await wb.sendQuery('帮我分析销售额')
     await wb.expectRequirementCard()
 
-    // 卡含缺指标字段（后端 fixture 返回 missing_fields=["metric"]）
-    await expect(page.locator('.wb-option-group').filter({ hasText: '指标' })).toBeVisible()
+    // 一次一问（`slot_order` = metric > time_range > granularity > scope > analysis_intent）：
+    // 指标由用户原话确定性填上（「销售额」在句子里），真正缺的是**分析视角** →
+    // 渲染的是澄清提问，不是 2026-11-04 之前那张带 checkbox 组的整卡
+    // （`RequirementCardView variant="full"` 已无生产 caller）。
+    await expect(wb.currentAsk()).toHaveAttribute('aria-label', '需求澄清')
+    await expect(wb.currentAsk()).toContainText('视角')
+    await expect(wb.currentAsk().locator('.wb-ask-option').first()).toBeVisible()
 
-    // 勾选「销售额」
-    await page
-      .locator('.wb-option-group', { hasText: '指标' })
-      .locator('label.atelier-checkbox', { hasText: '销售额' })
-      .click()
+    // 作答（点选项 = PATCH）→ 服务端推导下一个槽位；答完就是确认条
+    await wb.resolveRequirementIfAsked()
+    await expect(wb.currentAsk()).toHaveAttribute('aria-label', '需求确认')
 
-    // 「补充完成，查看确认」→ 本地置 complete → 卡变完整态
-    await wb.clickPrimary('补充完成，查看确认')
-    await expect(page.locator('.wb-req-status')).toContainText('信息完整 · 待确认')
-
-    // 再点「确认并生成报告」→ PATCH → 服务端归一化 → 自动确认
     await wb.confirmRequirement()
 
     await wb.expectReport()

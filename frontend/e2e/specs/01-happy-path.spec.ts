@@ -19,9 +19,12 @@ test.describe('01-happy-path — 需求 → 确认 → 报告（Contract mock LL
 
     await wb.sendQuery('2024年各区域销售额排名')
 
-    // /chat：需求解析 → 卡（complete）
+    // /chat：需求解析 → 确认条（complete）。A4 之后先看「那句话」，参数卡按需展开。
     await wb.expectRequirementCard()
-    await expect(page.locator('.wb-req-status')).toContainText('信息完整 · 待确认')
+    await wb.expectRequirementAsked('销售额')
+    await wb.openRequirementDetails()
+    await expect(page.locator('.wb-req-status').last()).toContainText('信息完整 · 待确认')
+    await wb.closeRequirementDetails()
 
     // /confirm：生成报告
     await wb.confirmRequirement()

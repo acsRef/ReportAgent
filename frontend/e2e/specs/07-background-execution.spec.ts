@@ -20,6 +20,9 @@ test.describe('07-background-execution — 停止 → 后台跑完 → 5s 轮询
 
     await wb.sendQuery('2024年华南区销售额')
     await wb.expectRequirementCard()
+    // 2026-11-04 槽位三态之后，模型自报的 analysis_methods 不算数（用户原话没表达意图），
+    // 「华南区销售额」会先被问一次「你想看哪一种视角？」——答掉它才出现确认条。
+    await wb.resolveRequirementIfAsked()
     await wb.confirmRequirement()
 
     // 停止生成（fixture 用 pg_sleep(3) 拉长 generating 窗口，确保按钮可点）
@@ -28,7 +31,9 @@ test.describe('07-background-execution — 停止 → 后台跑完 → 5s 轮询
     await stopBtn.click()
 
     // 前端停止显示 + 5s 轮询 → 后台完成 → toast 通知
-    await expect(page.locator('body')).toContainText('报告已在后台生成，可查看', {
+    // 文案随 2026-11-03 的解析轮后台化改过（旧：「报告已在后台生成，可查看」），
+    // 现在停止既可能是执行轮也可能是解析轮，统一说「后台任务已完成」。
+    await expect(page.locator('body')).toContainText('后台任务已完成', {
       timeout: 40_000,
     })
 

@@ -26,8 +26,10 @@ test.describe('11-chitchat-bubble — 闲聊意图走 keyword 路径，AgentBubb
       '你好！我可以帮你分析数据库里的销售',
       { timeout: 30_000 },
     )
-    // 闲聊不发需求卡 / 不发 error
-    await expect(page.locator('.wb-requirement-card')).toHaveCount(0)
+    // 闲聊不发需求卡 / 不发 error（A4 之后「需求卡」的可见信号是那条助手消息上的 aria-label）
+    await expect(
+      page.locator('[aria-label="需求确认"], [aria-label="需求澄清"]'),
+    ).toHaveCount(0)
     await expect(page.locator('.wb-turn-error')).toHaveCount(0)
   })
 })

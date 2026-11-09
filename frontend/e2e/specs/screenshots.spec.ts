@@ -54,51 +54,11 @@ async function shot(page: import('@playwright/test').Page, name: string): Promis
   console.log(`[shot] ${name}`)
 }
 
-/** 真 LLM 需求卡常带 missing_fields + assumptions——选选项 + 全部接受，置 ready。 */
-async function fillAllMissingGroups(page: import('@playwright/test').Page): Promise<boolean> {
-  const groups = page.locator('.wb-option-group')
-  const n = await groups.count()
-  let filled = false
-  for (let i = 0; i < n; i++) {
-    const group = groups.nth(i)
-    const pill = group.locator('label.atelier-radio-pill').first()
-    if (await pill.isVisible().catch(() => false)) {
-      if ((await pill.locator('input:checked').count()) === 0) {
-        await pill.click()
-        filled = true
-      }
-      continue
-    }
-    const box = group.locator('label.atelier-checkbox').first()
-    if (await box.isVisible().catch(() => false)) {
-      if ((await box.locator('input:checked').count()) === 0) {
-        await box.click()
-        filled = true
-      }
-    }
-  }
-  // assumptions 全部「接受」（isDraftReadyForReview 要求 accepted !== null）
-  const assumpts = page.locator('.wb-assumption')
-  const na = await assumpts.count()
-  for (let i = 0; i < na; i++) {
-    const accept = assumpts.nth(i).getByRole('button', { name: '接受' }).first()
-    if (await accept.isVisible().catch(() => false)) {
-      await accept.click()
-      filled = true
-    }
-  }
-  return filled
-}
-
-/** 补全缺失组 → 「补充完成，查看确认」（enabled 后点）→ 等待信息完整。 */
-async function resolveRequirementCard(page: import('@playwright/test').Page, wb: WorkbenchPage): Promise<void> {
-  const filled = await fillAllMissingGroups(page)
-  if (filled) {
-    const btn = page.getByRole('button', { name: '补充完成，查看确认' })
-    await expect(btn.first()).toBeEnabled({ timeout: 60_000 })
-    await btn.first().click()
-    await expect(page.locator('.wb-req-status')).toContainText('信息完整 · 待确认')
-  }
+/** 真 LLM 需求常带缺项——「一次一问」逐题选首个选项，直到出现确认条。
+ *  2026-11-09 起统一走 page-object 门面（旧的整卡 checkbox /「补充完成，查看确认」
+ *  在 A4 之后已不存在，见 plan e2e-contract-realign）。 */
+async function resolveRequirementCard(wb: WorkbenchPage): Promise<void> {
+  await wb.resolveRequirementIfAsked()
 }
 
 test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）', () => {
@@ -113,7 +73,7 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
     await wb.sendQuery('2024年各区域销售额排名')
     await wb.expectRequirementCard()
     await shot(page, 'S1-requirement-card.png')
-    await resolveRequirementCard(page, wb)
+    await resolveRequirementCard(wb)
 
     await wb.confirmRequirement()
     await expectReportLong(page)
@@ -133,7 +93,7 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
 
     await wb.sendQuery('2024年各区域销售额')
     await wb.expectRequirementCard()
-    await resolveRequirementCard(page, wb)
+    await resolveRequirementCard(wb)
     await wb.confirmRequirement()
     await expectReportLong(page)
     await shotReport(page, 'S2-report-bar.png')
@@ -147,13 +107,13 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
 
     await wb.sendQuery('2024年各区域销售额排名')
     await wb.expectRequirementCard()
-    await resolveRequirementCard(page, wb)
+    await resolveRequirementCard(wb)
     await wb.confirmRequirement()
     await expectReportLong(page)
 
     await wb.sendQuery('继续看看月度销售趋势')
     await wb.expectRequirementCard()
-    await resolveRequirementCard(page, wb)
+    await resolveRequirementCard(wb)
     await wb.confirmRequirement()
     await expectReportLong(page)
     await shotReport(page, 'S3-multiturn-monthly-report.png')
@@ -168,13 +128,13 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
     await wb.sendQuery('看一下2024年销售情况')
     await wb.expectRequirementCard()
 
-    const hasMissing = (await page.locator('.wb-option-group').count()) > 0
+    const hasMissing = (await page.locator('.wb-ask-option').count()) > 0
     if (hasMissing) {
       await shot(page, 'S4-clarify-missing.png')
     } else {
       await shot(page, 'S4-clarify-complete.png')
     }
-    await resolveRequirementCard(page, wb)
+    await resolveRequirementCard(wb)
 
     await wb.confirmRequirement()
     await expectReportLong(page)
@@ -196,7 +156,7 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
 
     await wb.sendQuery('2024年各区域销售额')
     await wb.expectRequirementCard()
-    await resolveRequirementCard(page, wb)
+    await resolveRequirementCard(wb)
     await wb.confirmRequirement()
 
     // 处理中状态（进度卡）——repair 过程的「进行时」证据
@@ -217,7 +177,7 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
     await wb.startNewSession()
     await wb.sendQuery('2024年华东区域销售额排名')
     await wb.expectRequirementCard()
-    await resolveRequirementCard(page, wb)
+    await resolveRequirementCard(wb)
     await wb.confirmRequirement()
     await expectReportLong(page)
 
@@ -225,7 +185,7 @@ test.describe('screenshots — 简历演示真实截图（真 LLM/真 backend）
     await wb.startNewSession()
     await wb.sendQuery('同样看看华东2024年销售额')
     await wb.expectRequirementCard()
-    await resolveRequirementCard(page, wb)
+    await resolveRequirementCard(wb)
     await wb.confirmRequirement()
     await expectReportLong(page)
     await shotReport(page, 'S6-cross-session-query-memory.png')

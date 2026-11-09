@@ -89,9 +89,17 @@ async function waitForHealth(url: string, timeoutMs = 90_000): Promise<void> {
  */
 export async function startContractBackend(caseId: string, delayMs = 0): Promise<void> {
   await stopBackend()
+  // 赋值顺序就是契约（2026-11-09，plan e2e-contract-realign D1）：
+  //   ...process.env → ...loadDotEnv() 只为 DATABASE_URL / ANALYSIS_DSN 等运行必需项；
+  //   之后**显式覆盖** Contract 层要固定的键——否则本机 `.env` 会盖掉 seam。
+  // 具体这次被盖掉的是 TURN_UNDERSTANDING=1：Turn Understanding 走
+  // `app/llm/reasoning_client`，它**不看** `LLM_PROVIDER=mock`，于是「mock LLM + real PG」
+  // 的确定性承诺失效（实测每轮真打 SiliconFlow：26s + 把「只看华东」判成
+  // NEEDS_CLARIFICATION「待确认指标」，spec 09 因此必红）。实验开关不得进 Contract 层。
   const env = {
     ...process.env,
     ...loadDotEnv(),
+    TURN_UNDERSTANDING: '0',
     LLM_PROVIDER: 'mock',
     LLM_MOCK_CASE: caseId,
     LLM_MOCK_DIR: CONTRACT_FIXTURES_DIR,

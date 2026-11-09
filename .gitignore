@@ -72,3 +72,5 @@ node_modules/
 
 # Playwright 产物（每次运行清空重建，README 说明见 frontend/e2e/README.md）
 frontend/e2e/artifacts/
+# globalSetup 起 vite 时写的 pid（进程退出后残留，不该进版本库）
+frontend/e2e/helpers/.e2e-vite.pid

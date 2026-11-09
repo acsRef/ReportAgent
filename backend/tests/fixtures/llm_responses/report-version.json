@@ -24,6 +24,18 @@
     "steps": [{"tool": "group_compare", "args": {}, "description": "各区域销售额对比"}],
     "reasoning": "第一版按区域排名"
   },
+  "intent_classify:2": {"kind": "report", "confidence": 0.9, "reason": "追问：按产品维度再看"},
+  "requirement_parse:2": {
+    "summary": "2024年各产品销售额",
+    "target_metrics": ["销售额"],
+    "time_range": "2024",
+    "scope": [],
+    "dimensions": ["产品"],
+    "analysis_methods": ["group_compare"],
+    "confidence": 0.9,
+    "missing_fields": [],
+    "assumptions": []
+  },
   "sql_plan:2": {
     "target_metric": "销售额",
     "dimensions": ["产品"],

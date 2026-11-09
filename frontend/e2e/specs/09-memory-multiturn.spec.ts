@@ -24,7 +24,12 @@ test.describe('09-memory-multiturn — 多轮会话偏好延续（Contract 近�
     // 第二轮 supplement：补充偏好「只看华东」
     await wb.sendQuery('只看华东')
     await wb.expectRequirementCard()
-    await expect(page.locator('.wb-req-summary')).toContainText('华东')
+    // 先看用户实际读到的那句话（A4 之后参数卡默认收起）
+    await wb.expectRequirementAsked('华东')
+    // 再展开详情，钉住「收窄真的写进了需求卡」——这是本 spec 的原意
+    await wb.openRequirementDetails()
+    await expect(page.locator('.wb-req-summary').last()).toContainText('华东')
+    await wb.closeRequirementDetails()
 
     await wb.confirmRequirement()
     await wb.expectReport()
