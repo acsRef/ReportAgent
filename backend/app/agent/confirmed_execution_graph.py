@@ -1033,6 +1033,61 @@ def _drop_constant_columns(
     return kept or columns
 
 
+def _should_writeback_query_memory(verdict: str, *, is_adjust: bool) -> bool:
+    """§四 Write After Reliable Event：这一轮的经验值不值得留成 Query Memory。
+
+    比契约原文（"SQL Validation SUCCESS AND Execution SUCCESS"）再收紧一格：
+
+    - **只认 SUCCESS**：EMPTY 虽然执行成功，但零行——把它当经验，下次相似问题会持续被
+      引向一个「必然查不到数据」的口径；
+    - **adjust 轮不写**：adjust 的 `user_query` 是「按产品维度再看」这类补充语，单独存成
+      一条 question 只会污染检索（下次用「按产品维度再看」去匹配历史 SQL）。
+
+    抽成纯函数是为了让这个**决策**可测——否则只能靠通读 `_persist_report`。
+    """
+    return verdict == "SUCCESS" and not is_adjust
+
+
+async def _remember_successful_query(state: ConfirmedExecutionState) -> None:
+    """把这一轮「校验通过 + 执行成功」的 SQL 写进 Query Memory（§一/§四）。
+
+    2026-11-09（plan memory-system-conformance D1）：此前 v2 主链**零写入**——
+    `remember_query` 唯一的 caller 在 `app/legacy/agents/parent_graph.py`，也就是说
+    「历史查询经验」这类记忆在生产里根本没被生产过，只有模板中心和测试种子会造行。
+
+    best-effort：写记忆失败只 warn，绝不影响刚落库的报告（与 explicit preference 写入一致）。
+    """
+    qr = state.get("query_result") or {}
+    sql = (
+        (state.get("sql") or "")
+        or (qr.get("sql") if isinstance(qr, dict) else "")
+        or ""
+    ).strip()
+    # /confirm 流的 `user_query` 是空串（问题在需求卡里，SQL agent 内部合成过一份）——
+    # 直接取空就会一条都写不进去（2026-11-09 真链路实测踩到：e2e happy-path 跑完
+    # `memory.query_template` 依旧 0 行）。这里退回需求卡摘要，它就是用户那句话的落点。
+    question = (state.get("user_query") or "").strip() or _report_title(state).strip()
+    if not sql or not question or question == "报告":
+        return
+    card = state.get("requirement_card")
+    metrics = getattr(card, "target_metrics", None)
+    if metrics is None and isinstance(card, dict):
+        metrics = card.get("target_metrics")
+    target_metric = str((metrics or [""])[0]) if metrics else ""
+    try:
+        from app.infra.memory.memory_manager import MemoryManager
+
+        await MemoryManager().remember_query(
+            question=question,
+            sql=sql,
+            schema=None,
+            target_metric=target_metric,
+            user_id=int(state["user_id"]),
+        )
+    except Exception as exc:  # noqa: BLE001 - 记忆写入不得拖垮主链
+        logger.warning("query memory writeback failed: %s", exc)
+
+
 def _report_title(state: ConfirmedExecutionState) -> str:
     """报告标题取自需求卡摘要（2026-11-03）。
 
@@ -1131,7 +1186,10 @@ async def _persist_report(state: ConfirmedExecutionState) -> dict:
     if trace_id:
         tracer = get_tracer(trace_id)
         tracer.end("DONE")
-
+    # §四 Write After Reliable Event（2026-11-09 memory-system-conformance D1）：
+    # 报告已经落库之后才写记忆——顺序反了就成了「记忆写了、报告挂了」的假经验。
+    if _should_writeback_query_memory(verdict, is_adjust=base_version is not None):
+        await _remember_successful_query(state)
     # 执行结束（三态都落库后）释放 draft 锁：否则 draft 永久 locked，
     # 重新生成 / adjust / PATCH 全被拒。并发保护仍由 `lock_draft` 原语 +
     # ExecutionRegistry 409 承担；中途失败（未走到本节点）场景由
