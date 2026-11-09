@@ -220,3 +220,19 @@ D2 影响可运维性（查不到「为什么那次 SQL 失败了」的明细）
 - **不透传子图 `retry_counters`**：`retry_count` 现取 `state["sql_repair_count"]`，该键未在
   `ConfirmedExecutionState` 声明，生产多为 0；补状态字段是独立小改（会动 state-contract.md）。
 - **不碰 Turn Understanding / 上下文 compact**：与本契约无关。
+
+## 追加（2026-11-09 晚）：`retry_counters` 真的透传了
+
+上一节留的尾巴：「`retry_count` 取 `state["sql_repair_count"]`，该键未声明 → 生产多为 0」。
+现在补齐，而且是**踩过坑之后**补的：
+
+1. `ConfirmedExecutionState` 增加 `retry_counters: Optional[dict]` channel。
+   **必须声明在 TypedDict 里**——LangGraph 对未声明的键不建 channel，会静默丢掉
+   （`top_period` 已经踩过一次，这次是同一个机制）。
+2. `_confirmed_sql_agent` 回传 `"retry_counters": ss.get("retry_counters") or {}`。
+3. 新增 `_sql_retry_count(state)`：取 `retry_counters["sql_generation"]`，非 dict / 非数字一律 0。
+4. `docs/architecture/state-contract.md` 的 ExecutionState 条目补了说明（契约文档跟着改，
+   不然下一个人会以为父图没有这个 channel）。
+
+C6 测试相应改成注入 `retry_counters={"sql_generation": 2, "plan": 0}` 并断言落库 `retry_count == 2`；
+`pytest backend/tests -k "confirmed_execution or memory or recall or context"` **210 passed**。

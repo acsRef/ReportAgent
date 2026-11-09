@@ -261,12 +261,51 @@ def _score_case(case: dict, items: list[dict]) -> dict:
     }
 
 
-def _run_pass(user_id: int, cases: list[dict], *, clear_cache: bool) -> list[dict]:
+def _warm_rows(user_id: int, *, contents: list[str], exclude: bool, n: int) -> int:
+    """把指定/其余记忆「预热」到 n 次访问（LFU/LRU 变成热的）。
+
+    为什么需要这个开关（2026-11-09 追加）：召回打分里 LFU 与 LRU 各占 0.1，
+    而 `record_access` 每次召回就改写它们——**生产里没有「冷启动」这回事**。
+    已有的 gold 指标是每轮 `_reset_access` 之后的读数（纯语义+重要性），
+    只能回答「语义空间够不够近」，回答不了「热度会不会把对的记忆挤下去」。
+    """
+    conn = _conn()
+    conn.autocommit = True
+    cur = conn.cursor()
+    clause = "NOT (content = ANY(%s))" if exclude else "(content = ANY(%s))"
+    cur.execute(
+        f"UPDATE memory.semantic_entry SET access_count=%s, "
+        f"last_access_time=NOW() - interval '2 hours' "
+        f"WHERE user_id=%s AND {clause}",
+        (n, user_id, contents),
+    )
+    changed = cur.rowcount
+    conn.close()
+    return changed
+
+
+def _run_pass(
+    user_id: int,
+    cases: list[dict],
+    *,
+    clear_cache: bool,
+    warm: int = 0,
+    warm_target: str = "others",
+) -> list[dict]:
     if clear_cache:
         _clear_embed_cache()
     rows: list[dict] = []
     for case in cases:
         _reset_access(user_id)
+        if warm > 0:
+            gold = [_gold_text(k) for k in case["gold"]]
+            if warm_target == "gold":
+                _warm_rows(user_id, contents=gold, exclude=False, n=warm)
+            elif warm_target == "all":
+                _warm_rows(user_id, contents=gold, exclude=False, n=warm)
+                _warm_rows(user_id, contents=gold, exclude=True, n=warm)
+            else:  # others：只把「竞争者」烤热，金标保持冷——最严苛的挤兑场景
+                _warm_rows(user_id, contents=gold, exclude=True, n=warm)
         rows.append(_score_case(case, _recall(case, user_id)))
     return rows
 
@@ -366,6 +405,32 @@ def _stability(passes: list[list[dict]]) -> dict:
         "mean_jaccard": sum(c["jaccard"] for c in per_case) / len(per_case),
         "stable_top1": sum(c["stable_top1"] for c in per_case) / len(per_case),
         "per_case": per_case,
+    }
+
+
+def _cold_warm_compare(cold: list[dict], warm: list[dict], cases: list[dict]) -> dict:
+    """冷/热两轮的对照：热度到底帮了忙还是把对的挤下去了。"""
+    cold_m = _case_metrics(cold, cases)
+    warm_m = _case_metrics(warm, cases)
+    by_id = {r["id"]: r for r in warm}
+    crowded, helped = [], []
+    for row in cold:
+        w = by_id.get(row["id"])
+        if w is None:
+            continue
+        if row["recall_at_3"] and not w["recall_at_3"]:
+            crowded.append({"id": row["id"], "cold_ranks": row["gold_ranks"],
+                            "warm_ranks": w["gold_ranks"]})
+        elif not row["recall_at_3"] and w["recall_at_3"]:
+            helped.append({"id": row["id"], "cold_ranks": row["gold_ranks"],
+                           "warm_ranks": w["gold_ranks"]})
+    return {
+        "cold": cold_m,
+        "warm": warm_m,
+        "delta_recall_at_1": warm_m["recall_at_1"] - cold_m["recall_at_1"],
+        "delta_recall_at_3": warm_m["recall_at_3"] - cold_m["recall_at_3"],
+        "crowded_out": crowded,
+        "helped": helped,
     }
 
 
@@ -535,7 +600,7 @@ def _bar(value: float | None) -> str:
 
 
 def _write_html(path: Path, *, args, metrics, passes, strata, stability,
-                degradation, gates, snapshot_path: Path) -> None:
+                degradation, gates, snapshot_path: Path, warm_cmp=None) -> None:
     all_ok = all(g["ok"] for g in gates)
     verdict = "PASS" if all_ok else "FAIL"
     rows = [
@@ -594,6 +659,31 @@ def _write_html(path: Path, *, args, metrics, passes, strata, stability,
         )
     deg = degradation or {}
     deg_badge = "bad" if deg.get("raised") else "ok"
+    if warm_cmp:
+        crowd = warm_cmp.get("crowded_out") or []
+        helpd = warm_cmp.get("helped") or []
+        warm_html = f"""<div class="card"><table>
+<thead><tr><th>口径</th><th class="n">Recall@1</th><th class="n">Recall@3</th><th class="n">MRR</th></tr></thead>
+<tbody>
+<tr><td>冷启动（每轮清零 LFU/LRU）</td>
+    <td class="n">{_pct(warm_cmp['cold']['recall_at_1'])}</td>
+    <td class="n">{_pct(warm_cmp['cold']['recall_at_3'])}</td>
+    <td class="n">{_num(warm_cmp['cold']['mrr'])}</td></tr>
+<tr><td>预热到 {warm_cmp.get('access_count')} 次访问（目标 {_esc(warm_cmp.get('target'))}）</td>
+    <td class="n">{_pct(warm_cmp['warm']['recall_at_1'])}</td>
+    <td class="n">{_pct(warm_cmp['warm']['recall_at_3'])}</td>
+    <td class="n">{_num(warm_cmp['warm']['mrr'])}</td></tr>
+</tbody></table></div>
+<div class="note">被热度挤掉的 case：<code>{_esc(', '.join(c['id'] for c in crowd) or '无')}</code>；
+被热度救回的：<code>{_esc(', '.join(c['id'] for c in helpd) or '无')}</code>。
+召回分里 LFU 与 LRU 各占 0.1，而 `record_access` 每次召回就改写它们——所以
+<b>冷启动数字只说明「语义空间够不够近」，说明不了「热度会不会把对的挤下去」</b>。
+`--warm-target others`（默认）只把**竞争者**烤热、金标保持冷，是最严苛的挤兑场景。</div>"""
+    else:
+        warm_html = (
+            '<div class="note">本次未跑预热对照（加 <code>--warm 8</code> 可测「热度会不会把对的记忆挤下去」）。'
+            '上文所有数字都是冷启动读数。</div>'
+        )
     html_doc = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <title>Memory 召回质量与稳定性 · scoreboard</title>
@@ -653,14 +743,17 @@ def _write_html(path: Path, *, args, metrics, passes, strata, stability,
 <b>有召回的 case 占比</b>才说明还剩多少能力。keyword 分支按空白字符切词，
 中文 query 没有空格 → 整句当一个 token → 语义记忆可能等于全失效。</div>
 
-<h2>五、逐例明细</h2>
+<h2>五、热度对照（LFU/LRU 预热门槛）</h2>
+{warm_html}
+
+<h2>六、逐例明细</h2>
 <div class="card"><table>
 <thead><tr><th>case</th><th>agent</th><th>scope</th><th>gold</th>
 <th>名次</th><th>forbidden 命中</th></tr></thead>
 <tbody>{''.join(case_rows)}</tbody></table></div>
 
 <h2>复现</h2>
-<pre>D:/miniConda/envs/agent/python.exe evaluation/gold_memory_runner.py --repeat {args.repeat}{' --degrade' if args.degrade else ''} --html docs/reports/memory-scoreboard.html</pre>
+<pre>D:/miniConda/envs/agent/python.exe evaluation/gold_memory_runner.py --repeat {args.repeat}{' --degrade' if args.degrade else ''}{f' --warm {args.warm}' if getattr(args, 'warm', 0) else ''} --html docs/reports/memory-scoreboard.html</pre>
 <div class="sub">快照：<code>{_esc(snapshot_path.name)}</code> ·
 本报告只回答「<b>召回对不对、稳不稳</b>」；「召回有没有真的改变答案」属于行为层（L2），
 需要 ON/OFF 配对真 LLM 实验，不在这份报告里。</div>
@@ -701,6 +794,7 @@ def _render_from_snapshot(snapshot_path: Path, html_path: Path) -> int:
         degradation=snap.get("degradation"),
         gates=snap.get("gates", []),
         snapshot_path=snapshot_path,
+        warm_cmp=snap.get("warm_compare"),
     )
     print(f"判决书（由快照重渲染）: {html_path}")
     return 0
@@ -710,6 +804,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Memory 召回质量与稳定性 scoreboard")
     ap.add_argument("--repeat", type=int, default=3, help="重复轮数（每轮清 embedding 缓存）")
     ap.add_argument("--degrade", action="store_true", help="跑一次降级探针（强制 embedding 失败）")
+    ap.add_argument("--warm", type=int, default=0,
+                    help="再跑一轮「预热」：把记忆的 access_count 顶到 N 次访问（LFU/LRU 变热）")
+    ap.add_argument("--warm-target", choices=("others", "gold", "all"), default="others",
+                    help="预热谁：others=只热竞争者（最严苛）/ gold=只热金标 / all=全热")
     ap.add_argument("--html", type=Path, default=None, help="输出自包含 HTML（默认 docs/reports/memory-scoreboard.html）")
     ap.add_argument("--no-html", action="store_true", help="不写 HTML")
     ap.add_argument("--from-snapshot", type=Path, default=None,
@@ -791,6 +889,15 @@ def main(argv: list[str] | None = None) -> int:
         stability = _stability(all_passes)
         strata = _strata(all_passes, cases)
         degradation = _degrade_probe(uid, cases) if args.degrade else None
+        warm_cmp = None
+        if args.warm > 0:
+            warm_rows = _run_pass(
+                uid, cases, clear_cache=True,
+                warm=args.warm, warm_target=args.warm_target,
+            )
+            warm_cmp = _cold_warm_compare(last, warm_rows, cases)
+            warm_cmp["access_count"] = args.warm
+            warm_cmp["target"] = args.warm_target
         gates = _gates(mean, stability, degradation, thresholds)
 
         print("=" * 64)
@@ -813,6 +920,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"warnings={degradation['fallback_warnings']} "
                 f"any_items={degradation['any_items_rate']:.2f} "
                 f"R@3={_pct(degradation['recall_at_3'])}"
+            )
+        if warm_cmp is not None:
+            print(
+                f"  热度对照（access_count={warm_cmp['access_count']} → {warm_cmp['target']}）："
+                f"R@1 {_pct(warm_cmp['cold']['recall_at_1'])} → {_pct(warm_cmp['warm']['recall_at_1'])}"
+                f" | R@3 {_pct(warm_cmp['cold']['recall_at_3'])} → {_pct(warm_cmp['warm']['recall_at_3'])}"
+                f" | 被挤掉 {len(warm_cmp['crowded_out'])} 被救回 {len(warm_cmp['helped'])}"
+                f" {[c['id'] for c in warm_cmp['crowded_out']]}"
             )
         print("-" * 64)
         for g in gates:
@@ -850,6 +965,7 @@ def main(argv: list[str] | None = None) -> int:
             "stability": stability,
             "strata": strata,
             "degradation": degradation,
+            "warm_compare": warm_cmp,
             "per_case": per_case_out,
         }
         snap_path.write_text(
@@ -863,7 +979,7 @@ def main(argv: list[str] | None = None) -> int:
                 out, args=args, metrics=mean,
                 passes={"per_pass": per_pass, "last": last},
                 strata=strata, stability=stability, degradation=degradation,
-                gates=gates, snapshot_path=snap_path,
+                gates=gates, snapshot_path=snap_path, warm_cmp=warm_cmp,
             )
             print(f"判决书: {out}")
 

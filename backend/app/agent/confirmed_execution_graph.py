@@ -71,6 +71,10 @@ class ConfirmedExecutionState(TypedDict, total=False):
     # Used by the SSE error helper so the user sees the query that
     # actually ran when execution fails.
     sql: Optional[str]
+    # 子图 `retry_counters`（sql_generation / plan / mcp_schema）失败时回传，
+    # 让「失败明细」记下真实重试次数（2026-11-09 memory-system-conformance D2）。
+    # 必须在这里声明：LangGraph 对未声明的键不建 channel，会静默丢掉（top_period 踩过）。
+    retry_counters: Optional[dict]
     # 2026-11-08（plan top-period-annotate-and-timeout-copy）：选期/标注规格。
     # `_confirmed_sql_agent` 算出后写回 state，报告层用它决定「哪些列不许当常量列删掉」。
     # 没有这个字段时 LangGraph 会把这个键丢掉（TypedDict 未声明 → 无 channel），
@@ -404,6 +408,7 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
         "execution_status": ss.get("execution_status", "FAILED"),
         "error": sub_error,
         "sql": ss.get("generated_sql") or "",
+        "retry_counters": ss.get("retry_counters") or {},
     }
 
 
@@ -1048,6 +1053,22 @@ def _should_writeback_query_memory(verdict: str, *, is_adjust: bool) -> bool:
     return verdict == "SUCCESS" and not is_adjust
 
 
+def _sql_retry_count(state: ConfirmedExecutionState) -> int:
+    """失败前 SQL 生成／修复重试了几次（§四 失败明细的 retry_count）。
+
+    真源是子图的 `retry_counters`（`sql_graph` 用 `sql_generation` 计修复轮次）；
+    2026-11-09 之前父图没有这个 channel（TypedDict 未声明 → LangGraph 直接丢），
+    所以失败明细里的 retry_count 永远是 0，等于白记。
+    """
+    counters = state.get("retry_counters") or {}
+    if not isinstance(counters, dict):
+        return 0
+    try:
+        return int(counters.get("sql_generation") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 async def _remember_successful_query(state: ConfirmedExecutionState) -> None:
     """把这一轮「校验通过 + 执行成功」的 SQL 写进 Query Memory（§一/§四）。
 
@@ -1113,7 +1134,7 @@ async def _remember_failed_query(state: ConfirmedExecutionState) -> None:
             failed_sql=sql,
             failure_category=str(detail.get("kind") or "other"),
             error_message=str(detail.get("message") or ""),
-            retry_count=int(state.get("sql_repair_count") or 0),
+            retry_count=_sql_retry_count(state),
             target_metric="",
             session_id=state.get("session_id"),
             trace_id=state.get("trace_id"),

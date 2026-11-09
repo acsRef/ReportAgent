@@ -13,6 +13,9 @@ RequirementState normalized_query, schema_candidates, requirement_card, missing_
                  clarification_history, confirmation_status
 ExecutionState   confirmed_requirement, schema_context, query_plan, generated_sql,
                  validation_result, query_result, execution_status, error, retry_count
+                 （父图 `ConfirmedExecutionState` 另需 `retry_counters` channel：
+                  子图按 sql_generation / plan / mcp_schema 计数，失败明细要用它；
+                  TypedDict 未声明的键 LangGraph 会静默丢弃，2026-11-09 为此补声明）
 ReportState      report_spec, report_version, chart_config, insight
 RuntimeState     trace_id, active_agent, memory_context, tool_calls, mcp_calls
 ```

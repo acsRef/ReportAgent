@@ -380,7 +380,7 @@ def test_c6_failed_run_records_failure_detail(monkeypatch):
             "sql": "SELECT nonexistent FROM fact_orders",
             "error": _Err(),
             "requirement_card": _Card(),
-            "sql_repair_count": 2,
+            "retry_counters": {"sql_generation": 2, "plan": 0},
         }
         _run(_remember_failed_query(state))
 
@@ -388,9 +388,8 @@ def test_c6_failed_run_records_failure_detail(monkeypatch):
         assert len(rows) == 1, rows
         assert rows[0]["question"] == "2025年各区域销售额"
         assert rows[0]["failure_category"] == "object_not_found"
-        # retry_count 目前由父图透传 `sql_repair_count`——该键尚未在 ConfirmedExecutionState
-        # 声明（子图 `retry_counters` 不透传），生产里多为 0；这里断的是**透传通路**，
-        # 等状态契约补上字段后自然生效。
+        # retry_count 来自子图透传的 `retry_counters.sql_generation`（父图 state 已声明该 channel；
+        # 此前未声明 → LangGraph 直接丢 → 永远记 0）。
         assert rows[0]["retry_count"] == 2
         assert "nonexistent" in (rows[0]["failed_sql"] or "")
         assert rows[0]["trace_id"] == "trace-fail"
