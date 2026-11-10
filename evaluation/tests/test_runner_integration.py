@@ -75,7 +75,13 @@ class TestRunCaseIntegration:
                 m.status_code = 200
                 if "/reports/" in url:
                     m.json.return_value = {"report": {
-                        "query_snapshot": {"sql": "SELECT ...", "rows": [{}, {}, {}]},
+                        # Execution Accuracy（2026-11-10）后，这条 case 带 `golden.sql`：
+                        # 结果行必须与金标同形，否则比对必然 fail（列数/行数都不对）。
+                        "query_snapshot": {
+                            "sql": "SELECT ...",
+                            "columns": [{"name": "region", "type": "text"}],
+                            "rows": [{"region": "华东"}, {"region": "华北"}],
+                        },
                         "report_payload": {"answer": {
                             "table": {"columns": ["region"], "rows": [{}, {}]},
                             "chart": {"type": "bar"},
@@ -86,8 +92,13 @@ class TestRunCaseIntegration:
                 return m
 
         with patch("evaluation.runner._stream_sse", _fake_stream(chat_events)), \
-             patch("evaluation.runner._fill_missing_fields", side_effect=lambda c: c), \
+             patch("evaluation.runner._fill_missing_fields", side_effect=lambda c, **kw: c), \
+             patch("evaluation.runner._resolve_golden",
+                   return_value=(["region"], [["华东"], ["华北"]])), \
              patch("evaluation.checker.ObservedTurn") as _:
             # confirm 流复用同一个 fake stream（返回 chat_events 即可）
             result = run_case(case, FakeClient(), "t")
         assert result["status"] == "pass", result
+        # 金标比对必须真的做过并且一致（否则「pass」只证明跑通了，不证明算对了）
+        assert result["sections"]["execution.result_matches"] == "pass"
+        assert result["result_matches"] is True

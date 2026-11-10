@@ -85,7 +85,55 @@ def _data_of(events: list[dict], name: str) -> Any:
 
 # ---------- 单 case 执行 ----------
 
-def _fill_missing_fields(card: dict) -> dict:
+def _pick_metric_selection(
+    values: list[str],
+    options: list[dict],
+    user_query: str = "",
+    expected_metrics: tuple[str, ...] = (),
+) -> list[str]:
+    """选口径：**原话里逐字出现过**的优先，其次才回退第一个。
+
+    2026-11-10（plan time-range-and-metric-slot-backfill D4）：原规则是「label 里含
+    『销售』的第一个」——`净销售额` 也含「销售」且排在前面，于是把用户明说的「销售额」
+    换成了净额。夹具替被测系统做决定，算出来的数字就再也不说明问题。
+    """
+    if not values:
+        return []
+    labels = [str(option.get("label") or "") for option in options]
+
+    def _match(name: str) -> str | None:
+        text = str(name or "").strip()
+        if not text:
+            return None
+        for value, label in zip(values, labels):
+            if label == text:
+                return value
+        for value, label in zip(values, labels):
+            if text in label or label in text:
+                return value
+        return None
+
+    for name in expected_metrics:
+        hit = _match(name)
+        if hit:
+            return [hit]
+    haystack = str(user_query or "")
+    # 原话里逐字出现的口径，最长优先（否则「销售额」会抢在「净销售额」前面）
+    best: tuple[int, str] | None = None
+    for value, label in zip(values, labels):
+        if label and label in haystack and (best is None or len(label) > best[0]):
+            best = (len(label), value)
+    if best:
+        return [best[1]]
+    return [values[0]]
+
+
+def _fill_missing_fields(
+    card: dict,
+    *,
+    user_query: str = "",
+    expected_metrics: tuple[str, ...] = (),
+) -> dict:
     """e2e fill-all 策略：把卡补成 complete（时间用 2024年 保种子数据命中）。
 
     无条件执行：填 selected_value、接受全部 assumptions。即使 missing_fields
@@ -104,8 +152,9 @@ def _fill_missing_fields(card: dict) -> dict:
         elif key == "scope":
             mf["selected_value"] = ["ALL"] if "ALL" in values else (values or [])
         elif key == "metric":
-            cand = next((v for v, o in zip(values, options) if "销售" in o.get("label", "")), None)
-            mf["selected_value"] = ([cand] if cand else [values[0]]) if values else []
+            mf["selected_value"] = _pick_metric_selection(
+                values, options, user_query, expected_metrics,
+            )
         elif key in ("granularity", "comparison") and values:
             mf["selected_value"] = values[0]
         elif values:
@@ -300,7 +349,13 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
             # （幂等；即使 missing_fields=[] 也可能因未接受的 assumptions 而
             # status=missing —— 服务端会按表单态重算 status）。
             if card and needs_exec:
-                filled = _fill_missing_fields(card)
+                filled = _fill_missing_fields(
+                    card,
+                    user_query=turn.query,
+                    expected_metrics=tuple(
+                        getattr(getattr(exp, "requirement", None), "target_metrics_contains", ()) or ()
+                    ),
+                )
                 pr = client.patch(
                     f"/api/v1/sessions/{sid}/requirement",
                     json={"requirement": filled},

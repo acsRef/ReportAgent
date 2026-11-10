@@ -835,6 +835,57 @@ def _default_intent_clarification(
 _YEAR_MONTH = re.compile(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月")
 _RELATIVE_SPAN = re.compile(r"这两个月|那两个月|最近两个月|这俩月|这两个月份")
 
+# 原话里的**绝对**时间范围（带区间与中文月份）。与上面的 `_YEAR_MONTH` 分开：后者被
+# `_inherit_year` / `_resolve_bare_month` 按 2 个分组消费，改它会连带影响年份继承。
+_QUERY_TIME_RANGE = re.compile(
+    r"((?:19|20)\d{2})\s*年\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月"
+    r"(?:\s*[-~—至到]\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月)?"
+)
+_YEAR_WITH_SUFFIX = re.compile(r"((?:19|20)\d{2})\s*年")
+
+
+def _month_number(raw: str) -> int | None:
+    """`7` / `07` / `七` / `十一` → 月份整数；越界或认不出返回 None。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        value = int(text)
+        return value if 1 <= value <= 12 else None
+    return _CN_MONTHS.get(text)
+
+
+def time_range_from_query(user_query: str) -> str | None:
+    """从**用户原话**里确定性抽取绝对时间范围（纯函数，无模型、无当前时间依赖）。
+
+    2026-11-10（plan time-range-and-metric-slot-backfill）：`TURN_UNDERSTANDING=1` 链路里
+    卡片的时间范围**只来自模型**，模型漏给就永久为 null——实测「2024年各区域销售额排名」
+    `task.time_range = null`，SQL 于是没有任何时间谓词，把 2023–2026 **四年**一起算了
+    （金标 96,318,061.74 vs 实测 326,102,457.72）。时间范围是原话里就有的**字面事实**，
+    不该依赖一次采样。
+
+    只认绝对写法（`2024年` / `2024年7月` / `2024年7月-8月` / `2024年十一月`）。
+    **相对时间词（今年/上月/最近N天）不在此换算**——那由既有链路（prompt 注入 today +
+    `_inherit_year`）负责，两处各有一套换算规则会互相打架。
+
+    返回卡片可承载的文本（`_period_filter_hint` 认这种形态）；抽取不到返回 None。
+    """
+    text = str(user_query or "")
+    match = _QUERY_TIME_RANGE.search(text)
+    if match:
+        year = match.group(1)
+        month = _month_number(match.group(2))
+        if month is not None:
+            end = _month_number(match.group(3)) if match.group(3) else None
+            if end is not None and end != month:
+                start, stop = sorted((month, end))
+                return f"{year}年{start}月-{stop}月"
+            return f"{year}年{month}月"
+    year_only = _YEAR_WITH_SUFFIX.search(text)
+    if year_only:
+        return f"{year_only.group(1)}年"
+    return None
+
 
 _BARE_MONTH_ARABIC = re.compile(r"(?<!\d)(\d{1,2})\s*月")
 _BARE_MONTH_CN = re.compile(r"([一二三四五六七八九十]{1,2})\s*月")

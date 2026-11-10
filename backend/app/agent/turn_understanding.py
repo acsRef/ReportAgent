@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from app.agent.prompts.turn_plan_prompts import build_turn_plan_prompt
 from app.models.requirement import (
@@ -561,16 +561,40 @@ def _registry_has_metric(name: str) -> bool:
         return True
 
 
+def _metric_option_names(
+    known_metrics: set[str] | None, preferred: Sequence[str] | None,
+) -> list[str]:
+    """「用哪个指标？」的候选：**原话命中的口径优先**，其余按名排序补齐，最多 3 个。
+
+    2026-11-10（plan time-range-and-metric-slot-backfill）：原来是
+    `sorted(known_metrics)[:3]`——中文按 Unicode 码点排序，`净`(U+51C0) < `销`(U+9500)，
+    于是「净销售额 / 实收金额 / 客单价」把用户明说的「销售额」挤出候选；评测夹具再盲选
+    第一个，毛额就被换成了净额（金标 96,318,061.74 → 实测 326,102,457.72 的一半原因）。
+    候选顺序必须由**用户原话**决定，不是字典序。
+    """
+    ordered: list[str] = []
+    for name in preferred or ():
+        text = str(name or "").strip()
+        if text and text not in ordered:
+            ordered.append(text)
+    for name in sorted(known_metrics or ()):
+        if name not in ordered:
+            ordered.append(name)
+    return ordered[:3]
+
+
 def assess_reportability(
     task: ActiveAnalysisTask,
     *,
     known_metrics: set[str] | None = None,
     metric_resolver: Callable[[str], bool] | None = None,
+    preferred_metrics: Sequence[str] | None = None,
 ) -> Reportability:
     """判断当前任务是否具备出报告的条件。模型不参与。
 
-    `known_metrics`：只用来给「用哪个指标？」的候选列表，**不参与注册判定**；
-    `metric_resolver`：注册判定的真实来源（默认问注册表，测试可注入）。
+    `known_metrics`：只用来给「用哪个指标？」的候选池，**不参与注册判定**；
+    `metric_resolver`：注册判定的真实来源（默认问注册表，测试可注入）；
+    `preferred_metrics`：候选的**前置顺序**（原话命中的口径），由调用方从用户原话算出。
     """
     blockers: list[Blocker] = []
     notes: list[str] = []
@@ -579,7 +603,7 @@ def assess_reportability(
     if not task.metrics:
         blockers.append(Blocker(
             key="metric", question="用哪个指标？",
-            options=sorted(known_metrics)[:3] if known_metrics else [],
+            options=_metric_option_names(known_metrics, preferred_metrics),
         ))
     else:
         unknown = [m for m in task.metrics if not resolver(m)]
