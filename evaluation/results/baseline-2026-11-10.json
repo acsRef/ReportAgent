@@ -74,7 +74,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 33953.0,
+      "latency_ms": 35532.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -83,7 +83,15 @@
         "pred_rows": 6,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
+      "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON o.store_id = s.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC"
     },
     {
       "case_id": "explicit-monthly-trend-east",
@@ -157,7 +165,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 55219.0,
+      "latency_ms": 42968.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -166,7 +174,15 @@
         "pred_rows": 12,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_date.month AS 月份,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN \n    dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nGROUP BY \n    dim_date.month\nORDER BY \n    dim_date.month",
+      "golden_sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 AND s.region = '华东' GROUP BY d.month ORDER BY d.month"
     },
     {
       "case_id": "clarify-vague-metric",
@@ -238,9 +254,13 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 7203.0,
+      "latency_ms": 9016.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": null,
+      "golden_sql": null
     },
     {
       "case_id": "clarify-no-time-range",
@@ -312,9 +332,13 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 16360.0,
+      "latency_ms": 11375.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": null,
+      "golden_sql": null
     },
     {
       "case_id": "multiturn-followup-dimension",
@@ -389,9 +413,13 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 78078.0,
+      "latency_ms": 48437.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": "SELECT \n    dim_product.product_name AS 产品,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_product ON fact_orders.product_id = dim_product.product_id\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nWHERE dim_date.year = 2024\nGROUP BY dim_product.product_name",
+      "golden_sql": null
     },
     {
       "case_id": "session-scope-carryover",
@@ -467,7 +495,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 74750.0,
+      "latency_ms": 51485.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -476,7 +504,15 @@
         "pred_rows": 12,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_date.month AS 月份,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN \n    dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nGROUP BY \n    dim_date.month\nORDER BY \n    dim_date.month",
+      "golden_sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 AND s.region = '华东' GROUP BY d.month ORDER BY d.month"
     },
     {
       "case_id": "complex-sql-sales-vs-returns",
@@ -549,7 +585,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 40765.0,
+      "latency_ms": 51500.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -558,7 +594,15 @@
         "pred_rows": 6,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 3,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_product.category AS 品类,\n    SUM(fact_orders.order_amount) AS 销售额,\n    SUM(fact_payments.payment_amount) FILTER (WHERE fact_payments.status = 'REFUNDED') AS 退款金额\nFROM fact_orders\nLEFT JOIN dim_product ON fact_orders.product_id = dim_product.product_id\nLEFT JOIN fact_payments ON fact_orders.order_id = fact_payments.order_id\nLEFT JOIN dim_date ON fact_orders.order_date = dim_date.full_date\nWHERE dim_date.year = 2024\nGROUP BY dim_product.category",
+      "golden_sql": "WITH sales AS (  SELECT p.category AS category, SUM(o.order_amount) AS amount   FROM fact_orders o JOIN dim_product p ON p.product_id = o.product_id   JOIN dim_date d ON d.full_date = o.order_date   WHERE d.year = 2024 GROUP BY p.category), refunds AS (  SELECT p.category AS category, SUM(pay.payment_amount) AS amount   FROM fact_payments pay JOIN fact_orders o ON o.order_id = pay.order_id   JOIN dim_product p ON p.product_id = o.product_id   JOIN dim_date d ON d.full_date = o.order_date   WHERE d.year = 2024 AND pay.status = 'REFUNDED' GROUP BY p.category) SELECT s.category AS category, ROUND(s.amount, 2) AS sales, ROUND(COALESCE(r.amount, 0), 2) AS refund FROM sales s LEFT JOIN refunds r ON r.category = s.category ORDER BY sales DESC"
     },
     {
       "case_id": "complex-sql-region-product-detail",
@@ -630,9 +674,13 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 56907.0,
+      "latency_ms": 41984.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": "SELECT \n    fact_orders.order_id AS 订单号,\n    fact_orders.order_date AS 订单日期,\n    dim_store.store_name AS 门店名称,\n    dim_store.region AS 区域,\n    fact_orders.order_amount AS 订单金额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_store ON fact_orders.store_id = dim_store.store_id\nLEFT JOIN \n    dim_date ON fact_orders.order_date = dim_date.full_date\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nORDER BY \n    fact_orders.order_date DESC\nLIMIT 200",
+      "golden_sql": null
     },
     {
       "case_id": "security-prompt-injection",
@@ -700,9 +748,13 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 46.0,
+      "latency_ms": 47.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": null,
+      "golden_sql": null
     },
     {
       "case_id": "sql-failure-fault-injection",
@@ -771,9 +823,13 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 38641.0,
+      "latency_ms": 29922.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": null,
+      "golden_sql": null
     },
     {
       "case_id": "empty-result-future-year",
@@ -845,7 +901,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 44469.0,
+      "latency_ms": 20516.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -854,7 +910,15 @@
         "pred_rows": 0,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE dim_date.year = 2027\nGROUP BY dim_store.region",
+      "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2027 GROUP BY s.region"
     },
     {
       "case_id": "report-chart-trend",
@@ -927,7 +991,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 37281.0,
+      "latency_ms": 35609.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -936,7 +1000,15 @@
         "pred_rows": 12,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_date.month AS 月份,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_date ON dim_date.full_date = fact_orders.order_date\nWHERE \n    dim_date.year = 2024\nGROUP BY \n    dim_date.month\nORDER BY \n    dim_date.month",
+      "golden_sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY d.month ORDER BY d.month"
     },
     {
       "case_id": "memory-explicit-preference-chart",
@@ -1007,7 +1079,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 69656.0,
+      "latency_ms": 42266.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1016,7 +1088,15 @@
         "pred_rows": 6,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
+      "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC"
     },
     {
       "case_id": "chitchat-greeting",
@@ -1086,9 +1166,13 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 47.0,
+      "latency_ms": 46.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": null,
+      "golden_sql": null
     },
     {
       "case_id": "chitchat-capability",
@@ -1158,9 +1242,13 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 63.0,
+      "latency_ms": 47.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": null,
+      "golden_sql": null
     },
     {
       "case_id": "schema-retrieval-metric",
@@ -1229,9 +1317,13 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 8359.0,
+      "latency_ms": 10891.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": null,
+      "golden_sql": null
     },
     {
       "case_id": "schema-retrieval-concept",
@@ -1300,9 +1392,13 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 10125.0,
+      "latency_ms": 9719.0,
       "result_matches": null,
-      "execution_match": null
+      "execution_match": null,
+      "complexity_tier": null,
+      "diagnosis": null,
+      "sql": null,
+      "golden_sql": null
     },
     {
       "case_id": "mcp-failure-unavailable",
@@ -1374,7 +1470,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 60203.0,
+      "latency_ms": 42062.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1383,7 +1479,15 @@
         "pred_rows": 6,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
+      "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC"
     },
     {
       "case_id": "mcp-down-requirement-scope",
@@ -1453,7 +1557,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 40031.0,
+      "latency_ms": 53906.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1462,7 +1566,15 @@
         "pred_rows": 6,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
+      "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC"
     },
     {
       "case_id": "sql-repair-recovers",
@@ -1534,7 +1646,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 54125.0,
+      "latency_ms": 81329.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1543,7 +1655,15 @@
         "pred_rows": 6,
         "missing": [],
         "extra": []
-      }
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
+      "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC"
     }
   ],
   "summary": {
@@ -1552,11 +1672,24 @@
     "failed": 0,
     "skipped_or_error": 0,
     "sql_success_rate": 1.0,
-    "p50_latency_ms": 38641.0,
-    "p95_latency_ms": 74750.0,
+    "p50_latency_ms": 35532.0,
+    "p95_latency_ms": 53906.0,
     "execution_accuracy": 1.0,
     "cases_with_golden": 10,
     "cases_matched": 10,
-    "execution_failure_reasons": {}
+    "execution_failure_reasons": {},
+    "complexity_tiers": {
+      "T2": {
+        "cases": 9,
+        "matched": 9,
+        "accuracy": 1.0
+      },
+      "T3": {
+        "cases": 1,
+        "matched": 1,
+        "accuracy": 1.0
+      }
+    },
+    "subtask_failures": {}
   }
 }

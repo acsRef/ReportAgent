@@ -26,6 +26,12 @@ from evaluation.checker import ObservedTurn, check_turn, summarize
 from evaluation.execution_accuracy import compare_result_sets
 from evaluation.loader import load_all
 from evaluation.schema import BaselineCase
+from evaluation.task_decomposition import (
+    complexity_tier,
+    diagnose,
+    subtask_failure_counts,
+    tier_accuracy,
+)
 
 DEFAULT_DATASET = Path(__file__).resolve().parent / "baseline_cases.json"
 
@@ -326,6 +332,9 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
     )
     last_obs: ObservedTurn | None = None
     match = None  # Execution Accuracy：本轮结果与金标的比对结论（无金标则 None）
+    complexity_tier_value: int | None = None
+    diagnosis_value: dict[str, Any] | None = None
+    golden_sql_value: str | None = None
 
     t0 = time.monotonic()
     try:
@@ -387,6 +396,17 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
             # 这是唯一能闭环的判据（BEAVER 的立场）：检索/召回只是上游手段。
             golden = exp.execution.golden if (exp and exp.execution) else None
             if golden is not None:
+                gold_sql = str(getattr(golden, "sql", "") or "")
+                if gold_sql:
+                    golden_sql_value = gold_sql
+                    # 子任务诊断 + 复杂度分档（只用金标结构推导，可复现）：
+                    # 「结果不一致」拆成表/join 键/列/谓词/结构，才知道该修哪一层。
+                    tier = complexity_tier(gold_sql)
+                    if tier is not None:
+                        complexity_tier_value = tier
+                    diagnosis = diagnose(gold_sql, str(obs.sql or ""))
+                    if diagnosis is not None:
+                        diagnosis_value = diagnosis.as_dict()
                 try:
                     resolved = _resolve_golden(golden)
                     if resolved is not None:
@@ -416,6 +436,12 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
             # Execution Accuracy（结果对不对）——与 status（跑没跑通）是两回事
             "result_matches": (match.ok if match is not None else None),
             "execution_match": (match.as_dict() if match is not None else None),
+            # 子任务诊断 + 复杂度分档：结果不对时回答「差在哪一步、这条有多难」
+            "complexity_tier": complexity_tier_value,
+            "diagnosis": diagnosis_value,
+            # 两条 SQL 一起落盘：结果产物要能自证（否则「为什么判错」只能回数据库翻）
+            "sql": (obs.sql or None),
+            "golden_sql": golden_sql_value,
         }
     except Exception as exc:  # 单 case 异常不中断整批
         return {
@@ -517,6 +543,10 @@ def main(argv: list[str] | None = None) -> int:
             reason = (r.get("execution_match") or {}).get("reason", "unknown")
             fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
     summary["execution_failure_reasons"] = fail_reasons
+    # 按难度切片 + 失败归因到子任务（BEAVER 的拆法）：只回答「哪一层错」与「越难是不是越差」，
+    # 不参与 pass/fail 判定，避免把诊断当成绩。
+    summary["complexity_tiers"] = tier_accuracy(results)
+    summary["subtask_failures"] = subtask_failure_counts(results)
     payload = {"results": results, "summary": summary}
 
     if args.out:
