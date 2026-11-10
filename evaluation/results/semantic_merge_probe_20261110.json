@@ -1,0 +1,315 @@
+{
+  "rows": [
+    {
+      "label": "merge",
+      "bucket": "chart",
+      "a": "以后都用柱状图显示",
+      "b": "以后报告默认给柱状图",
+      "similarity": 0.92
+    },
+    {
+      "label": "merge",
+      "bucket": "chart",
+      "a": "以后都用柱状图显示",
+      "b": "图表默认用柱形图",
+      "similarity": 0.8945
+    },
+    {
+      "label": "merge",
+      "bucket": "chart",
+      "a": "以后都用柱状图显示",
+      "b": "报告里用条形图就行",
+      "similarity": 0.8253
+    },
+    {
+      "label": "merge",
+      "bucket": "chart",
+      "a": "以后都用饼图",
+      "b": "以后报告用饼状图",
+      "similarity": 0.8971
+    },
+    {
+      "label": "merge",
+      "bucket": "chart",
+      "a": "以后都用表格",
+      "b": "以后报告直接给表格吧",
+      "similarity": 0.8222
+    },
+    {
+      "label": "merge",
+      "bucket": "granularity",
+      "a": "以后按月的粒度来显示",
+      "b": "以后每个月看一次",
+      "similarity": 0.6945
+    },
+    {
+      "label": "merge",
+      "bucket": "granularity",
+      "a": "以后按周看",
+      "b": "默认每周汇总一次",
+      "similarity": 0.8505
+    },
+    {
+      "label": "merge",
+      "bucket": "granularity",
+      "a": "以后按季度看",
+      "b": "默认按季汇总",
+      "similarity": 0.7899
+    },
+    {
+      "label": "merge",
+      "bucket": "fact",
+      "a": "GMV 按净销售额算",
+      "b": "GMV 就是扣掉退款之后的销售额",
+      "similarity": 0.9332
+    },
+    {
+      "label": "merge",
+      "bucket": "fact",
+      "a": "净销售额是扣退款后的口径",
+      "b": "净销售额等于销售额减掉退款",
+      "similarity": 0.9327
+    },
+    {
+      "label": "merge",
+      "bucket": "fact",
+      "a": "退货率按订单数算",
+      "b": "退货率的分母用订单数量",
+      "similarity": 0.9076
+    },
+    {
+      "label": "merge",
+      "bucket": "fact",
+      "a": "华南包含福建",
+      "b": "福建算在华南区域里",
+      "similarity": 0.8674
+    },
+    {
+      "label": "distinct",
+      "bucket": "dimension",
+      "a": "华东区域的销售额怎么算",
+      "b": "华南区域的销售额怎么算",
+      "similarity": 0.9495
+    },
+    {
+      "label": "distinct",
+      "bucket": "dimension",
+      "a": "以后按周看",
+      "b": "以后按天看",
+      "similarity": 0.8988
+    },
+    {
+      "label": "distinct",
+      "bucket": "chart",
+      "a": "以后都用柱状图",
+      "b": "以后都用饼图",
+      "similarity": 0.9204
+    },
+    {
+      "label": "distinct",
+      "bucket": "chart",
+      "a": "以后都用表格",
+      "b": "以后都用柱状图",
+      "similarity": 0.7652
+    },
+    {
+      "label": "distinct",
+      "bucket": "metric",
+      "a": "净销售额是扣退款后的口径",
+      "b": "实收金额是实际到账的口径",
+      "similarity": 0.6417
+    },
+    {
+      "label": "distinct",
+      "bucket": "metric",
+      "a": "客单价怎么算",
+      "b": "退款率怎么算",
+      "similarity": 0.8032
+    },
+    {
+      "label": "distinct",
+      "bucket": "metric",
+      "a": "销量按件数计算",
+      "b": "销售额按金额计算",
+      "similarity": 0.8365
+    },
+    {
+      "label": "distinct",
+      "bucket": "cross",
+      "a": "以后按月的粒度来显示",
+      "b": "以后都用柱状图显示",
+      "similarity": 0.7697
+    },
+    {
+      "label": "distinct",
+      "bucket": "cross",
+      "a": "以后报告都用表格",
+      "b": "以后报告按季度看",
+      "similarity": 0.8093
+    },
+    {
+      "label": "opposite",
+      "bucket": "chart",
+      "a": "以后都用柱状图",
+      "b": "以后不要用柱状图",
+      "similarity": 0.9421
+    },
+    {
+      "label": "opposite",
+      "bucket": "chart",
+      "a": "以后报告都用表格",
+      "b": "以后报告别用表格",
+      "similarity": 0.9624
+    },
+    {
+      "label": "opposite",
+      "bucket": "chart",
+      "a": "以后都用饼图",
+      "b": "以后别用饼图",
+      "similarity": 0.9329
+    },
+    {
+      "label": "opposite",
+      "bucket": "granularity",
+      "a": "以后按月看",
+      "b": "以后不要按月看",
+      "similarity": 0.906
+    },
+    {
+      "label": "opposite",
+      "bucket": "fact",
+      "a": "净销售额包含退款",
+      "b": "净销售额不包含退款",
+      "similarity": 0.9326
+    }
+  ],
+  "stats": {
+    "merge": {
+      "n": 12,
+      "min": 0.6945,
+      "median": 0.8809,
+      "max": 0.9332
+    },
+    "distinct": {
+      "n": 9,
+      "min": 0.6417,
+      "median": 0.8093,
+      "max": 0.9495
+    },
+    "opposite": {
+      "n": 5,
+      "min": 0.906,
+      "median": 0.9329,
+      "max": 0.9624
+    }
+  },
+  "sweep": [
+    {
+      "theta": 0.8,
+      "false_merge": 11,
+      "false_split": 2,
+      "merge_pass": 10,
+      "false_merge_pairs": [
+        "distinct: 华东区域的销售额怎么算 | 华南区域的销售额怎么算",
+        "distinct: 以后按周看 | 以后按天看",
+        "distinct: 以后都用柱状图 | 以后都用饼图",
+        "distinct: 客单价怎么算 | 退款率怎么算",
+        "distinct: 销量按件数计算 | 销售额按金额计算",
+        "distinct: 以后报告都用表格 | 以后报告按季度看",
+        "opposite: 以后都用柱状图 | 以后不要用柱状图",
+        "opposite: 以后报告都用表格 | 以后报告别用表格",
+        "opposite: 以后都用饼图 | 以后别用饼图",
+        "opposite: 以后按月看 | 以后不要按月看",
+        "opposite: 净销售额包含退款 | 净销售额不包含退款"
+      ]
+    },
+    {
+      "theta": 0.84,
+      "false_merge": 8,
+      "false_split": 4,
+      "merge_pass": 8,
+      "false_merge_pairs": [
+        "distinct: 华东区域的销售额怎么算 | 华南区域的销售额怎么算",
+        "distinct: 以后按周看 | 以后按天看",
+        "distinct: 以后都用柱状图 | 以后都用饼图",
+        "opposite: 以后都用柱状图 | 以后不要用柱状图",
+        "opposite: 以后报告都用表格 | 以后报告别用表格",
+        "opposite: 以后都用饼图 | 以后别用饼图",
+        "opposite: 以后按月看 | 以后不要按月看",
+        "opposite: 净销售额包含退款 | 净销售额不包含退款"
+      ]
+    },
+    {
+      "theta": 0.86,
+      "false_merge": 8,
+      "false_split": 5,
+      "merge_pass": 7,
+      "false_merge_pairs": [
+        "distinct: 华东区域的销售额怎么算 | 华南区域的销售额怎么算",
+        "distinct: 以后按周看 | 以后按天看",
+        "distinct: 以后都用柱状图 | 以后都用饼图",
+        "opposite: 以后都用柱状图 | 以后不要用柱状图",
+        "opposite: 以后报告都用表格 | 以后报告别用表格",
+        "opposite: 以后都用饼图 | 以后别用饼图",
+        "opposite: 以后按月看 | 以后不要按月看",
+        "opposite: 净销售额包含退款 | 净销售额不包含退款"
+      ]
+    },
+    {
+      "theta": 0.88,
+      "false_merge": 8,
+      "false_split": 6,
+      "merge_pass": 6,
+      "false_merge_pairs": [
+        "distinct: 华东区域的销售额怎么算 | 华南区域的销售额怎么算",
+        "distinct: 以后按周看 | 以后按天看",
+        "distinct: 以后都用柱状图 | 以后都用饼图",
+        "opposite: 以后都用柱状图 | 以后不要用柱状图",
+        "opposite: 以后报告都用表格 | 以后报告别用表格",
+        "opposite: 以后都用饼图 | 以后别用饼图",
+        "opposite: 以后按月看 | 以后不要按月看",
+        "opposite: 净销售额包含退款 | 净销售额不包含退款"
+      ]
+    },
+    {
+      "theta": 0.9,
+      "false_merge": 7,
+      "false_split": 8,
+      "merge_pass": 4,
+      "false_merge_pairs": [
+        "distinct: 华东区域的销售额怎么算 | 华南区域的销售额怎么算",
+        "distinct: 以后都用柱状图 | 以后都用饼图",
+        "opposite: 以后都用柱状图 | 以后不要用柱状图",
+        "opposite: 以后报告都用表格 | 以后报告别用表格",
+        "opposite: 以后都用饼图 | 以后别用饼图",
+        "opposite: 以后按月看 | 以后不要按月看",
+        "opposite: 净销售额包含退款 | 净销售额不包含退款"
+      ]
+    },
+    {
+      "theta": 0.92,
+      "false_merge": 6,
+      "false_split": 9,
+      "merge_pass": 3,
+      "false_merge_pairs": [
+        "distinct: 华东区域的销售额怎么算 | 华南区域的销售额怎么算",
+        "distinct: 以后都用柱状图 | 以后都用饼图",
+        "opposite: 以后都用柱状图 | 以后不要用柱状图",
+        "opposite: 以后报告都用表格 | 以后报告别用表格",
+        "opposite: 以后都用饼图 | 以后别用饼图",
+        "opposite: 净销售额包含退款 | 净销售额不包含退款"
+      ]
+    },
+    {
+      "theta": 0.94,
+      "false_merge": 3,
+      "false_split": 12,
+      "merge_pass": 0,
+      "false_merge_pairs": [
+        "distinct: 华东区域的销售额怎么算 | 华南区域的销售额怎么算",
+        "opposite: 以后都用柱状图 | 以后不要用柱状图",
+        "opposite: 以后报告都用表格 | 以后报告别用表格"
+      ]
+    }
+  ]
+}
