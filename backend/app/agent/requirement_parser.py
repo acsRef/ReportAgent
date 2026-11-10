@@ -780,6 +780,25 @@ def _extract_scope_from_query(user_query: str) -> list[str]:
     return hits[:1]
 
 
+def scope_from_query(user_query: str) -> list[str]:
+    """从原话里确定性抽取数据范围（区域词表来自 `requirement_options.scope_options`）。
+
+    与 `_extract_scope_from_query` 的分工：那条只管「只看/仅限…」这种**补充轮**说法，
+    这条管任何位置的区域词——「2024年华东地区每个月的销售额趋势」里就明写着华东，
+    实测模型把 `scope` 丢成 `[]`，SQL 于是按**全部区域**聚合（金标华东 1 月
+    8,998,378.01 vs 实测 23,944,063.04 ≈ 全国/华东 的倍数）。
+
+    边界：只做「原话里出现了哪个区域」这一件事。**「那华南呢」这类换区域的指代不在这里**
+    （要判行为动词，属于模型的理解职责），所以调用方只在 scope 为空时才用它。
+    """
+    text = str(user_query or "")
+    if not text:
+        return []
+    from app.agent.requirement_options import scope_options
+
+    return [opt.value for opt in scope_options() if opt.value != "ALL" and opt.value in text]
+
+
 def _guard_analysis_methods(user_query: str, methods: list[str]) -> list[str]:
     """用户没表达分析角度 → 一律清空（不让模型替他决定看成什么）。"""
     if not methods:

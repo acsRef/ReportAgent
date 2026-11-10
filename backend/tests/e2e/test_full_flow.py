@@ -100,10 +100,15 @@ def test_full_user_journey() -> None:
         print(f"[2] sessions count = {len(sessions)}")
 
         # ---- 3. POST /chat mode=new → requirement ----
+        # 问法要求：**年份明确（缺省需 2024 才命中种子数据）+ 口径模糊**，这样既能走
+        # 「澄清 → PATCH → 确认」这条被测路径，又不会因口径优先级（用户原话命中注册表
+        # 就直接作答，见 `_apply_slot_resolutions`）而跳过澄清。
+        # 旧问法「帮我看一下销量」点的是注册表口径「销量」，2026-11-10 起按优先级
+        # 直接作答、不再产出 missing 卡，于是这个 e2e 的前置断言不再成立。
         print(f"\n[3] POST /chat mode=new (session {sid})")
         events = list(_stream_sse(
             client, "POST", "/api/v1/chat", token,
-            json_body={"user_query": "帮我看一下销量", "mode": "new", "session_id": sid},
+            json_body={"user_query": "2024年的数据帮我看一下", "mode": "new", "session_id": sid},
         ))
         seen = [e["event"] for e in events]
         print(f"  events: {seen}")

@@ -7,9 +7,35 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from pydantic import BaseModel, Field
+
+
+def _canonical_period(text: Any) -> str | None:
+    """时间范围的**格式**归一：只留数字，去掉「年/月/空格/单位」。
+
+    `2024年` 与 `2024` 是同一个范围，卡片写哪种都是对的——断言该管**语义**，不该管排版。
+    只做格式归一，不做语义归一：`2024年` → `2024`、`2024年7月` → `2024-7`、
+    `2024年7月-8月` → `2024-7-8`（区间不会被折叠成单个年份）。
+    抽不出数字（`今年` / `上月` 这类相对词）→ 返回 None，调用方回退精确比较。
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    numbers = re.findall(r"\d+", raw)
+    if not numbers:
+        return None
+    return "-".join(str(int(n)) for n in numbers)
+
+
+def _period_equals(observed: Any, expected: Any) -> bool:
+    """归一化后相等；任一侧无法归一（相对时间词）则退回精确比较。"""
+    left, right = _canonical_period(observed), _canonical_period(expected)
+    if left is None or right is None:
+        return observed == expected
+    return left == right
 
 
 # P14 dispatcher registry（key = dim 名, value = (obs, exp) -> (sections, deferred_keys)）
@@ -90,11 +116,15 @@ def check_turn(
         )
     if req.get("time_range_equals") is not None:
         sections["requirement.time_range_equals"] = (
-            "pass" if observed.time_range == req["time_range_equals"] else "fail"
+            "pass" if _period_equals(observed.time_range, req["time_range_equals"]) else "fail"
         )
     if req.get("target_metrics_contains"):
-        want_any = req["target_metrics_contains"]
-        hit = any(any(w in m for m in observed.target_metrics) for w in want_any)
+        # 2026-11-10：原来是**子串**匹配（`"销售额" in "净销售额"` 为真），于是口径被换成
+        # 「净销售额」时这条断言照样 pass——「毛额变净额」当初就是从这里溜过去的。
+        # 现在是精确命中：卡片口径必须**就是**期望里的某一个。
+        want_any = [str(w) for w in req["target_metrics_contains"]]
+        got_metrics = [str(m) for m in observed.target_metrics]
+        hit = any(w in got_metrics for w in want_any)
         sections["requirement.target_metrics"] = "pass" if hit else "fail"
 
     # ---- execution ----

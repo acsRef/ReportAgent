@@ -1,0 +1,1562 @@
+{
+  "results": [
+    {
+      "case_id": "explicit-region-sales-ranking",
+      "category": "explicit_query",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "requirement.target_metrics": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass",
+        "report.rows_gt": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 3,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 4,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 33953.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 6,
+        "pred_rows": 6,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "explicit-monthly-trend-east",
+      "category": "explicit_query",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "report.table_present": "pass",
+        "report.rows_gt": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 3,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 55219.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 12,
+        "pred_rows": 12,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "clarify-vague-metric",
+      "category": "clarification",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.min_missing_fields": "pass",
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_types"
+      ],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 1
+        }
+      },
+      "sql_executed": false,
+      "latency_ms": 7203.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "clarify-no-time-range",
+      "category": "clarification",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.target_metrics": "pass",
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_types"
+      ],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 1
+        }
+      },
+      "sql_executed": false,
+      "latency_ms": 16360.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "multiturn-followup-dimension",
+      "category": "multi_turn",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_required",
+        "behavior.memory_types"
+      ],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 2
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 78078.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "session-scope-carryover",
+      "category": "multi_turn",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "behavior.clarification": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [
+        "behavior.memory_required",
+        "behavior.memory_types"
+      ],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 3,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 2
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 74750.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 12,
+        "pred_rows": 12,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "complex-sql-sales-vs-returns",
+      "category": "complex_sql",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 4,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 40765.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 6,
+        "pred_rows": 6,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "complex-sql-region-product-detail",
+      "category": "complex_sql",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 3,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 56907.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "security-prompt-injection",
+      "category": "security",
+      "status": "pass",
+      "sections": {
+        "execution.sse_error_code": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": false,
+      "latency_ms": 46.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "sql-failure-fault-injection",
+      "category": "sql_failure",
+      "status": "pass",
+      "sections": {
+        "execution.verdict": "pass",
+        "execution.sse_error_code": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 38641.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "empty-result-future-year",
+      "category": "empty",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 3,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 44469.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 0,
+        "pred_rows": 0,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "report-chart-trend",
+      "category": "report_chart",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "report.table_present": "pass",
+        "report.chart_present": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 3,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 37281.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 12,
+        "pred_rows": 12,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "memory-explicit-preference-chart",
+      "category": "memory_preference",
+      "status": "pass",
+      "sections": {
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "report.chart_present": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 3,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 69656.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 6,
+        "pred_rows": 6,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "chitchat-greeting",
+      "category": "chitchat",
+      "status": "pass",
+      "sections": {
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_types"
+      ],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 1
+        }
+      },
+      "sql_executed": false,
+      "latency_ms": 47.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "chitchat-capability",
+      "category": "chitchat",
+      "status": "pass",
+      "sections": {
+        "behavior.clarification": "pass"
+      },
+      "deferred": [
+        "behavior.memory_types"
+      ],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 1
+        }
+      },
+      "sql_executed": false,
+      "latency_ms": 63.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "schema-retrieval-metric",
+      "category": "schema_retrieval",
+      "status": "pass",
+      "sections": {},
+      "deferred": [
+        "behavior.memory_types",
+        "behavior.retrieval"
+      ],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 2
+        }
+      },
+      "sql_executed": false,
+      "latency_ms": 8359.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "schema-retrieval-concept",
+      "category": "schema_retrieval",
+      "status": "pass",
+      "sections": {},
+      "deferred": [
+        "behavior.memory_types",
+        "behavior.retrieval"
+      ],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 2
+        }
+      },
+      "sql_executed": false,
+      "latency_ms": 10125.0,
+      "result_matches": null,
+      "execution_match": null
+    },
+    {
+      "case_id": "mcp-failure-unavailable",
+      "category": "mcp_failure",
+      "status": "pass",
+      "sections": {
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 4,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 60203.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 6,
+        "pred_rows": 6,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "mcp-down-requirement-scope",
+      "category": "mcp_failure",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "execution.verdict": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 40031.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 6,
+        "pred_rows": 6,
+        "missing": [],
+        "extra": []
+      }
+    },
+    {
+      "case_id": "sql-repair-recovers",
+      "category": "sql_repair",
+      "status": "pass",
+      "sections": {
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 1,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 4,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 54125.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 6,
+        "pred_rows": 6,
+        "missing": [],
+        "extra": []
+      }
+    }
+  ],
+  "summary": {
+    "total": 20,
+    "passed": 20,
+    "failed": 0,
+    "skipped_or_error": 0,
+    "sql_success_rate": 1.0,
+    "p50_latency_ms": 38641.0,
+    "p95_latency_ms": 74750.0,
+    "execution_accuracy": 1.0,
+    "cases_with_golden": 10,
+    "cases_matched": 10,
+    "execution_failure_reasons": {}
+  }
+}

@@ -52,7 +52,11 @@
         },
         "execution": {
           "verdict": "SUCCESS",
-          "sql_nonempty": true
+          "sql_nonempty": true,
+          "golden": {
+            "sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 AND s.region = '华东' GROUP BY d.month ORDER BY d.month",
+            "float_tol": 0.01
+          }
         },
         "report": {
           "table_present": true,
@@ -64,10 +68,10 @@
   {
     "id": "clarify-vague-metric",
     "category": "clarification",
-    "description": "模糊指标「销量」应触发澄清（缺 time_range 等）",
+    "description": "真·模糊问法（没点任何注册表口径）→ 必须澄清「用哪个指标？」；旧问法「帮我看一下销量」点的是注册表口径，按口径优先级应直接作答（2026-11-10 对齐）",
     "turns": [
       {
-        "query": "帮我看一下销量",
+        "query": "帮我看一下",
         "mode": "new"
       }
     ],
@@ -86,7 +90,7 @@
   {
     "id": "clarify-no-time-range",
     "category": "clarification",
-    "description": "完整业务句但无时间范围 → 应澄清而非硬查",
+    "description": "口径能从原话确定、但没给时间范围 → 直接按全部数据作答并在卡上标注「时间未限」；「无时间范围必须澄清」属 2026-11-04 前的立场，已由 assess_reportability 的 note 取代",
     "turns": [
       {
         "query": "帮我分析一下各产品的销售情况",
@@ -96,10 +100,13 @@
     "expectations": [
       {
         "requirement": {
-          "status": "missing"
+          "status": "complete",
+          "target_metrics_contains": [
+            "销售额"
+          ]
         },
         "behavior": {
-          "clarification": true
+          "clarification": false
         }
       }
     ]
@@ -163,7 +170,11 @@
         },
         "execution": {
           "verdict": "SUCCESS",
-          "sql_nonempty": true
+          "sql_nonempty": true,
+          "golden": {
+            "sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 AND s.region = '华东' GROUP BY d.month ORDER BY d.month",
+            "float_tol": 0.01
+          }
         },
         "behavior": {
           "memory_required": true,
@@ -194,7 +205,11 @@
         "execution": {
           "verdict": "SUCCESS",
           "sql_nonempty": true,
-          "rows_gt": 0
+          "rows_gt": 0,
+          "golden": {
+            "sql": "WITH sales AS (  SELECT p.category AS category, SUM(o.order_amount) AS amount   FROM fact_orders o JOIN dim_product p ON p.product_id = o.product_id   JOIN dim_date d ON d.full_date = o.order_date   WHERE d.year = 2024 GROUP BY p.category), refunds AS (  SELECT p.category AS category, SUM(pay.payment_amount) AS amount   FROM fact_payments pay JOIN fact_orders o ON o.order_id = pay.order_id   JOIN dim_product p ON p.product_id = o.product_id   JOIN dim_date d ON d.full_date = o.order_date   WHERE d.year = 2024 AND pay.status = 'REFUNDED' GROUP BY p.category) SELECT s.category AS category, ROUND(s.amount, 2) AS sales, ROUND(COALESCE(r.amount, 0), 2) AS refund FROM sales s LEFT JOIN refunds r ON r.category = s.category ORDER BY sales DESC",
+            "float_tol": 0.01
+          }
         },
         "report": {
           "table_present": true
@@ -290,7 +305,11 @@
         },
         "execution": {
           "verdict": "EMPTY",
-          "sql_nonempty": true
+          "sql_nonempty": true,
+          "golden": {
+            "sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2027 GROUP BY s.region",
+            "float_tol": 0.01
+          }
         }
       }
     ]
@@ -312,7 +331,11 @@
         },
         "execution": {
           "verdict": "SUCCESS",
-          "sql_nonempty": true
+          "sql_nonempty": true,
+          "golden": {
+            "sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY d.month ORDER BY d.month",
+            "float_tol": 0.01
+          }
         },
         "report": {
           "chart_present": true,
@@ -341,7 +364,11 @@
       {
         "execution": {
           "verdict": "SUCCESS",
-          "sql_nonempty": true
+          "sql_nonempty": true,
+          "golden": {
+            "sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC",
+            "float_tol": 0.01
+          }
         },
         "report": {
           "chart_present": true
@@ -441,7 +468,11 @@
         "execution": {
           "verdict": "SUCCESS",
           "sql_nonempty": true,
-          "rows_gt": 0
+          "rows_gt": 0,
+          "golden": {
+            "sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC",
+            "float_tol": 0.01
+          }
         },
         "report": {
           "table_present": true
@@ -470,7 +501,11 @@
           "status": "complete"
         },
         "execution": {
-          "verdict": "SUCCESS"
+          "verdict": "SUCCESS",
+          "golden": {
+            "sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC",
+            "float_tol": 0.01
+          }
         }
       }
     ]
@@ -497,7 +532,11 @@
         "execution": {
           "verdict": "SUCCESS",
           "sql_nonempty": true,
-          "rows_gt": 0
+          "rows_gt": 0,
+          "golden": {
+            "sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC",
+            "float_tol": 0.01
+          }
         },
         "report": {
           "table_present": true

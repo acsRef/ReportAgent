@@ -747,46 +747,6 @@ def _normalize_card_top_period(card, user_query: str = ""):
     logger.info("top_period purpose normalized: %s → %s", getattr(top, "purpose", ""), purpose)
     return card.model_copy(update={"top_period": top.model_copy(update={"purpose": purpose})})
 
-
-def _normalize_card_time_range(card, user_query: str = ""):
-    """卡上没有时间范围时，从**用户原话**确定性补一次（2026-11-10）。
-
-    与 `_normalize_card_scope` 同一手法：模型给了一律尊重，模型漏了不许留白。
-    实测「2024年各区域销售额排名」`task.time_range = null` → SQL 无时间谓词 →
-    2023–2026 四年一起算（金标 96,318,061.74 vs 实测 326,102,457.72）。
-    """
-    if card is None or getattr(card, "time_range", None):
-        return card
-    from app.agent.requirement_parser import time_range_from_query
-
-    value = time_range_from_query(user_query)
-    if not value:
-        return card
-    logger.info("time_range backfilled from query: %s", value)
-    return card.model_copy(update={"time_range": value})
-
-
-def _normalize_card_metric(card, user_query: str = ""):
-    """卡上没有口径时，若原话**唯一命中**注册表口径就直接落位（2026-11-10）。
-
-    实测模型把口径放进了 `goals[0].metric`（「销售额」给对了）但 `task.metrics` 为空，
-    于是 `assess_reportability` 判「缺口径」并给出候选，评测夹具盲选第一个 →
-    毛额被换成净额。原话已经点名口径时，这里没有可问的东西。
-    """
-    if card is None or getattr(card, "target_metrics", None):
-        return card
-    from app.agent.requirement_parser import _display_metric
-    from app.agent.requirement_slots import match_metric_terms
-
-    hits = match_metric_terms(user_query)
-    if len(hits) != 1:
-        # 0 个 → 用户真的没说；>1 个 → 一词多义（「金额」）→ 都该问，不猜。
-        return card
-    name = _display_metric(hits[0].name)
-    logger.info("target_metrics backfilled from query: %s", name)
-    return card.model_copy(update={"target_metrics": [name]})
-
-
 @traced_node("requirement_project")
 def _requirement_project(state: RequirementAnalysisState) -> dict:
     """ActiveAnalysisTask → RequirementCard（唯一执行契约），不再二次调模型。"""
@@ -802,11 +762,8 @@ def _requirement_project(state: RequirementAnalysisState) -> dict:
     )
     card = _normalize_card_scope(card)
     card = _normalize_card_top_period(card, state.get("user_query", ""))
-    # 2026-11-10（plan time-range-and-metric-slot-backfill D1/D2）：模型负责理解，
-    # 代码负责裁决——原话里就有的时间范围与口径，不该因为一次采样漏抽就丢掉。
-    card = _normalize_card_time_range(card, state.get("user_query", ""))
-    card = _normalize_card_metric(card, state.get("user_query", ""))
-    # 归位后卡体可能已经回答了某个待确认槽位（口径/时间）→ 复用既有清理，别重复问。
+    # 卡体可能已经回答了某个待确认槽位（口径由 `reduce_task` 的确定性回填落位）→
+    # 复用既有清理，别重复问一个已经答过的字段。
     from app.agent.requirement_parser import _drop_satisfied_missing_fields
 
     _drop_satisfied_missing_fields(card)

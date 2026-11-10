@@ -1,24 +1,28 @@
 from __future__ import annotations
 
-"""需求卡投影层的确定性回填契约（plan 2026-11-10-time-range-and-metric-slot-backfill）。
+"""任务层确定性回填 + 多口径识别的契约（plan 2026-11-10-time-range-and-metric-slot-backfill）。
 
-钉住三件事，全部来自一次真机事故（`explicit-region-sales-ranking` 金标 96,318,061.74
-vs 实测 326,102,457.72）：
+钉住三件事，全部来自真机事故（`explicit-region-sales-ranking` 金标 96,318,061.74
+vs 实测 326,102,457.72；`session-scope-carryover` 金标华东 1 月 8.99M vs 实测 83.7M）：
 
-1. 原话里有绝对时间范围时，卡片**不许**留空（否则 SQL 没有时间谓词，把 2023–2026
-   四年一起算了）；
-2. 原话里点名了注册表口径时，卡片**不许**再问「用哪个指标？」——而且「净销售额」
-   不能抢走「销售额」，反过来也一样；
-3. 「用哪个指标？」的候选顺序由**原话**决定，不是 `sorted()` 的中文码点序
-   （`净` < `销` 曾把用户明说的「销售额」挤出候选）。
+1. 原话里有绝对时间范围时，**任务状态**（不是只有卡片）必须带上它——多轮继承读的是任务，
+   只回填卡片等于每轮都丢掉上一轮的推导结果；
+2. 原话里点名了注册表口径时，不再问「用哪个指标？」；「净销售额」不许被「销售额」抢，
+   反过来两个不同口径同时出现时**两个都要**；
+3. 「用哪个指标？」的候选顺序由原话决定，不是 `sorted()` 的中文码点序
+   （`净` U+51C0 < `销` U+9500，曾把用户明说的「销售额」挤出候选）。
 """
 
 import pytest
 
-from app.agent.requirement_parser import time_range_from_query
+from app.agent.requirement_parser import scope_from_query, time_range_from_query
 from app.agent.requirement_slots import match_metric_terms
-from app.agent.turn_understanding import assess_reportability, project_card
-from app.models.turn_plan import ActiveAnalysisTask, AnalysisGoal
+from app.agent.turn_understanding import (
+    assess_reportability,
+    project_card,
+    reduce_task,
+)
+from app.models.turn_plan import ActiveAnalysisTask, AnalysisGoal, TurnPlan
 
 pytestmark = pytest.mark.contracts
 
@@ -57,25 +61,57 @@ def test_time_range_absent_or_relative_is_not_invented(query: str) -> None:
     assert time_range_from_query(query) is None
 
 
-# --- D2 · 口径回填 ----------------------------------------------------------
+# --- D2 · 口径识别：子串消歧 + 多口径全留 ----------------------------------
 
 
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
-        ("2024年各区域销售额排名", "销售额"),
-        ("2024年净销售额多少", "净销售额"),          # 长词优先，不许被「销售额」抢
-        ("2024年扣退款销售额多少", "净销售额"),
-        ("各区域实收金额", "实收金额"),
+        ("2024年各区域销售额排名", ["销售额"]),
+        ("2024年净销售额多少", ["净销售额"]),          # 长词覆盖短词，不许被抢
+        ("2024年扣退款销售额多少", ["净销售额"]),
+        ("各区域实收金额", ["实收金额"]),
     ],
 )
-def test_single_metric_term_is_backfilled(query: str, expected: str) -> None:
-    hits = match_metric_terms(query)
-    assert [metric.name for metric in hits] == [expected]
+def test_single_metric_term_is_identified(query: str, expected: list[str]) -> None:
+    assert [metric.name for metric in match_metric_terms(query)] == expected
 
 
-def test_query_without_metric_term_is_not_backfilled() -> None:
+def test_two_distinct_metrics_are_both_kept() -> None:
+    """「销售额和退货金额对比」要的是两个口径。
+
+    修复前只取「最长命中」→ 只剩「退款金额」（4 字 > 3 字），
+    被测 SQL 只出 `退款金额` 一列，用户要的对比少了一半。
+    """
+    hits = [metric.name for metric in match_metric_terms("2024年各产品类别的销售额和退货金额对比")]
+    assert hits == ["销售额", "退款金额"]
+
+
+def test_both_metrics_kept_when_each_appears_on_its_own() -> None:
+    """「销售额和净销售额」里「销售额」有一次是被覆盖的、一次不是 → 两个都留。"""
+    hits = [metric.name for metric in match_metric_terms("销售额和净销售额都看一下")]
+    assert hits == ["销售额", "净销售额"]
+
+
+def test_query_without_metric_term_yields_nothing() -> None:
     assert match_metric_terms("2024年各区域排名") == []
+
+
+# --- D2b · 数据范围抽取 ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("2024年华东地区每个月的销售额趋势", ["华东"]),
+        ("2024年华东销售额", ["华东"]),
+        ("华东和华南对比一下销售额", ["华东", "华南"]),
+        ("2024年各区域销售额排名", []),      # 「各区域」不是具体范围
+        ("看一下销售额", []),
+    ],
+)
+def test_scope_extracted_from_query(query: str, expected: list[str]) -> None:
+    assert scope_from_query(query) == expected
 
 
 # --- D3 · 澄清候选顺序 ------------------------------------------------------
@@ -113,34 +149,96 @@ def test_metric_options_without_preference_stay_sorted() -> None:
     assert metric_blocker.options == sorted(KNOWN)[:3]
 
 
-# --- 投影层接线（真机事故形态的回归钉） ------------------------------------
+# --- D4 · 任务层回填（多轮继承的真正读取源） --------------------------------
 
 
-def _card_for(query: str, *, task: ActiveAnalysisTask):
-    """复刻 `_requirement_project` 的接线顺序（回填 → 清已答槽位）。"""
-    from app.agent.requirement_analysis_graph import (
-        _normalize_card_metric,
-        _normalize_card_time_range,
+def _plan(act: str, *, goals=None, update_fields=None, clear_fields=None) -> TurnPlan:
+    return TurnPlan(
+        conversation_act=act,
+        analysis_goals=list(goals or []),
+        update_fields=dict(update_fields or {}),
+        clear_fields=list(clear_fields or []),
     )
-    from app.agent.requirement_parser import _drop_satisfied_missing_fields
-
-    report = assess_reportability(task, known_metrics=KNOWN)
-    card = project_card(task, reportability=report, summary=query)
-    card = _normalize_card_time_range(card, query)
-    card = _normalize_card_metric(card, query)
-    _drop_satisfied_missing_fields(card)
-    if not card.missing_fields:
-        card.status = "complete"
-    return card
 
 
-def test_real_incident_shape_is_fully_backfilled() -> None:
-    """真机形态：模型给了 `goals[0].metric`，但 `metrics=[]` 且 `time_range=null`。
+_RANKING = AnalysisGoal(type="ranking", metric="销售额", dimension="区域")
 
-    修复前：卡片 `time_range=None`、`target_metrics=[]`、且问「用哪个指标？」，
-    候选 `净销售额/实收金额/客单价`（用户明说的「销售额」不在其中）。
+
+def test_backfill_lands_on_task_not_only_card() -> None:
+    """真机形态：模型只给了 goals，`metrics=[]`、`time_range=null`。
+
+    修复前只补卡片 → 任务仍是空的 → 下一轮继承什么都拿不到。
     """
-    card = _card_for("2024年各区域销售额排名", task=_task())
+    task, revision = reduce_task(
+        None,
+        _plan("new_task", goals=[_RANKING]),
+        user_query="2024年各区域销售额排名",
+    )
+
+    assert task.time_range == "2024年"
+    assert task.metrics == ["销售额"]
+    # 代码补了什么必须能从审计里看出来（changes 是 before/after；新任务没有前置键 → None）
+    assert revision.changes.get("time_range") == (None, "2024年")
+    assert revision.changes.get("metrics") == (None, ["销售额"])
+
+
+def test_second_turn_inherits_backfilled_values() -> None:
+    """第 2 轮不重复说年份/区域时，继承的是**补过**的任务（这才是真缺陷的判据）。
+
+    模型给的是 `time_range=null` / `scope=[]`（真机形态），年份与区域都得靠代码补，
+    否则第 2 轮「再看月度趋势」会退化成「全部区域、全部年份」。
+    """
+    first, _ = reduce_task(
+        None,
+        _plan("new_task", goals=[_RANKING]),
+        user_query="2024年华东销售额",
+    )
+    assert first.time_range == "2024年"
+    assert first.scope == ["华东"]
+
+    second, _ = reduce_task(
+        first,
+        _plan("follow_up", goals=[AnalysisGoal(type="trend", unit="month", metric="销售额")]),
+        user_query="再看月度趋势",
+    )
+
+    assert second.time_range == "2024年"      # 继承，不是 None
+    assert second.metrics == ["销售额"]
+    assert second.scope == ["华东"]
+
+
+def test_model_value_is_respected() -> None:
+    """模型给了值就不覆盖——回填只在留空时发生。"""
+    task, _ = reduce_task(
+        None,
+        _plan("new_task", goals=[_RANKING], update_fields={"time_range": "2023年"}),
+        user_query="2024年各区域销售额排名",
+    )
+    assert task.time_range == "2023年"
+
+
+def test_repeated_metric_terms_do_not_duplicate() -> None:
+    """同一轮重复提到同一口径不产生重复项。"""
+    task, _ = reduce_task(
+        None,
+        _plan("new_task", goals=[_RANKING]),
+        user_query="2024年销售额，各区域销售额排名",
+    )
+    assert task.metrics == ["销售额"]
+
+
+# --- 投影链路：任务 → 可报告性 → 卡片 --------------------------------------
+
+
+def _project(task: ActiveAnalysisTask, query: str):
+    report = assess_reportability(task, known_metrics=KNOWN)
+    return project_card(task, reportability=report, summary=query)
+
+
+def test_incident_shape_no_longer_asks_for_metric() -> None:
+    task, _ = reduce_task(None, _plan("new_task", goals=[_RANKING]),
+                          user_query="2024年各区域销售额排名")
+    card = _project(task, "2024年各区域销售额排名")
 
     assert card.time_range == "2024年"
     assert card.target_metrics == ["销售额"]
@@ -148,28 +246,25 @@ def test_real_incident_shape_is_fully_backfilled() -> None:
     assert card.status == "complete"
 
 
-def test_model_output_is_respected_when_present() -> None:
-    """模型给了值就不覆盖——回填只在留空时发生。"""
-    from app.agent.requirement_analysis_graph import (
-        _normalize_card_metric,
-        _normalize_card_time_range,
+def test_multi_metric_question_keeps_both_on_card() -> None:
+    task, _ = reduce_task(
+        None,
+        _plan("new_task", goals=[AnalysisGoal(type="compare", dimension="品类")]),
+        user_query="2024年各产品类别的销售额和退货金额对比",
     )
+    card = _project(task, "2024年各产品类别的销售额和退货金额对比")
 
-    task = _task(metrics=["净销售额"], time_range="2023年")
-    card = project_card(task, reportability=assess_reportability(task, known_metrics=KNOWN))
-
-    card = _normalize_card_time_range(card, "2024年各区域销售额排名")
-    card = _normalize_card_metric(card, "2024年各区域销售额排名")
-
-    assert card.time_range == "2023年"
-    assert card.target_metrics == ["净销售额"]
+    assert card.target_metrics == ["销售额", "退款金额"]
+    assert card.missing_fields == []
 
 
-def test_ambiguous_metric_still_asks() -> None:
-    """原话没有点名口径时不猜：仍然保留澄清（回填不许把「没说」变成「说了」）。"""
-    card = _card_for("2024年各区域排名", task=_task())
+def test_ambiguous_query_still_asks() -> None:
+    """原话没有点名口径时不猜：澄清必须保留（回填不许把「没说」变成「说了」）。"""
+    task, _ = reduce_task(None, _plan("new_task", goals=[_RANKING]),
+                          user_query="2024年各区域排名")
+    card = _project(task, "2024年各区域排名")
 
-    assert card.time_range == "2024年"
+    assert task.metrics == []
     assert card.target_metrics == []
     assert [mf.key for mf in card.missing_fields] == ["metric"]
     assert card.status == "missing"

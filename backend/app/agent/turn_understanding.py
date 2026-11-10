@@ -487,6 +487,38 @@ def _apply_update(task: dict, field: str, value: Any) -> None:
         task["time_range"] = str(value).strip() if value not in ("", None) else None
 
 
+def _backfill_from_query(base: dict[str, Any], user_query: str) -> None:
+    """把原话里的**字面事实**（绝对时间范围 / 数据范围 / 点名口径）补进任务状态。
+
+    为什么必须在**任务层**，不能只在卡片层：多轮继承读的是任务
+    （`analysis_task_repository.load_latest_task`）。只回填卡片的话，第 2 轮从
+    `time_range=null` 的任务出发——实测「2024年华东销售额」→「再看月度趋势」：
+    第 2 轮卡片时间丢失、SQL 没有年份也没有区域过滤
+    （金标华东 1 月 8.99M vs 实测 83.7M／23.9M）。
+
+    只补**空的**槽位：模型给了值一律尊重（口径/时间/范围都是用户原话可改的字段）。
+    """
+    from app.agent.requirement_parser import (
+        _display_metric,
+        scope_from_query,
+        time_range_from_query,
+    )
+    from app.agent.requirement_slots import match_metric_terms
+
+    if not base.get("time_range"):
+        value = time_range_from_query(user_query)
+        if value:
+            base["time_range"] = value
+    if not base.get("scope"):
+        scopes = scope_from_query(user_query)
+        if scopes:
+            base["scope"] = scopes
+    if not base.get("metrics"):
+        hits = match_metric_terms(user_query)
+        if hits:
+            base["metrics"] = [_display_metric(hit.name) for hit in hits]
+
+
 def reduce_task(
     prior: ActiveAnalysisTask | None, plan: TurnPlan, *, user_query: str = "",
 ) -> tuple[ActiveAnalysisTask, TaskRevision]:
@@ -524,6 +556,11 @@ def reduce_task(
 
     for field in TASK_FIELDS:
         base.setdefault(field, [] if field in ("scope", "metrics", "goals") else None)
+
+    # 代码裁决的最后一步：原话里的**字面事实**（绝对时间范围 / 点名口径）补进任务状态。
+    # 必须在构造 task 之前做——这样 `changes` 审计会如实记下「代码补了什么」，
+    # 而且**下一轮继承读到的是补过的值**。
+    _backfill_from_query(base, user_query)
 
     task = ActiveAnalysisTask(
         revision=(prior.revision if prior else 0) + 1,

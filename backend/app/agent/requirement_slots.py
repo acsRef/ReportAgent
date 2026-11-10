@@ -91,27 +91,67 @@ def _candidate(metric: MetricDef, source: SlotSource) -> MetricCandidate:
 
 
 def match_metric_terms(text: str) -> list[MetricDef]:
-    """原话里提到的注册表指标（**最长命中优先**，同长度多命中全部返回）。
+    """原话里点名的注册表指标——**多个不同口径同时出现时全部返回**。
 
-    为什么不是简单的 `in` 判断：`metrics_mentioned_in` 用子串匹配时，
-    「净销售额」会同时命中「销售额」——口径被更泛的词抢走就选错了表达式。
+    两条规则合起来用，缺一不可：
+
+    1. **子串消歧**：同一个词能落在两个口径上时，只保留「被更长命中完整覆盖」的那个
+       （「净销售额是多少」里的「销售额」被「净销售额」覆盖 → 只认净销售额）；
+    2. **互不覆盖就都要**：`2024年各产品类别的销售额和退货金额对比` 要的是**两个**口径。
+
+    2026-11-10（真机 `complex-sql-sales-vs-returns`）：此前只做「取最长」，
+    于是「销售额和退货金额」只留下「退款金额」（4 字 > 3 字），需求卡只剩一个口径，
+    被测 SQL 只出 `退款金额` 一列——**用户要的对比直接少了一半**。
+
+    与 `knowledge.registry.metrics_mentioned_in` 的区别（有意保留两份实现）：
+    那边回答「这段文本**围绕/定义**哪个口径」（记忆归并需要单主题语义），
+    这里回答「用户**点了哪些**口径」（槽位需要多值）。
     """
     haystack = _norm(text)
     if not haystack:
         return []
-    hits: list[tuple[int, MetricDef]] = []
+
+    matched: list[tuple[MetricDef, str]] = []
     for metric in knowledge.all_metrics():
-        best = 0
+        best = ""
         for alias in (metric.name, *metric.synonyms):
             needle = _norm(alias)
-            if needle and needle in haystack:
-                best = max(best, len(needle))
+            if needle and needle in haystack and len(needle) > len(best):
+                best = needle
         if best:
-            hits.append((best, metric))
-    if not hits:
+            matched.append((metric, best))
+    if not matched:
         return []
-    longest = max(length for length, _ in hits)
-    return [metric for length, metric in hits if length == longest]
+
+    spans_cache: dict[str, list[tuple[int, int]]] = {}
+
+    def _spans(needle: str) -> list[tuple[int, int]]:
+        cached = spans_cache.get(needle)
+        if cached is None:
+            cached, start = [], haystack.find(needle)
+            while start != -1:
+                cached.append((start, start + len(needle)))
+                start = haystack.find(needle, start + 1)
+            spans_cache[needle] = cached
+        return cached
+
+    found: list[MetricDef] = []
+    seen: set[str] = set()
+    for metric, needle in matched:
+        if metric.name in seen:
+            continue
+        mine = _spans(needle)
+        covered = any(
+            other.name != metric.name
+            and len(other_needle) > len(needle)
+            and all(any(a <= s and e <= b for a, b in _spans(other_needle)) for s, e in mine)
+            for other, other_needle in matched
+        )
+        if covered:
+            continue
+        seen.add(metric.name)
+        found.append(metric)
+    return found
 
 
 def _default_metric() -> MetricDef | None:

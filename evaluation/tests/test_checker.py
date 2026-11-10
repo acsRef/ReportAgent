@@ -80,6 +80,43 @@ class TestCheckTurn:
         sections, _ = check_turn(_obs(time_range="2024年"), exp)
         assert sections["requirement.time_range_equals"] == "fail"
 
+    # --- 2026-11-10（plan baseline-golden-coverage D3）：断言管语义，不管排版 ---
+
+    @pytest.mark.parametrize(
+        ("observed", "expected"),
+        [
+            ("2024年", "2024"),          # 「年」字是排版
+            ("2024", "2024年"),
+            ("2024年7月", "2024年07月"),  # 补零是排版
+            ("2024年7月-8月", "2024年7月-8月"),
+        ],
+    )
+    def test_time_range_formatting_is_equivalent(self, observed, expected):
+        exp = {"requirement": {"time_range_equals": expected}}
+        sections, _ = check_turn(_obs(time_range=observed), exp)
+        assert sections["requirement.time_range_equals"] == "pass"
+
+    def test_time_range_normalization_does_not_collapse_ranges(self):
+        """归一化只去排版：区间不能被折成单年/单月，否则等于放水。"""
+        exp = {"requirement": {"time_range_equals": "2024年"}}
+        sections, _ = check_turn(_obs(time_range="2024年7月"), exp)
+        assert sections["requirement.time_range_equals"] == "fail"
+
+    def test_relative_period_falls_back_to_exact(self):
+        exp = {"requirement": {"time_range_equals": "今年"}}
+        sections, _ = check_turn(_obs(time_range="去年"), exp)
+        assert sections["requirement.time_range_equals"] == "fail"
+        sections, _ = check_turn(_obs(time_range="今年"), exp)
+        assert sections["requirement.time_range_equals"] == "pass"
+
+    def test_metric_expectation_is_exact_not_substring(self):
+        """「净销售额」不许冒充「销售额」——子串匹配曾让毛额变净额混过需求层断言。"""
+        exp = {"requirement": {"target_metrics_contains": ["销售额"]}}
+        sections, _ = check_turn(_obs(target_metrics=["净销售额"]), exp)
+        assert sections["requirement.target_metrics"] == "fail"
+        sections, _ = check_turn(_obs(target_metrics=["销售额"]), exp)
+        assert sections["requirement.target_metrics"] == "pass"
+
     def test_memory_expectation_is_deferred_not_fail(self):
         exp = {"behavior": {"memory_required": True,
                             "memory_types": ["conversation"]}}

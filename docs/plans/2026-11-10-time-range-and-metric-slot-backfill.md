@@ -147,6 +147,33 @@ python -m evaluation.runner --only-id explicit-region-sales-ranking --out /tmp/e
 拿真数据库的 6 行去和假快照的空行比。现在把金标解析注入掉，并**额外断言
 `execution.result_matches == pass`**：这条用例从此证明的是「算对了」，不只是「跑通了」。
 
+## 勘误（同日 · 加了 20 条基线金标之后）
+
+本 plan 最初把 D1/D2 落在**卡片层**（`_requirement_project` 的两个 `_normalize_card_*`）。
+接入全量金标后发现这个落点是错的：
+
+```
+case session-scope-carryover（2024年华东销售额 → 再看月度趋势）
+turn1 card: 2024年 · 销售额   ✅（卡层回填生效）
+turn2 task: {"time_range": null, "metrics": []}   ← 任务仍是空的
+turn2 card: 时间空 · 净销售额 ❌
+   → SQL 无年份过滤，金标华东 1 月 8,998,378.01 vs 实测 83,724,901.07
+```
+
+**多轮继承读的是任务，不是卡片**（`analysis_task_repository.load_latest_task`）。
+只回填卡片 = 每轮都丢掉上一轮的推导结果，单轮看起来全对、多轮全错——这是最阴的一类。
+
+修正：
+
+- 回填下沉到 `turn_understanding._backfill_from_query`，由 `reduce_task` 在**构造 task 之前**调用
+  （`user_query` 本来就是它的入参，`changes` 审计因此天然记录「代码补了什么」）；
+- 卡层的两个 `_normalize_card_*` **删除**——留着会掩盖任务层的缺陷（本次就是被它掩盖了）；
+- 保留 `_requirement_project` 里的 `_drop_satisfied_missing_fields` 与 status 重算（仍然正确）。
+
+顺带暴露的第二个真缺陷：`requirement_slots.match_metric_terms` 只保留「最长命中」，
+`2024年各产品类别的销售额和退货金额对比` 只剩 `退款金额`（4 字 > 3 字），
+被测 SQL 只出 `退款金额` **一列**，用户要的对比少了一半。改为「子串覆盖才消歧、互不覆盖就全留」。
+
 ## Explicitly NOT doing
 
 - **不改 `metrics.yaml`**：`净销售额` 已是「先按 `order_id` 聚合的派生表再 join」的安全写法，
