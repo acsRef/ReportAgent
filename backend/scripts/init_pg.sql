@@ -437,3 +437,21 @@ CREATE TABLE IF NOT EXISTS memory.long_term_memory (
 
 CREATE INDEX IF NOT EXISTS idx_long_term_user
     ON memory.long_term_memory (user_id);
+-- 灰区复审队列（plan 2026-11-10-semantic-memory-merge D5）：
+-- 结构信号缺失、但 embedding 余弦 >= 0.90 的候选对——**只登记，不合并**。
+-- 攒够同一类的条目，就该往 metrics.yaml 的 synonyms 或本模块词表里加一条同义说法；
+-- 这是「词表缺口」的可观测输入，不是垃圾桶。
+CREATE TABLE IF NOT EXISTS memory.merge_candidate (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL,
+    candidate_content TEXT NOT NULL,
+    target_id INT,
+    target_content TEXT,
+    similarity REAL,
+    reason VARCHAR(48),
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (user_id, candidate_content, target_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_merge_candidate_user
+    ON memory.merge_candidate (user_id, created_at DESC);

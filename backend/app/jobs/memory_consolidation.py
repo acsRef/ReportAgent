@@ -74,8 +74,8 @@ async def _run(user_ids: list[int], *, dry_run: bool, max_items: int) -> list[di
             out.append(summary)
             print(
                 f"  user={uid} considered={summary['considered']} "
-                f"promoted={summary['promoted']} expired={summary['expired']} "
-                f"superseded={summary['superseded']} skipped={summary['skipped']} "
+                f"promoted={summary['promoted']} merged={summary['merged']} "
+                f"reviewed={summary['reviewed']} expired={summary['expired']} "
                 f"errors={summary['errors']}"
                 + ("  [dry-run]" if dry_run else "")
             )
@@ -115,10 +115,12 @@ def main(argv: list[str] | None = None) -> int:
         "promoted": sum(s["promoted"] for s in summaries),
         "expired": sum(s["expired"] for s in summaries),
         "superseded": sum(s["superseded"] for s in summaries),
+        "merged": sum(s["merged"] for s in summaries),
+        "reviewed": sum(s["reviewed"] for s in summaries),
     }
     print(
         f"完成：users={total['users']} promoted={total['promoted']} "
-        f"expired={total['expired']} superseded={total['superseded']}"
+        f"merged={total['merged']} reviewed={total['reviewed']} "
         + ("  [dry-run，未写库]" if args.dry_run else "")
     )
     return 0

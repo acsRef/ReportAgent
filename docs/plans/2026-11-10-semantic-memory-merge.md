@@ -1,4 +1,4 @@
-> 状态: 进行中
+> 状态: 已完成
 
 # 记忆的语义归并：结构优先，embedding 不裁决
 
@@ -135,3 +135,54 @@ python -m pytest backend/tests/persistence/test_long_term_polarity.py -q
 - **不改召回排序**（`rank_key` 语义带不变）与**准入判据**（admission 三档不变）。
 - **不自动修复历史**：老的 `fact:<指纹>` 多行不会自动合并；需要时跑一次带 dry-run 的重写脚本。
 - **不做 LLM 判同义**：要真 LLM 配对跑 + 成本，且与「确定性优先」的写入侧原则冲突；留给灰区复审。
+
+## 落地记录（2026-11-10）
+
+按 D1–D5 实施完毕。真机探针（临时用户，跑完即删）：
+
+```
+极性槽：  pref:chart = 以后都用饼图
+         pref:chart:exclude = 以后不要用柱状图      ← 不再互相覆盖（此前饼图被顶掉）
+
+同义归并：长期库 fact:<hash>「净销售额是扣退款后的口径」evidence=1
+         候选「净销售额等于销售额减掉退款」→ 判定器 merge → evidence=2，**不新建行**
+
+多口径提示：两条不同口径（不含退款 / 包含退款）同时召回时，多出一条
+         [口径提示] 记忆里同一指标存在多条口径，请与用户确认：净销售额：2 条不同口径（…）
+```
+
+### 与计划的一处偏差（被契约测试抓住的，值得记）
+
+口径提示最初写在 `infra/memory/memory_manager.py` 里，直接 `from app.memory.merge import atoms`。
+全量测试立刻红了：`test_memory_conversation_decouple` 钉着「infra.memory 不得反向 import
+domain/context」。这不是测试碍事，而是**分层真的错了**——「同一指标有多条口径」是**语义判断**，
+infra 只该懂存取。于是把提示移到 domain 侧的 `app/memory/semantic.py`（semantic view），
+infra 回归纯存取。这条正好演示了契约测试的用途。
+
+### 实现要点
+
+| 文件 | 内容 |
+|---|---|
+| `backend/app/memory/merge.py` | **新增** `polarity / atoms / numbers / decide`；`NEGATION_WORDS` 成为全仓否定词唯一真源（`report/preference.py` 改为引用它） |
+| `backend/app/memory/preferences.py` | `memory_key` 支持极性后缀：`pref:chart` / `pref:chart:exclude` |
+| `backend/app/memory/consolidation.py` | 无标记候选先 `decide()`：`merge` → 累加既有条目证据并删候选；`review` → 记 `merge_candidate` 并删候选；否则才走证据升级 |
+| `backend/app/memory/semantic.py` | domain 侧口径分歧提示（`_multi_definition_hint`） |
+| `backend/app/infra/memory/user_memory.py` | `list_candidates_with_match`（一次 LATERAL 查询拿到「候选 + 最近长期条目 + 余弦」）、run 记账加 `merged/reviewed` |
+| `backend/app/infra/memory/long_term.py` | `add_evidence` / `record_merge_candidate` / `list_merge_candidates` |
+| `backend/app/jobs/memory_consolidation.py` | 输出 `merged` / `reviewed` |
+| `backend/scripts/init_pg.sql` | `memory.merge_candidate` 表 + `consolidation_run.merged/reviewed` 列 |
+
+测试：`test_memory_merge_decide.py`（21 例判定矩阵，含极性/数字/跨 kind/灰区）、
+`test_memory_merge_polarity.py`（5 例极性槽 + 同义累加 + 灰区复审）。
+全量后端 **1735 passed / 18 skipped**。
+
+测量脚本保留并纳入流程：改词表/阈值后重跑
+`evaluation/semantic_merge_probe.py` → `evaluation/semantic_merge_guard_eval.py`
+（当前基准：错误合并 0 / 精确率 1.00 / 召回 0.92）。
+
+### 仍未做
+
+- **灰区的人工出口**：`merge_candidate` 目前只能查库（`MemoryManager.list_merge_candidates`），
+  没有界面；按用户要求「界面不做」，但攒够同类条目时应往 `metrics.yaml` 的 `synonyms` 加说法。
+- **历史事实的重跑**：老的 `fact:<指纹>` 多行不会自动合并；需要时写一个带 dry-run 的重写脚本。
+- **跨用户归并**：不做（槽位含 `user_id`）。

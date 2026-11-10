@@ -21,6 +21,7 @@ import logging
 
 from app.infra.memory.memory_manager import MemoryManager
 from app.memory.admission import classify_scope
+from app.memory.merge import decide
 from app.memory.lifecycle import CONFIDENCE_EVIDENCE, CONFIDENCE_EXPLICIT_STATEMENT
 from app.memory.preferences import memory_key, preference_dimension
 
@@ -47,6 +48,8 @@ async def consolidate(
         "considered": 0,
         "promoted": 0,
         "expired": 0,
+        "merged": 0,
+        "reviewed": 0,
         "superseded": 0,
         "skipped": 0,
         "errors": 0,
@@ -68,7 +71,7 @@ async def consolidate(
 
     # --- 2. 候选晋级 -----------------------------------------------------------
     try:
-        candidates = await mm.list_candidates(int(user_id), limit=max_items)
+        candidates = await mm.list_candidates_with_match(int(user_id), limit=max_items)
     except Exception as exc:  # noqa: BLE001
         summary["errors"] += 1
         logger.warning("consolidate: list_candidates failed user=%s: %s", user_id, exc)
@@ -79,7 +82,53 @@ async def consolidate(
         adm = classify_scope(row["content"] or "")
         evidence = int(row.get("evidence_count") or 1)
         if not adm.writes_active:
-            # 无作用域标记：默认留队；**但证据够了就升级**（D6，§五 修订，用户 2026-11-09 批准）
+            # 无作用域标记：先问「这条是不是已有长期记忆的另一种说法」（plan 2026-11-10）
+            decision, reason = decide(
+                row["content"] or "",
+                row.get("target_content") or "",
+                similarity=row.get("similarity"),
+            )
+            if row.get("target_id") and decision == "merge":
+                # 同一件事的另一种说法 → 证据累加到既有条目（不新建、不覆盖）
+                summary["actions"].append({
+                    "entry_id": row["id"], "content": row["content"][:60],
+                    "target_id": row["target_id"], "reason": f"merge-by-{reason}",
+                })
+                if not dry_run:
+                    try:
+                        await mm.add_long_term_evidence(row["target_id"], evidence)
+                        await mm.drop_candidate(int(user_id), row["id"])
+                    except Exception as exc:  # noqa: BLE001
+                        summary["errors"] += 1
+                        logger.warning("consolidate: merge evidence failed id=%s: %s", row["id"], exc)
+                        continue
+                summary["merged"] += 1
+                continue
+            if row.get("target_id") and decision == "review":
+                # 结构无信号、余弦够高 → 只登记待复审，**不合并也不晋级**
+                summary["actions"].append({
+                    "entry_id": row["id"], "content": row["content"][:60],
+                    "target_id": row["target_id"],
+                    "similarity": row.get("similarity"), "reason": "gray-zone-review",
+                })
+                if not dry_run:
+                    try:
+                        await mm.record_merge_candidate(
+                            user_id=int(user_id),
+                            candidate_content=row["content"] or "",
+                            target_id=row["target_id"],
+                            target_content=row.get("target_content"),
+                            similarity=row.get("similarity"),
+                            reason=reason,
+                        )
+                        await mm.drop_candidate(int(user_id), row["id"])
+                    except Exception as exc:  # noqa: BLE001
+                        summary["errors"] += 1
+                        logger.warning("consolidate: review record failed id=%s: %s", row["id"], exc)
+                        continue
+                summary["reviewed"] += 1
+                continue
+            # 与既有长期记忆无关、也没有作用域标记：攒够证据才升级
             if evidence < min_evidence:
                 summary["skipped"] += 1
                 continue
@@ -198,6 +247,8 @@ async def consolidate(
             promoted=summary["promoted"],
             expired=summary["expired"],
             superseded=summary["superseded"],
+            merged=summary["merged"],
+            reviewed=summary["reviewed"],
             skipped=summary["skipped"],
             errors=summary["errors"],
             dry_run=dry_run,

@@ -20,6 +20,8 @@ from __future__ import annotations
 import hashlib
 import re
 
+from app.memory.merge import polarity
+
 # 维度 → 关键词家族。顺序无依赖；命中多个维度时取**第一个命中**（互斥语义）。
 _DIMENSION_KEYWORDS: dict[str, tuple[str, ...]] = {
     # 呈现形态：报告里「用什么图 / 用不用表」
@@ -100,6 +102,9 @@ def memory_key(content: str, memory_type: str = "stable_preference") -> str:
     """
     dimension = preference_dimension(content)
     if dimension:
-        return f"pref:{dimension}"
+        # 极性单独占槽（plan 2026-11-10 D3）：否则「以后不要用柱状图」会把
+        # 「以后都用饼图」覆盖掉——正向偏好被一条否定句顶掉，系统退回默认值。
+        suffix = ":exclude" if polarity(content) else ""
+        return f"pref:{dimension}{suffix}"
     digest = hashlib.sha1(_normalize_for_key(content).encode("utf-8")).hexdigest()
     return f"fact:{digest[:24]}"

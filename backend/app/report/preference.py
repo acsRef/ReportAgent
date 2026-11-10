@@ -20,6 +20,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from app.memory.merge import NEGATION_WORDS as _NEGATIONS  # 否定词单一真源（2026-11-10）
+
 # chart_advisor 词表交集；中文/英文值均识别。
 # P16-LOW（review）：不 alias 单字「表」——「图表」等普通偏好文本会被宽 substring
 # 误判成 table；「表格」完整词已覆盖。
@@ -128,7 +130,7 @@ _EXPLICIT_CHART_WORDS: tuple[tuple[tuple[str, ...], str], ...] = (
 )
 
 # 「不要表格 / 不用柱状图」不能被读成要它——词前 3 个字里出现否定词就跳过。
-_NEGATIONS = ("不", "别", "无需", "不是", "非")
+
 
 _TYPE_TO_WORD: dict[str, str] = {"pie": "饼图", "bar": "柱状图", "table": "表格"}
 

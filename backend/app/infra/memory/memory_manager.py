@@ -23,6 +23,14 @@ class MemoryManager:
     async def list_long_term(self, user_id) -> list[dict]:
         return await self._long_term.list_all(user_id)
 
+    async def add_long_term_evidence(self, entry_id: int, amount: int = 1) -> int:
+        return await self._long_term.add_evidence(entry_id, amount)
+
+    async def record_merge_candidate(self, **kwargs) -> int:
+        return await self._long_term.record_merge_candidate(**kwargs)
+
+    async def list_merge_candidates(self, user_id, limit: int = 50) -> list[dict]:
+        return await self._long_term.list_merge_candidates(user_id, limit=limit)
     async def expire_long_term(self, user_id, *, days: int = 180) -> int:
         return await self._long_term.expire_stale(user_id, days=days)
 
@@ -149,6 +157,9 @@ class MemoryManager:
 
     async def promote_candidate(self, user_id, entry_id: int, **kwargs) -> None:
         await self._user_memory.promote_candidate(user_id, entry_id, **kwargs)
+
+    async def list_candidates_with_match(self, user_id, limit: int = 200) -> list[dict]:
+        return await self._user_memory.list_candidates_with_match(user_id, limit=limit)
 
     async def drop_candidate(self, user_id, entry_id: int) -> None:
         await self._user_memory.drop_candidate(user_id, entry_id)

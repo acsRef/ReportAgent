@@ -393,6 +393,36 @@ class UserMemory:
             )
         return [dict(r) for r in rows]
 
+
+    async def list_candidates_with_match(self, user_id: str, limit: int = 200) -> list[dict]:
+        """候选 + 「长期库里最相近的一条」（plan 2026-11-10 的归并输入）。
+
+        一次查询拿到 `(candidate, best long_term row, cosine)`：
+        - 有结构信号 → 判定器直接说 merge / distinct，不需要余弦；
+        - 没结构信号 → 用余弦判断是否进灰区（≥0.90 → 记待复审，不合并）。
+        """
+        user_id = int(user_id)
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT c.id, c.content, COALESCE(c.evidence_count, 1) AS evidence_count,
+                          m.target_id, m.target_content, m.similarity
+                   FROM memory.semantic_entry c
+                   LEFT JOIN LATERAL (
+                       SELECT l.id AS target_id, l.content AS target_content,
+                              1 - (l.intent_embedding <=> c.intent_embedding) AS similarity
+                       FROM memory.long_term_memory l
+                       WHERE l.user_id = c.user_id
+                         AND l.intent_embedding IS NOT NULL
+                         AND c.intent_embedding IS NOT NULL
+                       ORDER BY l.intent_embedding <=> c.intent_embedding
+                       LIMIT 1
+                   ) m ON TRUE
+                   WHERE c.user_id=$1 AND c.status='candidate' AND c.promoted_at IS NULL
+                   ORDER BY c.created_at ASC LIMIT $2""",
+                user_id, limit,
+            )
+        return [dict(r) for r in rows]
     async def drop_candidate(self, user_id: str, entry_id: int) -> None:
         """候选行搬进长期库后删掉——候选池是工作队列，不是历史（plan long-term-memory-table）。"""
         user_id = int(user_id)
@@ -499,6 +529,8 @@ class UserMemory:
         promoted: int,
         expired: int,
         superseded: int,
+        merged: int = 0,
+        reviewed: int = 0,
         skipped: int,
         errors: int,
         dry_run: bool,
@@ -511,11 +543,11 @@ class UserMemory:
             row = await conn.fetchrow(
                 """INSERT INTO memory.consolidation_run
                    (user_id, started_at, finished_at, considered, promoted, expired,
-                    superseded, skipped, errors, dry_run, note)
-                   VALUES ($1, $2, NOW(), $3,$4,$5,$6,$7,$8,$9,$10)
+                    superseded, skipped, errors, dry_run, note, merged, reviewed)
+                   VALUES ($1, $2, NOW(), $3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                    RETURNING id""",
                 user_id, started_at or datetime.datetime.now(), considered, promoted,
-                expired, superseded, skipped, errors, dry_run, note[:500],
+                expired, superseded, skipped, errors, dry_run, note[:500], merged, reviewed,
             )
         return row["id"]
 

@@ -183,3 +183,49 @@ class LongTermMemory:
                 int(user_id), str(int(days)),
             )
         return int(str(res).split()[-1]) if res else 0
+
+    async def add_evidence(self, entry_id: int, amount: int = 1) -> int:
+        """把「另一种说法的同一件事」的证据累加到既有条目上（plan 2026-11-10 D2）。"""
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE memory.long_term_memory SET "
+                "evidence_count = COALESCE(evidence_count, 1) + $2, updated_at = NOW() "
+                "WHERE id=$1 RETURNING evidence_count",
+                entry_id, max(int(amount), 1),
+            )
+        return row["evidence_count"] if row else 0
+
+    async def record_merge_candidate(
+        self,
+        *,
+        user_id: int | str,
+        candidate_content: str,
+        target_id: int | None,
+        target_content: str | None,
+        similarity: float | None,
+        reason: str,
+    ) -> int:
+        """灰区记录：结构无信号但余弦够高 → 只登记待复审，**不合并**（可观测的缺口输入）。"""
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO memory.merge_candidate
+                   (user_id, candidate_content, target_id, target_content, similarity, reason)
+                   VALUES ($1,$2,$3,$4,$5,$6)
+                   ON CONFLICT (user_id, candidate_content, target_id) DO NOTHING
+                   RETURNING id""",
+                int(user_id), candidate_content, target_id, target_content,
+                similarity, reason[:48],
+            )
+        return row["id"] if row else 0
+
+    async def list_merge_candidates(self, user_id: int | str, limit: int = 50) -> list[dict]:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, candidate_content, target_content, similarity, reason, created_at "
+                "FROM memory.merge_candidate WHERE user_id=$1 ORDER BY id DESC LIMIT $2",
+                int(user_id), limit,
+            )
+        return [dict(r) for r in rows]

@@ -133,6 +133,9 @@ State 五块拆分与字段所有权：RequestState / RequirementState / Executi
 > `memory_key` 是**意图槽位**（`pref:chart` / `pref:granularity` / `fact:<内容指纹>`），
 > 冲突写法从 supersede 链改为 **UPSERT 覆盖**（`revision+1`、旧值留 `previous_content`）。
 > `memory.semantic_entry` 退化为工作区（候选队列 + 会话级 TTL），召回时两库合并、热度分表记。
+> **归并（2026-11-10）**：不按 embedding 相似度自动合并（实测三类重叠，θ=0.90 仍有 7 误并）；
+> 判定器 `app/memory/merge.py` 结构优先（极性/数字/原子值），灰区只进 `memory.merge_candidate` 待复审，
+> 多口径显式提示模型。同义词真源是 `metrics.yaml` 的 `synonyms`。
 
 全部细则见 [memory-architecture.md](docs/architecture/memory-architecture.md)。
 
