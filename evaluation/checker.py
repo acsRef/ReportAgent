@@ -43,6 +43,8 @@ class ObservedTurn(BaseModel):
     dimensions: list[str] = Field(default_factory=list)
     sql: str | None = None
     row_count: int | None = None
+    columns: list[str] = Field(default_factory=list)   # execution accuracy 用（金标比对）
+    rows: list[list[Any]] = Field(default_factory=list)
     error_code: str | None = None
     table_present: bool = False
     chart_present: bool = False

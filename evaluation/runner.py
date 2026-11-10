@@ -23,6 +23,7 @@ from typing import Any, Iterator
 import httpx
 
 from evaluation.checker import ObservedTurn, check_turn, summarize
+from evaluation.execution_accuracy import compare_result_sets
 from evaluation.loader import load_all
 from evaluation.schema import BaselineCase
 
@@ -162,6 +163,20 @@ def _observe_turn(events: list[dict], sid: str, client: httpx.Client,
             table = answer.get("table") or {}
             obs.sql = snapshot.get("sql")
             obs.row_count = len(snapshot.get("rows") or [])
+            # Execution Accuracy 用：把真实结果行留下（截断到 500 行，评测不需要全量）。
+            # 两个坑（2026-11-10 首次接入就踩到）：
+            #   ① `query_snapshot.columns` 是 `[{name, type}]`，不是字符串列表；
+            #   ② `query_snapshot.rows` 是 **dict 列表**（每行 {列名: 值}），直接 list()
+            #      只会拿到列名——把「表头」当成一行数据。
+            raw_cols = snapshot.get("columns") or []
+            obs.columns = [
+                c.get("name") if isinstance(c, dict) else str(c) for c in raw_cols
+            ]
+            raw_rows = (snapshot.get("rows") or [])[:500]
+            obs.rows = [
+                [row.get(c) for c in obs.columns] if isinstance(row, dict) else list(row)
+                for row in raw_rows
+            ]
             obs.table_present = bool(table and table.get("columns"))
             obs.table_rows = len(table.get("rows") or [])
             chart = answer.get("chart") or {}
@@ -197,6 +212,50 @@ def _compute_dim_results(
     )
 
 
+def _ensure_backend_on_path() -> None:
+    """`python -m evaluation.runner` 从 repo 根跑时，`app.*` 还不在 sys.path 上。
+
+    金标 SQL 要用生产同一套只读执行器（`app.tools.sql_tools.execute_sql`）跑，
+    所以这里把 `backend/` 加进来——和 sql_tools 的只读角色/安全闸保持一致，
+    不另开一条数据库访问路径。
+    """
+    import sys
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parents[1] / "backend"
+    if str(backend) not in sys.path:
+        sys.path.insert(0, str(backend))
+    # 金标 SQL 走 `execute_sql` → 需要 ANALYSIS_DSN（只读角色）。runner 是独立脚本，
+    # 不会自动读 repo 根 .env，这里按其它评测脚本同样的方式补载（不覆盖已设变量）。
+    root_env = Path(__file__).resolve().parents[1] / ".env"
+    if root_env.exists():
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(root_env, override=False)
+        except ImportError:  # pragma: no cover
+            pass
+
+
+def _resolve_golden(golden) -> tuple[list[str], list[list]] | None:
+    """金标结果：优先用 `golden.sql` 现场跑一遍（跟着种子数据走），否则用内联行。"""
+    if golden is None:
+        return None
+    if getattr(golden, "sql", None):
+        _ensure_backend_on_path()
+        from app.tools.sql_tools import execute_sql
+
+        payload = json.loads(execute_sql(golden.sql))
+        if payload.get("error"):
+            raise RuntimeError(f"golden sql failed: {payload['error']}")
+        cols = [c.get("name") for c in payload.get("columns") or []]
+        rows = [[row.get(c) for c in cols] for row in payload.get("rows") or []]
+        return list(cols), rows
+    if getattr(golden, "rows", None):
+        return list(golden.columns or []), [list(r) for r in golden.rows]
+    return None
+
+
 def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, Any]:
     # 2026-11-02：只有「声明了故障却没有注入规格」才 skip——这类 case 是
     # 真 deferred（例如 MCP_TIMEOUT 没有注入形态）。有 `fault` 规格的一律真跑。
@@ -217,6 +276,7 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
         for e in case.expectations
     )
     last_obs: ObservedTurn | None = None
+    match = None  # Execution Accuracy：本轮结果与金标的比对结论（无金标则 None）
 
     t0 = time.monotonic()
     try:
@@ -268,6 +328,27 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
             sections_all.update(sections)
             deferred_all.extend(deferred)
 
+            # Execution Accuracy（2026-11-10）：有金标就比**结果**，与「跑没跑通」分开记。
+            # 这是唯一能闭环的判据（BEAVER 的立场）：检索/召回只是上游手段。
+            golden = exp.execution.golden if (exp and exp.execution) else None
+            if golden is not None:
+                try:
+                    resolved = _resolve_golden(golden)
+                    if resolved is not None:
+                        gold_cols, gold_rows = resolved
+                        match = compare_result_sets(
+                            gold_cols, gold_rows, obs.columns, obs.rows,
+                            float_tol=golden.float_tol,
+                            match_columns=golden.match_columns,
+                        )
+                        sections_all["execution.result_matches"] = (
+                            "pass" if match.ok else f"fail:{match.reason}"
+                        )
+                except Exception as exc:  # noqa: BLE001 - 金标自身出错不该崩掉整批评测
+                    sections_all["execution.result_matches"] = (
+                        f"error:{type(exc).__name__}:{str(exc)[:120]}"
+                    )
+
         latency_ms = (time.monotonic() - t0) * 1000.0
         status = "fail" if any(v.startswith("fail") for v in sections_all.values()) else "pass"
 
@@ -277,6 +358,9 @@ def run_case(case: BaselineCase, client: httpx.Client, token: str) -> dict[str, 
             "dim_results": _compute_dim_results(sections_all, deferred_all),  # P14 新增字段
             "sql_executed": sql_executed,
             "latency_ms": round(latency_ms, 1),
+            # Execution Accuracy（结果对不对）——与 status（跑没跑通）是两回事
+            "result_matches": (match.ok if match is not None else None),
+            "execution_match": (match.as_dict() if match is not None else None),
         }
     except Exception as exc:  # 单 case 异常不中断整批
         return {
@@ -363,12 +447,27 @@ def main(argv: list[str] | None = None) -> int:
             results.append(result)
 
     summary = summarize(results)
+    # Execution Accuracy 作为**头号指标**单独记：只统计有金标的 case（其余为“未标注”，
+    # 不能算失败也不能算通过）。与 sql_success_rate（跑通率）并列展示，避免混淆。
+    scored = [r for r in results if r.get("result_matches") is not None]
+    matched = sum(1 for r in scored if r["result_matches"])
+    summary["execution_accuracy"] = (
+        round(matched / len(scored), 4) if scored else None
+    )
+    summary["cases_with_golden"] = len(scored)
+    summary["cases_matched"] = matched
+    fail_reasons: dict[str, int] = {}
+    for r in scored:
+        if not r["result_matches"]:
+            reason = (r.get("execution_match") or {}).get("reason", "unknown")
+            fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
+    summary["execution_failure_reasons"] = fail_reasons
     payload = {"results": results, "summary": summary}
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8",
         )
         print(f"wrote {args.out}")
     md = render_markdown(results, summary)

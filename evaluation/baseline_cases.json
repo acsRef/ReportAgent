@@ -21,7 +21,11 @@
         "execution": {
           "verdict": "SUCCESS",
           "sql_nonempty": true,
-          "rows_gt": 0
+          "rows_gt": 0,
+          "golden": {
+            "sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON o.store_id = s.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC",
+            "float_tol": 0.01
+          }
         },
         "report": {
           "table_present": true,

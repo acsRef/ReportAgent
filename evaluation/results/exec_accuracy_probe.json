@@ -1,0 +1,130 @@
+{
+  "results": [
+    {
+      "case_id": "explicit-region-sales-ranking",
+      "category": "explicit_query",
+      "status": "fail",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "fail",
+        "requirement.target_metrics": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "execution.rows_gt": "pass",
+        "report.table_present": "pass",
+        "report.rows_gt": "pass",
+        "execution.result_matches": "fail:values"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 2,
+          "fail": 1,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 3,
+          "fail": 1,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 42797.0,
+      "result_matches": false,
+      "execution_match": {
+        "ok": false,
+        "reason": "values",
+        "gold_rows": 6,
+        "pred_rows": 6,
+        "missing": [
+          [
+            "华东",
+            "96318061.74"
+          ],
+          [
+            "华北",
+            "66883715.64"
+          ],
+          [
+            "华南",
+            "52068259.50"
+          ]
+        ],
+        "extra": [
+          [
+            "华东",
+            "326102457.72"
+          ],
+          [
+            "华北",
+            "230552361.42"
+          ],
+          [
+            "华南",
+            "176615468.71"
+          ]
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "skipped_or_error": 0,
+    "sql_success_rate": 0.0,
+    "p50_latency_ms": 42797.0,
+    "p95_latency_ms": 42797.0,
+    "execution_accuracy": 0.0,
+    "cases_with_golden": 1,
+    "cases_matched": 0,
+    "execution_failure_reasons": {
+      "values": 1
+    }
+  }
+}

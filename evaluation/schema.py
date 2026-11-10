@@ -71,11 +71,30 @@ class RequirementExpectation(BaseModel):
     min_missing_fields: int | None = Field(default=None, ge=0)
 
 
+class GoldenResult(BaseModel):
+    """金标结果（Execution Accuracy 的唯一判据来源，plan 2026-11-10）。
+
+    两种写法，`sql` 优先：
+
+    - `sql`：**推荐**。评测时用只读执行这条 SQL 得到金标，跟着种子数据走，
+      不会因为 seed 更新而写死一堆数字；
+    - `rows`/`columns`：金标行内联（适合结果很小、或不依赖种子数据的场景）。
+    """
+
+    sql: str | None = None
+    columns: list[str] = Field(default_factory=list)
+    rows: list[list[Any]] = Field(default_factory=list)
+    float_tol: float = Field(default=0.01, ge=0)
+    match_columns: bool = False
+
+
 class ExecutionExpectation(BaseModel):
     verdict: Literal["SUCCESS", "EMPTY", "FAILED"] | None = None
     sql_nonempty: bool | None = None
     rows_gt: int | None = Field(default=None, ge=0)
     sse_error_code: str | None = None
+    # 有金标时，runner 会额外算 execution accuracy（结果对不对），与「跑没跑通」分开
+    golden: GoldenResult | None = None
 
 
 class ReportExpectation(BaseModel):
