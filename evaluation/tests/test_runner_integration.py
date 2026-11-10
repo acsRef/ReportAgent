@@ -24,7 +24,7 @@ def _fake_stream(events):
 class TestRunCaseIntegration:
     def test_pydantic_expectation_does_not_crash(self):
         """回归：expectation 是 TurnExpectation 模型时 run_case 不抛 AttributeError。"""
-        cases = [c for c in load_all(DATASET) if c.id == "clarify-vague-metric"]
+        cases = [c for c in load_all(DATASET) if c.id == "default-metric-when-unnamed"]
         case = cases[0]
 
         client = MagicMock()

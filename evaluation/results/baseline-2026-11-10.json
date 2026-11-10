@@ -74,7 +74,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 35532.0,
+      "latency_ms": 31921.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -165,7 +165,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 42968.0,
+      "latency_ms": 31860.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -181,21 +181,17 @@
         "failed": [],
         "details": {}
       },
-      "sql": "SELECT \n    dim_date.month AS 月份,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN \n    dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nGROUP BY \n    dim_date.month\nORDER BY \n    dim_date.month",
+      "sql": "SELECT \n    dim_date.month AS 月份,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN \n    dim_store ON dim_store.store_id = fact_orders.store_id\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nGROUP BY \n    dim_date.month\nORDER BY \n    dim_date.month",
       "golden_sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 AND s.region = '华东' GROUP BY d.month ORDER BY d.month"
     },
     {
-      "case_id": "clarify-vague-metric",
+      "case_id": "default-metric-when-unnamed",
       "category": "clarification",
       "status": "pass",
       "sections": {
-        "requirement.status": "pass",
-        "requirement.min_missing_fields": "pass",
-        "behavior.clarification": "pass"
+        "requirement.target_metrics": "pass"
       },
-      "deferred": [
-        "behavior.memory_types"
-      ],
+      "deferred": [],
       "dim_results": {
         "e2e": {
           "pass": 0,
@@ -223,7 +219,7 @@
           "deferred": 0
         },
         "requirement": {
-          "pass": 2,
+          "pass": 1,
           "fail": 0,
           "deferred": 0
         },
@@ -248,13 +244,13 @@
           "deferred": 0
         },
         "behavior": {
-          "pass": 1,
+          "pass": 0,
           "fail": 0,
-          "deferred": 1
+          "deferred": 0
         }
       },
       "sql_executed": false,
-      "latency_ms": 9016.0,
+      "latency_ms": 7047.0,
       "result_matches": null,
       "execution_match": null,
       "complexity_tier": null,
@@ -332,7 +328,7 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 11375.0,
+      "latency_ms": 13078.0,
       "result_matches": null,
       "execution_match": null,
       "complexity_tier": null,
@@ -413,7 +409,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 48437.0,
+      "latency_ms": 68687.0,
       "result_matches": null,
       "execution_match": null,
       "complexity_tier": null,
@@ -495,7 +491,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 51485.0,
+      "latency_ms": 58578.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -511,7 +507,7 @@
         "failed": [],
         "details": {}
       },
-      "sql": "SELECT \n    dim_date.month AS 月份,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN \n    dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nGROUP BY \n    dim_date.month\nORDER BY \n    dim_date.month",
+      "sql": "SELECT \n    dim_date.month AS 月份,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN \n    dim_store ON dim_store.store_id = fact_orders.store_id\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nGROUP BY \n    dim_date.month\nORDER BY \n    dim_date.month",
       "golden_sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 AND s.region = '华东' GROUP BY d.month ORDER BY d.month"
     },
     {
@@ -585,7 +581,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 51500.0,
+      "latency_ms": 35375.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -674,12 +670,12 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 41984.0,
+      "latency_ms": 54266.0,
       "result_matches": null,
       "execution_match": null,
       "complexity_tier": null,
       "diagnosis": null,
-      "sql": "SELECT \n    fact_orders.order_id AS 订单号,\n    fact_orders.order_date AS 订单日期,\n    dim_store.store_name AS 门店名称,\n    dim_store.region AS 区域,\n    fact_orders.order_amount AS 订单金额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_store ON fact_orders.store_id = dim_store.store_id\nLEFT JOIN \n    dim_date ON fact_orders.order_date = dim_date.full_date\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nORDER BY \n    fact_orders.order_date DESC\nLIMIT 200",
+      "sql": "SELECT\n    dim_date.full_date AS 日期,\n    dim_store.region AS 区域,\n    dim_product.category AS 品类,\n    fact_orders.order_id AS 订单号,\n    fact_orders.order_amount AS 销售额\nFROM\n    fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nLEFT JOIN dim_product ON fact_orders.product_id = dim_product.product_id\nWHERE\n    dim_date.year = 2024\n    AND dim_store.region = '华东'\nORDER BY\n    fact_orders.order_date DESC\nLIMIT 200",
       "golden_sql": null
     },
     {
@@ -823,7 +819,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 29922.0,
+      "latency_ms": 37156.0,
       "result_matches": null,
       "execution_match": null,
       "complexity_tier": null,
@@ -901,7 +897,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 20516.0,
+      "latency_ms": 29203.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -917,7 +913,7 @@
         "failed": [],
         "details": {}
       },
-      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE dim_date.year = 2027\nGROUP BY dim_store.region",
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nWHERE dim_date.year = 2027\nGROUP BY dim_store.region",
       "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2027 GROUP BY s.region"
     },
     {
@@ -991,7 +987,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 35609.0,
+      "latency_ms": 33313.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1079,7 +1075,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 42266.0,
+      "latency_ms": 36328.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1166,7 +1162,7 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 46.0,
+      "latency_ms": 62.0,
       "result_matches": null,
       "execution_match": null,
       "complexity_tier": null,
@@ -1317,7 +1313,7 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 10891.0,
+      "latency_ms": 10516.0,
       "result_matches": null,
       "execution_match": null,
       "complexity_tier": null,
@@ -1392,7 +1388,7 @@
         }
       },
       "sql_executed": false,
-      "latency_ms": 9719.0,
+      "latency_ms": 10797.0,
       "result_matches": null,
       "execution_match": null,
       "complexity_tier": null,
@@ -1470,7 +1466,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 42062.0,
+      "latency_ms": 39484.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1486,7 +1482,7 @@
         "failed": [],
         "details": {}
       },
-      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
       "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC"
     },
     {
@@ -1557,7 +1553,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 53906.0,
+      "latency_ms": 46344.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1573,7 +1569,7 @@
         "failed": [],
         "details": {}
       },
-      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
+      "sql": "SELECT \n    dim_store.region AS 区域,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM fact_orders\nLEFT JOIN dim_store ON fact_orders.store_id = dim_store.store_id\nLEFT JOIN dim_date ON dim_date.full_date = fact_orders.order_date\nWHERE dim_date.year = 2024\nGROUP BY dim_store.region",
       "golden_sql": "SELECT s.region AS region, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON s.store_id = o.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 GROUP BY s.region ORDER BY sales DESC"
     },
     {
@@ -1646,7 +1642,7 @@
         }
       },
       "sql_executed": true,
-      "latency_ms": 81329.0,
+      "latency_ms": 60016.0,
       "result_matches": true,
       "execution_match": {
         "ok": true,
@@ -1672,8 +1668,8 @@
     "failed": 0,
     "skipped_or_error": 0,
     "sql_success_rate": 1.0,
-    "p50_latency_ms": 35532.0,
-    "p95_latency_ms": 53906.0,
+    "p50_latency_ms": 31921.0,
+    "p95_latency_ms": 60016.0,
     "execution_accuracy": 1.0,
     "cases_with_golden": 10,
     "cases_matched": 10,

@@ -68,6 +68,9 @@ class MetricSlot:
     value: str | None = None
     candidates: tuple[MetricCandidate, ...] = ()
     source: SlotSource | None = None
+    # 原话同时点名了**多个不同口径**时的全部取值（「销售额和退货金额对比」）。
+    # `value` 只是第一个，保留它是为了不破坏既有调用方；多口径判定一律看 `values`。
+    values: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -181,14 +184,20 @@ def resolve_metric_slot(
             value=metric.name,
             candidates=(_candidate(metric, "explicit"),),
             source="explicit",
+            values=(metric.name,),
         )
     if len(explicit) > 1:
-        # 同一短语能归到多个口径（例如「金额」同时是几个指标的同义词）→ 值得问。
+        # 原话点名了**多个不同口径** → 这是多口径对比（「销售额和退货金额对比」），
+        # 不是需要用户二选一的歧义：全部保留，直接前进。
+        # 2026-11-10（差分探针）：旧实现把多命中判成 ambiguous，于是「销售额和退货金额」
+        # 被拦下来问「用哪个口径？」，用户要的对比根本出不来。
+        names = tuple(metric.name for metric in explicit)
         return MetricSlot(
-            state="ambiguous",
-            value=None,
-            candidates=tuple(_candidate(m, "explicit") for m in explicit),
+            state="filled",
+            value=names[0],
+            candidates=tuple(_candidate(metric, "explicit") for metric in explicit),
             source="explicit",
+            values=names,
         )
 
     if inherited:
@@ -209,6 +218,7 @@ def resolve_metric_slot(
                 value=inherited_metric.name,
                 candidates=(_candidate(inherited_metric, "inherited"),),
                 source="inherited",
+                values=(inherited_metric.name,),
             )
 
     # 用户没说清 → 模型猜的 + 注册表默认值 + 同单位备选（去重保序）。
@@ -246,6 +256,7 @@ def resolve_metric_slot(
         chosen = candidates[0]
         return MetricSlot(
             state="filled", value=chosen.name, candidates=(chosen,), source=chosen.source,
+            values=(chosen.name,),
         )
     return MetricSlot(state="missing")
 

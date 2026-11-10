@@ -406,7 +406,7 @@ def _apply_deterministic_intent(
 
     if kind in ("compare_region", "compare_category", "trend", "anomaly"):
         if not card.time_range:
-            card.time_range = "今年"
+            card.time_range = resolve_time_range(user_query, None, default_year=True)
         if not card.target_metrics:
             card.target_metrics = ["销售额"]
 
@@ -451,9 +451,9 @@ def _apply_deterministic_intent(
         # 「那个月的**数据详细图**」= 明细；只说「最高的月份」则是该期汇总。
         card.detail_level = "detail" if _DETAIL_PATTERNS.search(query) else None
         if not card.time_range:
-            # 和 trend/compare/anomaly 一致：用户没说时间就按「今年」理解（并写在卡上，
-            # 用户随时能改）。选期查询本身也支持不带时间范围（覆盖全部数据）。
-            card.time_range = "今年"
+            # 和 trend/compare/anomaly 一致：原话里没有绝对时间才按「今年」理解
+            # （并写在卡上，用户随时能改）。选期查询本身也支持不带时间范围。
+            card.time_range = resolve_time_range(user_query, None, default_year=True)
         if not card.target_metrics:
             card.target_metrics = ["销售额"]
     elif kind == "anomaly":
@@ -508,6 +508,25 @@ _DETAIL_PATTERNS = re.compile(
     r"|详细图|明细图|详细数据|明细数据|数据详细|每一条|全部字段|所有字段|清单"
 )
 _AGGREGATE_PATTERNS = re.compile(r"汇总|合计|总计|趋势|同比|环比|占比|排名")
+
+
+def resolve_time_range(
+    user_query: str, current: str | None, *, default_year: bool = False,
+) -> str | None:
+    """时间范围的**唯一决策点**（两条需求流水线共用）。
+
+    优先级：已有值（模型/状态）> 原话里的绝对时间 > 按意图给「今年」。
+
+    2026-11-10（差分探针，真机后果）：旧实现是「模型没给就直接填『今年』」，
+    于是「2024年各区域销售额排名」在模型漏抽时被算成 **2026 年**（今天 2026-11-10），
+    用户看到的是「没数据」。原话里明写着年份时，任何默认值都不该覆盖它。
+    """
+    if current:
+        return current
+    value = time_range_from_query(user_query)
+    if value:
+        return value
+    return "今年" if default_year else None
 
 
 def _normalize_detail_level_value(raw: object) -> str | None:
@@ -1270,6 +1289,12 @@ def parse_requirement(
     # 卡片展示层规范化：物理列名 → 中文，维度去重（2026-11-03）
     card.target_metrics = [_display_metric(m) for m in card.target_metrics]
     card.dimensions = _display_dimensions(card.dimensions)
+    # 2026-11-10（差分探针）：`detail_level` 内部统一成 `detail` / `None`。
+    # 此前「排名」类给 aggregate、「趋势」类给 None，同一语义两种取值——两条流水线
+    # 对同一句话产出的卡因此在次要字段上永远对不齐，下游还得多写一套判断。
+    # `aggregate` 仍是**输入侧**可接受值（模型/旧数据会这么写），只是不再出现在输出里。
+    if card.detail_level == "aggregate":
+        card.detail_level = None
     # 补充轮常见说法「只看华东」：模型经常漏抽，这里确定性补上
     explicit_scope = _extract_scope_from_query(user_query)
     if explicit_scope:
@@ -1329,7 +1354,12 @@ def _apply_slot_resolutions(
         user_query, list(card.target_metrics or []), inherited=prior_metric,
     )
 
-    if slot.state == "filled" and slot.value:
+    if slot.state == "filled" and slot.values:
+        # 多口径（原话同时点名两个不同口径）→ **全部保留**，不许压成一个。
+        # 单口径时 `values` 只有一个元素，行为与原来完全一致。
+        card.target_metrics = [_display_metric(name) for name in slot.values]
+        card.missing_fields = [mf for mf in card.missing_fields if mf.key != "metric"]
+    elif slot.state == "filled" and slot.value:
         # 用户/注册表拍板的口径覆盖模型输出（显示层中文名由 _display_metric 之后统一）
         card.target_metrics = [slot.value]
         # 口径已确定 → 连带清掉「指标」澄清项。模型经常既给了口径又把它列进

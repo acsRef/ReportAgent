@@ -66,9 +66,9 @@
     ]
   },
   {
-    "id": "clarify-vague-metric",
+    "id": "default-metric-when-unnamed",
     "category": "clarification",
-    "description": "真·模糊问法（没点任何注册表口径）→ 必须澄清「用哪个指标？」；旧问法「帮我看一下销量」点的是注册表口径，按口径优先级应直接作答（2026-11-10 对齐）",
+    "description": "没点名口径 → 按注册表默认口径直接前进并记 assumption，不再为口径拦一次（确定性断言，不依赖模型是否给出分析目标）。收敛后 baseline 不再钉「必须澄清」：真正确定性的澄清触发（对比基线缺失 / 选期单位）由 test_requirement_slots.py 与 Playwright 02 覆盖",
     "turns": [
       {
         "query": "帮我看一下",
@@ -78,11 +78,9 @@
     "expectations": [
       {
         "requirement": {
-          "status": "missing",
-          "min_missing_fields": 1
-        },
-        "behavior": {
-          "clarification": true
+          "target_metrics_contains": [
+            "销售额"
+          ]
         }
       }
     ]

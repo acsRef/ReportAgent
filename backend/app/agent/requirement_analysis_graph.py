@@ -764,9 +764,17 @@ def _requirement_project(state: RequirementAnalysisState) -> dict:
     card = _normalize_card_top_period(card, state.get("user_query", ""))
     # 卡体可能已经回答了某个待确认槽位（口径由 `reduce_task` 的确定性回填落位）→
     # 复用既有清理，别重复问一个已经答过的字段。
-    from app.agent.requirement_parser import _drop_satisfied_missing_fields
+    from app.agent.requirement_parser import (
+        _apply_slot_resolutions,
+        _drop_satisfied_missing_fields,
+    )
 
     _drop_satisfied_missing_fields(card)
+    # 2026-11-10（plan requirement-pipeline-parity）：口径策略**只有一份实现**——
+    # 旧路径的 `_apply_slot_resolutions`（多口径全保留 / 唯一命中就落位 / 没点名就按
+    # 注册表默认并记 assumption，不问）。此前这条策略只挂在旧路径上，于是同一句话
+    # 在两条流水线上会得到不同卡片（差分探针实测 4 类差异）。
+    _apply_slot_resolutions(card, state.get("user_query", ""))
     # 2026-11-08（plan analysis-quality-cleanup D1）：TURN_UNDERSTANDING 路径不经过
     # parse_requirement，对比基线也得在这里归一——否则「销售额同比怎么样」卡上只有
     # 「时间」一个维度，执行层拿不到任何对比线索（实测 SQL 只出 12 个月的量）。

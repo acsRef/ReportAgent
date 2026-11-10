@@ -487,6 +487,13 @@ def _apply_update(task: dict, field: str, value: Any) -> None:
         task["time_range"] = str(value).strip() if value not in ("", None) else None
 
 
+def _goal_type(goal: Any) -> str:
+    """目标类型（`AnalysisGoal` 对象或 `model_dump` 出来的 dict 都要认）。"""
+    if isinstance(goal, dict):
+        return str(goal.get("type") or "")
+    return str(getattr(goal, "type", "") or "")
+
+
 def _backfill_from_query(base: dict[str, Any], user_query: str) -> None:
     """把原话里的**字面事实**（绝对时间范围 / 数据范围 / 点名口径）补进任务状态。
 
@@ -500,15 +507,21 @@ def _backfill_from_query(base: dict[str, Any], user_query: str) -> None:
     """
     from app.agent.requirement_parser import (
         _display_metric,
+        resolve_time_range,
         scope_from_query,
         time_range_from_query,
     )
     from app.agent.requirement_slots import match_metric_terms
 
-    if not base.get("time_range"):
-        value = time_range_from_query(user_query)
-        if value:
-            base["time_range"] = value
+    # 时间范围：与旧路径**同一个决策函数**（原话 > 按意图给「今年」）。
+    # 只按「原话能抽到」补是不够的——旧路径在「没抽到」时会按意图给「今年」，
+    # 两条路径对同一句话必须给出同一个默认，否则契约测试永远对不齐。
+    default_year = any(
+        _goal_type(goal) in _TIME_SCOPED_GOALS for goal in (base.get("goals") or [])
+    )
+    base["time_range"] = resolve_time_range(
+        user_query, base.get("time_range"), default_year=default_year,
+    )
     if not base.get("scope"):
         scopes = scope_from_query(user_query)
         if scopes:
@@ -581,6 +594,12 @@ def reduce_task(
 
 
 # --- 可报告性（确定性裁决） -------------------------------------------------
+
+# 这些意图天然带时间视角（趋势/对比/排名/分布/异常/选期）：原话没写时间时，
+# 默认「今年」与旧路径一致；其余意图留空（= 全部数据），由可报告性记 note。
+_TIME_SCOPED_GOALS: frozenset[str] = frozenset({
+    "trend", "compare", "ranking", "distribution", "anomaly", "extreme_period",
+})
 
 
 def _registry_has_metric(name: str) -> bool:
