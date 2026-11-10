@@ -141,15 +141,10 @@ CREATE INDEX IF NOT EXISTS idx_query_failure_user_time
     ON memory.query_failure (user_id, created_at DESC);
 
 -- 离线固化（plan 2026-11-09-memory-admission-and-consolidation）：
--- ① semantic_entry 增 promoted_at：candidate → active 的时间戳，也是「已固化」标记
---    （候选池 = status='candidate' AND promoted_at IS NULL，天然可重跑）。
-ALTER TABLE memory.semantic_entry ADD COLUMN IF NOT EXISTS promoted_at TIMESTAMP;
-
--- ④ 证据计数（plan memory-admission-and-consolidation D6，用户批准修订 §五）：
--- 同一 content 被反复观察到（跨轮次/跨会话）时 +1。它与 access_count 分工不同：
--- access_count 是**召回热度**（读侧），evidence_count 是**写入侧证据**（同一个说法被说了几次）。
--- 写侧去重是「同内容更新」，不加这一列就永远数不出「这条被说过 3 次」。
-ALTER TABLE memory.semantic_entry ADD COLUMN IF NOT EXISTS evidence_count INT DEFAULT 1;
+-- `semantic_entry.promoted_at`（候选已固化标记）与 `evidence_count`（写入侧证据）
+-- 已经写进下面的 CREATE TABLE（全新库靠它），老库走紧随其后的软迁移。
+-- 顺序提醒：ALTER 必须**在 CREATE 之后**，否则全新库会先报「relation does not exist」
+-- （2026-11-10 CI 因此红过一次）。
 
 -- ② 每个用户一个游标：只用于「上次成功跑到什么时候」，供运维判断批处理落后多久。
 CREATE TABLE IF NOT EXISTS memory.consolidation_cursor (
@@ -158,7 +153,9 @@ CREATE TABLE IF NOT EXISTS memory.consolidation_cursor (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- ③ 每轮记账：晋级/过期/收敛各多少、是否 dry-run、有没有报错。
+-- ③ 每轮记账：晋级/合并/复审/过期/收敛各多少、是否 dry-run、有没有报错。
+-- merged / reviewed 是 2026-11-10（plan semantic-memory-merge）加的：归并判定要能看出
+-- 「这轮累加了几条证据」「几对进了灰区复审」，否则批处理跑了什么完全不可见。
 CREATE TABLE IF NOT EXISTS memory.consolidation_run (
     id SERIAL PRIMARY KEY,
     user_id INT NOT NULL,
@@ -171,8 +168,14 @@ CREATE TABLE IF NOT EXISTS memory.consolidation_run (
     skipped INT DEFAULT 0,
     errors INT DEFAULT 0,
     dry_run BOOLEAN DEFAULT FALSE,
-    note TEXT
+    note TEXT,
+    merged INT DEFAULT 0,
+    reviewed INT DEFAULT 0
 );
+
+-- 软迁移：老库没有这两列时补上（必须在本表 CREATE 之后）
+ALTER TABLE memory.consolidation_run ADD COLUMN IF NOT EXISTS merged INT DEFAULT 0;
+ALTER TABLE memory.consolidation_run ADD COLUMN IF NOT EXISTS reviewed INT DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_consolidation_run_user_time
     ON memory.consolidation_run (user_id, started_at DESC);
@@ -195,8 +198,18 @@ CREATE TABLE IF NOT EXISTS memory.semantic_entry (
     status VARCHAR(16) DEFAULT 'active',
     session_id VARCHAR(64),
     expires_at TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    -- 2026-11-09/10（plan long-term-memory-table / semantic-memory-merge）：
+    -- promoted_at = 候选已固化（候选池 = status='candidate' AND promoted_at IS NULL）；
+    -- evidence_count = 写入侧证据（同一说法被观察到几次），与读侧热度 access_count 分开。
+    -- 必须写在 CREATE 里：全新库只跑这一条语句。
+    promoted_at TIMESTAMP,
+    evidence_count INT DEFAULT 1
 );
+
+-- 软迁移（老库补列；**必须在上一句 CREATE 之后**，否则全新库先报「表不存在」）
+ALTER TABLE memory.semantic_entry ADD COLUMN IF NOT EXISTS promoted_at TIMESTAMP;
+ALTER TABLE memory.semantic_entry ADD COLUMN IF NOT EXISTS evidence_count INT DEFAULT 1;
 
 -- Soft-migrate semantic_entry.user_id from VARCHAR(128) to INT.
 -- Garbage rows (non-numeric user_id) are deleted; the column is NOT NULL,

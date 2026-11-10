@@ -186,3 +186,34 @@ infra 回归纯存取。这条正好演示了契约测试的用途。
   没有界面；按用户要求「界面不做」，但攒够同类条目时应往 `metrics.yaml` 的 `synonyms` 加说法。
 - **历史事实的重跑**：老的 `fact:<指纹>` 多行不会自动合并；需要时写一个带 dry-run 的重写脚本。
 - **跨用户归并**：不做（槽位含 `user_id`）。
+## 追加（2026-11-10）：CI 红了一次，根因是 init_pg 的顺序
+
+push `b5577b1` 后 `backend-gate` 红、`frontend-gate` 绿。本机全量是绿的——典型「在我机器上没问题」，
+原因是：本机 DB 早就存在，`merged/reviewed`、`promoted_at`、`evidence_count` 是我用 `ALTER` 手工补的；
+而 CI 是**全新库**，只跑 `backend/scripts/init_pg.sql`。
+
+排查方式（可复用）：用 docker 起一个空库 `ragent_ci_check`，把 `init_pg.sql` 打进去，
+再跑那些按 `DATABASE_URL` 取连接串的测试。结果一目了然：
+
+1. `init_pg.sql` 里两条 `ALTER TABLE memory.semantic_entry ADD COLUMN promoted_at / evidence_count`
+   写在 `CREATE TABLE memory.semantic_entry` **之前** → 全新库报 `relation does not exist`（psql 继续，
+   但列没加上）；
+2. `consolidation_run` 的 `CREATE` 里没有 `merged/reviewed`，只有我本机手工加过 →
+   `record_consolidation_run` 在 CI 库里失败（`column "merged" ... does not exist`）。
+
+复现与验收（在 `ragent_ci_check` 上）：
+
+```
+# 旧 schema（手动 DROP 这两列）
+ALTER TABLE memory.consolidation_run DROP COLUMN merged, DROP COLUMN reviewed;
+pytest backend/tests/persistence/test_memory_consolidation.py   → 2 failed（run 记录断言）
+# 修完 init_pg 重灌
+… 31 passed
+```
+
+修法（`backend/scripts/init_pg.sql`）：
+- `semantic_entry` 与 `consolidation_run` 的新列**写进 CREATE**（全新库靠它）；
+- 软迁移 `ALTER ... ADD COLUMN IF NOT EXISTS` 一律**放到对应 CREATE 之后**（老库靠它）。
+
+教训记在这里：**新增列必须同时改 CREATE 和 ALTER，且 ALTER 在 CREATE 之后**；
+只在本机 ALTER 过、没写进 init_pg，CI 必红。
