@@ -13,9 +13,15 @@ vs 实测 326,102,457.72；`session-scope-carryover` 金标华东 1 月 8.99M vs
    （`净` U+51C0 < `销` U+9500，曾把用户明说的「销售额」挤出候选）。
 """
 
+from datetime import date
+
 import pytest
 
-from app.agent.requirement_parser import scope_from_query, time_range_from_query
+from app.agent.requirement_parser import (
+    resolve_time_range,
+    scope_from_query,
+    time_range_from_query,
+)
 from app.agent.requirement_slots import match_metric_terms
 from app.agent.turn_understanding import (
     assess_reportability,
@@ -59,6 +65,55 @@ def test_time_range_extracted_from_query(query: str, expected: str) -> None:
 def test_time_range_absent_or_relative_is_not_invented(query: str) -> None:
     """相对时间词与裸数字**不在这里**换算：返回 None 交回既有链路。"""
     assert time_range_from_query(query) is None
+
+
+# --- D1b · 相对年份（2026-11-11，plan sql-filter-in-join-on） ----------------
+#
+# 真机事故：「分析下去年华南区域的销售」里「去年」此前既不绝对、也没有默认值 →
+# 模型漏抽就永久没有时间范围，SQL 一个年份谓词都没有，返回华南 2023–2026 四年合计
+# 1.84 亿（2025 年真值 4784 万）。相对年份同样是原话里的**字面事实**。
+
+_TODAY = date(2026, 11, 11)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("分析下去年华南区域的销售", "2025年"),
+        ("去年每个月的情况", "2025年"),
+        ("前年华东销售额", "2024年"),
+        ("上一年各区域排名", "2025年"),
+        ("去年和前年的对比呢", "2025年"),   # 只认第一个相对词
+    ],
+)
+def test_relative_year_resolved(query: str, expected: str) -> None:
+    assert time_range_from_query(query, today=_TODAY) == expected
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "今年销售额比去年增长多少",   # 「去年」是对比基线，主查询是今年
+        "去年同期销售额",             # 同比语义，基线不是时间范围
+        "和去年比怎么样",
+        "较去年提升了多少",
+        "同比表现如何",
+    ],
+)
+def test_relative_year_in_comparison_is_baseline_not_range(query: str) -> None:
+    """比较语境里的「去年」不能当时间范围，否则主查询落到去年、与问法矛盾。"""
+    assert time_range_from_query(query, today=_TODAY) is None
+
+
+def test_absolute_year_still_wins_over_relative() -> None:
+    """原话里明写年份时，绝对写法优先（既有契约不回归）。"""
+    assert time_range_from_query("2024年比去年好在哪", today=_TODAY) == "2024年"
+
+
+def test_resolve_time_range_prefers_existing_value() -> None:
+    """模型/状态已给值时不覆盖——相对换算只是「原来没有值」时的兜底。"""
+    assert resolve_time_range("去年华南的销售", "2023年", today=_TODAY) == "2023年"
+
 
 
 # --- D2 · 口径识别：子串消歧 + 多口径全留 ----------------------------------

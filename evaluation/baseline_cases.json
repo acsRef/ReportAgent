@@ -541,5 +541,41 @@
         }
       }
     ]
+  },
+  {
+    "id": "followup-monthly-after-region-scope",
+    "category": "multi_turn",
+    "description": "华南 + 月度趋势：第2轮「每个月的情况也都说一下吧」必须继承范围与年份，且取值过滤必须落在 WHERE —— 真机事故里被写进 LEFT JOIN 的 ON，返回全国数据冒充华南（合计 9.38 亿 vs 真值 3936 万）",
+    "turns": [
+      {
+        "query": "2024年华南区域的销售额",
+        "mode": "new"
+      },
+      {
+        "query": "每个月的情况也都说一下吧，用柱状图",
+        "mode": "supplement"
+      }
+    ],
+    "expectations": [
+      {},
+      {
+        "requirement": {
+          "status": "complete",
+          "time_range_equals": "2024年"
+        },
+        "execution": {
+          "verdict": "SUCCESS",
+          "sql_nonempty": true,
+          "golden": {
+            "sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON o.store_id = s.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 AND s.region = '华南' GROUP BY d.month ORDER BY d.month",
+            "float_tol": 0.01
+          }
+        },
+        "report": {
+          "table_present": true,
+          "rows_gt": 6
+        }
+      }
+    ]
   }
 ]

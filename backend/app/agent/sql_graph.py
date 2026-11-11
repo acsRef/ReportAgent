@@ -956,6 +956,172 @@ def _detail_contract_violation(sql: str, *, allow_cte_aggregate: bool = False) -
     return None
 
 
+# ── 取值过滤不许丢失、也不许写进外连接 ON（2026-11-11，plan sql-filter-in-join-on）──
+#
+# 真机事故（会话 c3f0cf93…）：两轮报告的数字都错，用户唯一看得见的线索是核心发现里
+# 冒出「None月 最高」。
+#   ① 第一轮「分析下去年华南区域的销售」→ SQL 里**没有任何年份谓词** → 返回华南
+#      2023–2026 四年合计 1.84 亿（2025 年真值 4784 万）；
+#   ② 第二轮「每个月的情况也都说一下吧」→ SQL 把 `region='华南'` 与 `year=2026`
+#      写进 `LEFT JOIN ... ON`：LEFT JOIN 匹配不上仍保留左表整行，于是月度行 =
+#      **全国** 2026、`month=NULL` 一行 = **全国**非 2026，结论合计 9.38 亿
+#      （华南 1–10 月真值 3936 万，高估 23.8 倍），报告层再把 NULL 拼成「None月」。
+#
+# 现有 6 道 SQL 闸只判「能不能安全执行」，不判「语义对不对」；这两件事都能确定性
+# 判定（plan 要求了什么过滤 / 过滤落在哪一层），所以不下放给 prompt。
+
+_FILTER_YEAR_RE = re.compile(r"((?:19|20)\d{2})")
+# 过滤取值只认「可肉眼核对」的字面量：中文/字母开头的短串。纯数字（阈值、月份序号）
+# 不判——`销售额 > 10000` 里的 10000 不是范围过滤，误判会逼 repair 把阈值写进 WHERE。
+_FILTER_VALUE_LITERAL_RE = re.compile(r"[A-Za-z\u4e00-\u9fff][\w\u4e00-\u9fff\-]*")
+# 「不限/全部」这类占位不是真过滤——要求它在 SQL 里出现只会逼 repair 空转。
+_FILTER_PLACEHOLDER_VALUES = frozenset(
+    {"全部", "所有", "不限", "全国", "总计", "合计", "全量", "整体", "各区域", "无"}
+)
+
+
+def _required_filter_values(plan: Any) -> list[str]:
+    """plan 里**用户明确要求**的过滤取值，作为校验锚点。
+
+    只收两类：
+    - `time_range` 里的 4 位年份（`2025年` / `2026年1月-3月` → `2025` / `2026`）。
+      `今年` / `最近30天` 这类相对写法**不在这里判**——它们依赖 today，落不落实由
+      prompt 注入负责（`resolve_time_range` 是唯一决策点）。
+    - `filters` 里的取值（`{"field": "region", "operator": "=", "value": "华南"}`）。
+      兼容模型写成字符串 `区域=华南` 的形态。
+    """
+    if plan is None:
+        return []
+    values: list[str] = []
+
+    def _plan_field(name: str) -> Any:
+        # checkpoint 里可能是 pydantic 模型，也可能是迁移后的 dict——两种都读
+        if isinstance(plan, dict):
+            return plan.get(name)
+        return getattr(plan, name, None)
+
+    def _push(candidate: str) -> None:
+        text = str(candidate or "").strip().strip("'\"`").strip()
+        if not text or text in values:
+            return
+        if text in _FILTER_PLACEHOLDER_VALUES:
+            return  # 「全部/不限」不是真过滤
+        if text.isdigit():
+            if len(text) != 4:
+                return  # 阈值 / 月份序号，不是范围取值；4 位才可能是年份
+        elif not _FILTER_VALUE_LITERAL_RE.fullmatch(text):
+            return
+        values.append(text)
+
+    for year in _FILTER_YEAR_RE.findall(str(_plan_field("time_range") or "")):
+        _push(year)
+    for raw in list(_plan_field("filters") or []):
+        if isinstance(raw, dict):
+            _push(str(raw.get("value") or ""))
+            continue
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        # `区域=华南` / `region='华南'` / `区域 包含 华南` 三种写法都取取值部分
+        candidate = re.split(r"[=:：]|\s(?:包含|为|是|在)\s", text)[-1]
+        _push(candidate)
+    return values
+
+
+def _missing_filter_violation(sql: str, plan: Any) -> str | None:
+    """C1：plan 要求的过滤取值必须真的出现在 SQL 里。
+
+    这条专治「代码侧没有任何默认值，模型漏给就永久没有时间范围」——第一轮 1.84 亿
+    就是这么来的（plan 的 time_range 是空的，于是 SQL 一个年份谓词都没有）。
+    """
+    text = sql or ""
+    missing = [
+        value for value in _required_filter_values(plan)
+        if not _value_in_sql(text, value)
+    ]
+    if not missing:
+        return None
+    return (
+        f"缺少用户要求的过滤条件 {'、'.join(missing)}："
+        "plan 已经给出范围/时间，SQL 必须真的带上对应谓词"
+        "（例如 `WHERE dim_store.region = '华南'` / `WHERE dim_date.year = 2025`）；"
+        "不许把整段历史一起算进来"
+    )
+
+
+def _value_in_sql(text: str, value: str) -> bool:
+    """取值是否出现在 SQL 里。
+
+    - 4 位年份按独立数字匹配，避免 `2025` 命中 `120250`；
+    - 文本取值宽容到「前两个字出现过」：plan 写 `华南区域`、SQL 写 `'华南'` 是同一件事，
+      这里只负责抓**完全没过滤**的情况，不负责核对措辞。
+    """
+    if not value:
+        return False
+    if value.isdigit():
+        return re.search(rf"(?<![\d.]){re.escape(value)}(?![\d.])", text) is not None
+    if value in text:
+        return True
+    return len(value) > 2 and value[:2] in text
+
+
+def _join_filter_contract_violation(sql: str, plan: Any) -> str | None:
+    """C2：要求的取值过滤不许写进 LEFT/RIGHT/FULL JOIN 的 ON。
+
+    `LEFT JOIN dim_store ON … AND dim_store.region = '华南'` 的语义是「所有订单都留着，
+    碰巧是华南的就把 region 填上」——过滤形同虚设，不匹配的行以 `dim_*` 为 NULL 进入
+    结果，`GROUP BY` 时变成一行 NULL 分组冒充「最高的那个月」。
+
+    **只认 plan 要求的取值**（`'华南'` / `2026`），不做「外连接不许有常量」的全局禁令：
+    `LEFT JOIN dim_promotion p ON … AND p.active = true`（匹配活跃促销，否则留空）是
+    合法外连接条件，全局禁令会误杀它。以 plan 为锚，误报面收敛到「用户明确要求的那个
+    过滤被放错了层」。
+
+    `INNER JOIN` 的 ON 与 WHERE 等价，不判。
+    """
+    values = _required_filter_values(plan)
+    if not values:
+        return None
+    try:
+        from sqlglot import exp
+        import sqlglot
+    except Exception:  # pragma: no cover - sqlglot 是硬依赖，仅防御
+        logger.warning("sqlglot unavailable, skip join-filter contract")
+        return None
+    try:
+        parsed = sqlglot.parse_one(sql or "", dialect="postgres")
+    except Exception:
+        return None  # 语法错由 check_sql_safety 负责报，这里不抢它的错
+    for join in parsed.find_all(exp.Join):
+        side = str(join.args.get("side") or "").upper()
+        if side not in ("LEFT", "RIGHT", "FULL"):
+            continue
+        on = join.args.get("on")
+        if on is None:
+            continue
+        literals = [str(lit.this) for lit in on.find_all(exp.Literal)]
+        hit = next(
+            (
+                value for value in values
+                if any(value == literal or (value.isdigit() and value in literal)
+                       for literal in literals)
+            ),
+            None,
+        )
+        if hit is None:
+            continue
+        alias = join.this.alias_or_name if hasattr(join.this, "alias_or_name") else ""
+        return (
+            f"过滤条件 {hit} 被写进了 {side} JOIN 的 ON 子句"
+            f"（{alias or '被连接表'}）：外连接匹配不上仍保留左表整行，"
+            "等于没有过滤——不匹配的订单会以维度为 NULL 的行混进结果，"
+            "在 GROUP BY 后变成一行 NULL 分组，把合计与「最高的那个月」全部带偏。"
+            "请把取值过滤从 ON 移到 WHERE，ON 里只保留表与表的连接键"
+            f"（例如 `LEFT JOIN {alias or '维度表'} ON <连接键> WHERE <过滤条件> {hit} ...`）"
+        )
+    return None
+
+
 def _select_list(sql: str) -> str:
     """SQL 的 SELECT 投影列表（跳过 CTE，只看最终查询最外层 SELECT 到 FROM 之间）。
 
@@ -1064,6 +1230,19 @@ def _validate(state: SQLAgentState) -> dict:
             if violation:
                 logger.warning("comparison contract violated, routing to repair: %s", violation)
                 validation = {"valid": False, "error": violation, "error_kind": "syntax"}
+        # 2026-11-11（plan sql-filter-in-join-on）：用户要求的取值过滤必须真的落在
+        # WHERE 里——漏一个年份就是「去年」被算成四年合计，写进外连接 ON 就是全国
+        # 数据冒充「华南每月」（真机事故：结论合计 9.38 亿 vs 真值 3936 万）。
+        if validation.get("valid"):
+            violation = _missing_filter_violation(sql, state.get("query_plan"))
+            if violation:
+                logger.warning("required filter missing, routing to repair: %s", violation)
+                validation = {"valid": False, "error": violation, "error_kind": "syntax"}
+        if validation.get("valid"):
+            violation = _join_filter_contract_violation(sql, state.get("query_plan"))
+            if violation:
+                logger.warning("filter in join-on violated, routing to repair: %s", violation)
+                validation = {"valid": False, "error": violation, "error_kind": "syntax"}
     return {"validation_result": validation}
 
 
@@ -1077,6 +1256,36 @@ def _execute(state: SQLAgentState) -> dict:
         return {"sql_result": json.dumps({"error": "无SQL语句"})}
     result = execute_sql(sql)
     return {"sql_result": result}
+
+
+_GROUP_KEY_HINT_RE = re.compile(r"月|年|周|季|日|区|省|市|店|品类|渠道|客户|产品")
+
+
+def _warn_null_group(result: dict) -> None:
+    """SUCCESS 但分组维度出现 NULL → 记一条 warning（2026-11-11，plan sql-filter-in-join-on）。
+
+    为什么**只告警不拦截**：维表真缺行时 NULL 分组是数据事实，硬拦会把本来成功的查询
+    变成 FAILED（`MAX_SQL_REPAIR_RETRIES` 用尽后必挂）。根因（过滤写进外连接 ON /
+    时间范围丢失）已由 `_validate` 的 C1/C2 在生成侧挡住；这里负责「下次再出现，
+    日志里看得见」——真机事故里那一行 NULL 最终在报告上叫「None月」，从日志无从追查。
+    """
+    rows = list(result.get("rows") or [])
+    if not rows:
+        return
+    names = [
+        str(col.get("name")) if isinstance(col, dict) else str(col)
+        for col in (result.get("columns") or [])
+    ]
+    for name in names:
+        if not _GROUP_KEY_HINT_RE.search(name):
+            continue
+        nulls = sum(1 for row in rows if isinstance(row, dict) and row.get(name) is None)
+        if nulls:
+            logger.warning(
+                "SUSPECT_NULL_GROUP column=%s null_rows=%s/%s — 分组维度为空，"
+                "常见原因是取值过滤写进了外连接 ON，或时间范围没落到 SQL 里",
+                name, nulls, len(rows),
+            )
 
 
 @traced_node("sql_evaluate")
@@ -1168,6 +1377,7 @@ def _evaluate(state: SQLAgentState) -> dict:
             "execution_status": "FAILED",
             "error": error_detail,
         }
+    _warn_null_group(result)
     return {
         "evaluate_result": EvaluateResult(status="SUCCESS", kind=None).model_dump(),
         "execution_status": "SUCCESS",

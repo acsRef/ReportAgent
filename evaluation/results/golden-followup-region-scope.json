@@ -1,0 +1,116 @@
+{
+  "results": [
+    {
+      "case_id": "followup-monthly-after-region-scope",
+      "category": "multi_turn",
+      "status": "pass",
+      "sections": {
+        "requirement.status": "pass",
+        "requirement.time_range_equals": "pass",
+        "execution.verdict": "pass",
+        "execution.sql_nonempty": "pass",
+        "report.table_present": "pass",
+        "report.rows_gt": "pass",
+        "execution.result_matches": "pass"
+      },
+      "deferred": [],
+      "dim_results": {
+        "e2e": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "frontend": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "memory": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "repair": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "report": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "requirement": {
+          "pass": 2,
+          "fail": 0,
+          "deferred": 0
+        },
+        "retrieval": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "sql": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "tool_selection": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        },
+        "execution": {
+          "pass": 3,
+          "fail": 0,
+          "deferred": 0
+        },
+        "behavior": {
+          "pass": 0,
+          "fail": 0,
+          "deferred": 0
+        }
+      },
+      "sql_executed": true,
+      "latency_ms": 54094.0,
+      "result_matches": true,
+      "execution_match": {
+        "ok": true,
+        "reason": "match",
+        "gold_rows": 12,
+        "pred_rows": 12,
+        "missing": [],
+        "extra": []
+      },
+      "complexity_tier": 2,
+      "diagnosis": {
+        "ok": true,
+        "failed": [],
+        "details": {}
+      },
+      "sql": "SELECT \n    dim_date.month AS 月份,\n    SUM(fact_orders.order_amount) AS 销售额\nFROM \n    fact_orders\nLEFT JOIN \n    dim_date ON dim_date.full_date = fact_orders.order_date\nLEFT JOIN \n    dim_store ON fact_orders.store_id = dim_store.store_id\nWHERE \n    dim_date.year = 2024\n    AND dim_store.region = '华南'\nGROUP BY \n    dim_date.month\nORDER BY \n    dim_date.month",
+      "golden_sql": "SELECT d.month AS month, ROUND(SUM(o.order_amount), 2) AS sales FROM fact_orders o JOIN dim_store s ON o.store_id = s.store_id JOIN dim_date d ON d.full_date = o.order_date WHERE d.year = 2024 AND s.region = '华南' GROUP BY d.month ORDER BY d.month"
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped_or_error": 0,
+    "sql_success_rate": 1.0,
+    "p50_latency_ms": 54094.0,
+    "p95_latency_ms": 54094.0,
+    "execution_accuracy": 1.0,
+    "cases_with_golden": 1,
+    "cases_matched": 1,
+    "execution_failure_reasons": {},
+    "complexity_tiers": {
+      "T2": {
+        "cases": 1,
+        "matched": 1,
+        "accuracy": 1.0
+      }
+    },
+    "subtask_failures": {}
+  }
+}

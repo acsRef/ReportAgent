@@ -1,4 +1,4 @@
-﻿"""报告层「结论别算错列、数字别误杀」（2026-11-03，plan 2026-11-03-anomaly-granularity）。
+"""报告层「结论别算错列、数字别误杀」（2026-11-03，plan 2026-11-03-anomaly-granularity）。
 
 两个实测缺陷：
 1. 按周聚合的结果列是 `[周(int), 销售额]`，`_fallback_headline` 取「第一个数值列」
@@ -70,6 +70,52 @@ def test_fallback_headline_prefers_text_dimension() -> None:
 
 def test_fallback_headline_empty_rows() -> None:
     assert _fallback_headline(_QR([])) == ""
+
+
+# --- NULL 分组不许冒充「最高的那个月」（2026-11-11，plan sql-filter-in-join-on） ---
+#
+# 真机报告核心发现写着「其中 None月 最高（731,121,265.40）」——那个 7.3 亿不是某个月，
+# 是 `LEFT JOIN ... ON ... AND region='华南'` 过滤失效后所有不匹配订单的 NULL 分组。
+# 更坏的是它会**赢下最高**，让整段结论建在一行垃圾上。
+
+NULL_GROUP_ROWS = [
+    {"月份": 1, "销售额": Decimal("21397609.64")},
+    {"月份": 2, "销售额": Decimal("14190637.08")},
+    {"月份": None, "销售额": Decimal("731121265.40")},  # 外连接过滤失效的垃圾桶行
+]
+
+
+def test_null_group_not_rendered_as_none() -> None:
+    headline = _fallback_headline(_QR(NULL_GROUP_ROWS))
+
+    assert "None" not in headline, headline
+    assert "None月" not in headline
+
+
+def test_null_group_never_wins_highest() -> None:
+    """最高必须在**有标签**的分组里选：7.3 亿那行是 NULL 分组，不能当冠军。"""
+    headline = _fallback_headline(_QR(NULL_GROUP_ROWS))
+
+    assert "1月 最高" in headline, headline
+    assert "731,121,265.40" not in headline.split("另有")[0]
+
+
+def test_null_group_disclosed_separately() -> None:
+    """空分组要摊在明面上说（几行、多少钱），而不是藏进一个漂亮的结论。"""
+    headline = _fallback_headline(_QR(NULL_GROUP_ROWS))
+
+    assert "另有 1 行" in headline
+    assert "731,121,265.40" in headline
+    assert "过滤" in headline or "连接" in headline
+
+
+def test_all_null_group_does_not_invent_a_month() -> None:
+    rows = [{"月份": None, "销售额": Decimal("100")}]
+
+    headline = _fallback_headline(_QR(rows))
+
+    assert "最高" not in headline, headline
+    assert "全部为空" in headline
 
 
 # --- 数字锚定：派生值（合计/均值）也要能过 -----------------------------------

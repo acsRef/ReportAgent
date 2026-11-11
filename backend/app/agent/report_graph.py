@@ -328,22 +328,48 @@ def _fallback_headline(qr) -> str:
         label_key = next(
             (k for k in first if k != value_key and is_time_like(k)), None,
         )
-    pairs = [(str(r.get(label_key, "")), to_decimal(r.get(value_key))) for r in rows] \
-        if label_key else [("", to_decimal(r.get(value_key))) for r in rows]
+    def _label(row: dict) -> str:
+        """维度取值 → 标签。空值必须归成空串，不能落到 `str(None)`。
+
+        2026-11-11（plan sql-filter-in-join-on）：真机报告的核心发现写着
+        「其中 **None月** 最高（731,121,265.40）」。那个 7.3 亿并不是某个月，而是
+        `LEFT JOIN ... ON ... AND region='华南'` 过滤失效后所有不匹配订单的 NULL 分组。
+        把空值当标签还有更坏的后果：它会**赢下「最高」**，让整段结论建在一行垃圾上。
+        """
+        if not label_key:
+            return ""
+        raw = row.get(label_key)
+        return "" if raw is None else str(raw).strip()
+
+    pairs = [(_label(r), to_decimal(r.get(value_key))) for r in rows]
     pairs = [(k, v) for k, v in pairs if v is not None]
     if not pairs:
         return f"共 {len(rows)} 行记录"
-    pairs.sort(key=lambda kv: kv[1], reverse=True)
-    top_label, top_value = pairs[0]
     total = sum(v for _, v in pairs)
-    if label_key:
-        shown = _format_period_label(label_key, top_label) if is_time_like(label_key) else top_label
+    if not label_key:
+        return f"{value_key}合计 {total:,.2f}，共 {len(rows)} 行"
+    labeled = [(k, v) for k, v in pairs if k]
+    if not labeled:
+        # 整个维度都是空值：不编一个「最高的那个月」，把异常直接摊给用户。
         return (
-            f"{value_key}合计 {total:,.2f}，其中 {shown} 最高"
-            f"（{top_value:,.2f}），共 {len(rows)} 组"
+            f"{value_key}合计 {total:,.2f}，共 {len(pairs)} 行；"
+            f"{label_key}全部为空（过滤或连接可能没生效，请核对）"
         )
-    return f"{value_key}合计 {total:,.2f}，共 {len(rows)} 行"
-
+    labeled.sort(key=lambda kv: kv[1], reverse=True)
+    top_label, top_value = labeled[0]
+    shown = _format_period_label(label_key, top_label) if is_time_like(label_key) else top_label
+    headline = (
+        f"{value_key}合计 {total:,.2f}，其中 {shown} 最高"
+        f"（{top_value:,.2f}），共 {len(labeled)} 组"
+    )
+    ungrouped = len(pairs) - len(labeled)
+    if ungrouped:
+        ungrouped_total = sum(v for k, v in pairs if not k)
+        headline += (
+            f"；另有 {ungrouped} 行 {label_key} 为空（合计 {ungrouped_total:,.2f}），"
+            "未参与最高/最低比较——请核对过滤条件或连接是否生效"
+        )
+    return headline
 
 def _format_period_label(column: str, value: str) -> str:
     """时间维度标签的人话写法：周=41 → 第41周；月份=6 → 6月；年份=2024 → 2024年。

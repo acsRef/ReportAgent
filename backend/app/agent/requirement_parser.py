@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from app.context import format_context_block
@@ -512,18 +512,24 @@ _AGGREGATE_PATTERNS = re.compile(r"汇总|合计|总计|趋势|同比|环比|占
 
 def resolve_time_range(
     user_query: str, current: str | None, *, default_year: bool = False,
+    today: date | None = None,
 ) -> str | None:
     """时间范围的**唯一决策点**（两条需求流水线共用）。
 
-    优先级：已有值（模型/状态）> 原话里的绝对时间 > 按意图给「今年」。
+    优先级：已有值（模型/状态）> 原话里的时间（绝对年份 / 去年 / 前年）> 按意图给「今年」。
 
     2026-11-10（差分探针，真机后果）：旧实现是「模型没给就直接填『今年』」，
     于是「2024年各区域销售额排名」在模型漏抽时被算成 **2026 年**（今天 2026-11-10），
     用户看到的是「没数据」。原话里明写着年份时，任何默认值都不该覆盖它。
+
+    2026-11-11（plan sql-filter-in-join-on）：「去年」这类**相对时间**此前既不在
+    绝对时间表里、也没有默认值 → 模型漏抽就永久没有时间范围，SQL 一个年份谓词都没有。
+    真机事故：`分析下去年华南区域的销售` 返回华南 2023–2026 **四年**合计 1.84 亿
+    （2025 年真值 4784 万）。现在沿用同一优先级：模型/状态有值就尊重，没有才换算。
     """
     if current:
         return current
-    value = time_range_from_query(user_query)
+    value = time_range_from_query(user_query, today=today)
     if value:
         return value
     return "今年" if default_year else None
@@ -880,6 +886,14 @@ _QUERY_TIME_RANGE = re.compile(
     r"(?:\s*[-~—至到]\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月)?"
 )
 _YEAR_WITH_SUFFIX = re.compile(r"((?:19|20)\d{2})\s*年")
+# 相对年份（2026-11-11，plan sql-filter-in-join-on）：「去年/前年」是原话里的**字面事实**，
+# 但此前既不在绝对时间表里、也没有默认值 → 模型漏抽就永久没有时间范围。
+# 刻意不认「今年」：现有链路已有「按意图给今年」的默认值（`default_year`），
+# 两套规则并存会互相打架。
+_RELATIVE_YEAR = re.compile(r"(去年|上一年|上年|前年)")
+# 比较语境里的「去年」是**基线**不是时间范围（「比去年增长多少」「去年同期」）——
+# 把它当时间范围会让主查询落在去年，这与「今年和去年比」直接矛盾。
+_RELATIVE_YEAR_BASELINE = re.compile(r"同比|比去年|较去年|和去年|与去年|去年同期|去年同")
 
 
 def _month_number(raw: str) -> int | None:
@@ -893,8 +907,8 @@ def _month_number(raw: str) -> int | None:
     return _CN_MONTHS.get(text)
 
 
-def time_range_from_query(user_query: str) -> str | None:
-    """从**用户原话**里确定性抽取绝对时间范围（纯函数，无模型、无当前时间依赖）。
+def time_range_from_query(user_query: str, *, today: date | None = None) -> str | None:
+    """从**用户原话**里确定性抽取时间范围（无模型；相对年份才依赖 today）。
 
     2026-11-10（plan time-range-and-metric-slot-backfill）：`TURN_UNDERSTANDING=1` 链路里
     卡片的时间范围**只来自模型**，模型漏给就永久为 null——实测「2024年各区域销售额排名」
@@ -902,9 +916,13 @@ def time_range_from_query(user_query: str) -> str | None:
     （金标 96,318,061.74 vs 实测 326,102,457.72）。时间范围是原话里就有的**字面事实**，
     不该依赖一次采样。
 
-    只认绝对写法（`2024年` / `2024年7月` / `2024年7月-8月` / `2024年十一月`）。
-    **相对时间词（今年/上月/最近N天）不在此换算**——那由既有链路（prompt 注入 today +
-    `_inherit_year`）负责，两处各有一套换算规则会互相打架。
+    认两种写法：
+    - **绝对**：`2024年` / `2024年7月` / `2024年7月-8月` / `2024年十一月`；
+    - **相对**（2026-11-11）：`去年` / `上一年` / `上年` → 前一年，`前年` → 前两年。
+      比较语境（`比去年` / `同比` / `去年同期`）里的「去年」是**基线**，不当时时间范围。
+
+    `今年` / `上月` / `最近N天` 仍不在这里换算——那由既有链路（prompt 注入 today +
+    `_inherit_year` + `default_year`）负责，两处各有一套规则会互相打架。
 
     返回卡片可承载的文本（`_period_filter_hint` 认这种形态）；抽取不到返回 None。
     """
@@ -922,7 +940,22 @@ def time_range_from_query(user_query: str) -> str | None:
     year_only = _YEAR_WITH_SUFFIX.search(text)
     if year_only:
         return f"{year_only.group(1)}年"
-    return None
+    return _relative_year_from_query(text, today)
+
+
+def _relative_year_from_query(text: str, today: date | None) -> str | None:
+    """「去年 / 前年」→ 显式年份。只看**第一个**命中的相对词，且必须不在比较语境里。"""
+    if not text:
+        return None
+    match = _RELATIVE_YEAR.search(text)
+    if match is None:
+        return None
+    if _RELATIVE_YEAR_BASELINE.search(text):
+        # 「今年销售额比去年增长」：时间范围是今年，去年只是对比基线
+        return None
+    year = (today or date.today()).year
+    offset = 2 if match.group(1) == "前年" else 1
+    return f"{year - offset}年"
 
 
 _BARE_MONTH_ARABIC = re.compile(r"(?<!\d)(\d{1,2})\s*月")
