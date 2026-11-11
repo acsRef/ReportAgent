@@ -118,6 +118,43 @@
   border: 1px solid transparent;
   border-radius: var(--r-9);
   overflow: hidden;
+  position: relative;
+}
+/* 删除入口（plan 2026-11-11-session-hard-delete）：默认不占视觉，hover / 当前会话才显形。
+   用 ✕ 而不是文字按钮，是为了不挤压标题——会话行本来就窄。 */
+.wb-session-del {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--rail-faint);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.wb-session:hover .wb-session-del,
+.wb-session:focus-within .wb-session-del,
+.wb-session.active .wb-session-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* 时间戳和删除键占同一个角，hover 时让位 */
+.wb-session:hover .wb-session-time {
+  opacity: 0;
+}
+.wb-session-del:hover {
+  color: var(--red);
+  border-color: currentColor;
+  background: #fff;
 }
 .wb-session-main {
   width: 100%;

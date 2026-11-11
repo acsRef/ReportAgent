@@ -87,4 +87,51 @@ describe('SessionRail', () => {
     fireEvent.click(screen.getByText('v1 · 报告'))
     expect(onSelectVersion).toHaveBeenCalledWith(1)
   })
+
+  // ── 硬删除（plan 2026-11-11-session-hard-delete）─────────────────────────
+
+  it('delete needs an explicit confirmation before calling onDelete', () => {
+    const onDelete = vi.fn().mockResolvedValue(undefined)
+    render(<SessionRail {...baseProps()} onDelete={onDelete} />)
+
+    fireEvent.click(screen.getByLabelText('删除会话：华东销售分析'))
+    // 弹层先出来，此时还没删
+    expect(onDelete).not.toHaveBeenCalled()
+    const modal = screen.getByRole('dialog')
+    expect(within(modal).getByText('华东销售分析')).toBeTruthy()
+    expect(within(modal).getByText(/不可恢复/)).toBeTruthy()
+
+    fireEvent.click(within(modal).getByText('删除'))
+    expect(onDelete).toHaveBeenCalledWith('sid-1')
+  })
+
+  it('cancel closes the dialog without deleting', () => {
+    const onDelete = vi.fn()
+    render(<SessionRail {...baseProps()} onDelete={onDelete} />)
+
+    fireEvent.click(screen.getByLabelText('删除会话：华东销售分析'))
+    const modal = screen.getByRole('dialog')
+    fireEvent.click(within(modal).getByText('取消'))
+
+    expect(onDelete).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('no delete affordance when onDelete is not wired', () => {
+    render(<SessionRail {...baseProps()} />)
+    expect(screen.queryByLabelText('删除会话：华东销售分析')).toBeNull()
+  })
+
+  it('keeps the dialog open (and does not throw) when deleting fails', async () => {
+    const onDelete = vi.fn().mockRejectedValue(new Error('DELETE failed: 409'))
+    render(<SessionRail {...baseProps()} onDelete={onDelete} />)
+
+    fireEvent.click(screen.getByLabelText('删除会话：华东销售分析'))
+    const modal = screen.getByRole('dialog')
+    fireEvent.click(within(modal).getByText('删除'))
+
+    // 失败后按钮退出 loading，用户可重试；不出现未捕获异常
+    await Promise.resolve()
+    expect(onDelete).toHaveBeenCalledTimes(1)
+  })
 })

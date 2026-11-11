@@ -95,6 +95,25 @@ export function fetchSession(sessionId: string): Promise<SessionSnapshot | null>
   return jsonFetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`)
 }
 
+/**
+ * Hard-delete one session and everything derived from it.
+ *
+ * Backend cascades 12 tables in one transaction (conversations, report versions,
+ * requirement drafts, trace spans, LangGraph checkpoints, …) and returns the row
+ * count per table. There is no undo — the caller must confirm first.
+ *
+ * Error contract: 404 SESSION_NOT_FOUND (missing / someone else's) and
+ * 409 SESSION_BUSY (a confirm/adjust task is still running) both arrive as
+ * non-2xx, so `jsonFetch` throws and the UI keeps the row instead of lying.
+ */
+export function deleteSession(
+  sessionId: string,
+): Promise<{ deleted: Record<string, number> }> {
+  return jsonFetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+  })
+}
+
 export function fetchReportVersion(
   sessionId: string,
   version: number,

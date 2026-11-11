@@ -22,7 +22,13 @@ import {
   composerPlaceholder,
   settlePhaseFor,
 } from '../components/workbench/phaseText'
-import { fetchSessions, fetchSession, patchRequirement, SESSIONS_PAGE_SIZE } from '../api/sessionsClient'
+import {
+  deleteSession,
+  fetchSessions,
+  fetchSession,
+  patchRequirement,
+  SESSIONS_PAGE_SIZE,
+} from '../api/sessionsClient'
 import type { SessionSummary as ApiSessionSummary } from '../api/sessionsClient'
 import { openChat } from '../api/analysisClient'
 import { postConfirmStream } from '../api/confirmStream'
@@ -374,6 +380,36 @@ export default function WorkbenchPage() {
     // P11 Review-1 P2：「新分析」必须显式清 execPolling——同 P1 残留，
     // 否则旧会话残留轮询会与新 session 重叠。
     setExecPolling(false)
+  }
+
+  /**
+   * 硬删除一条会话（plan 2026-11-11-session-hard-delete）。
+   *
+   * 顺序刻意是「先等服务端删成功，再动本地状态」：DELETE 返回非 2xx 时
+   * （404 会话消失 / 409 任务还在跑）必须原样保留列表行，否则用户会以为删掉了、
+   * 刷新一下又回来。失败时把异常抛回 SessionRail，让它的按钮退出 loading。
+   */
+  async function handleDeleteSession(sessionId: string) {
+    const wasActive = activeSessionId === sessionId
+    try {
+      await deleteSession(sessionId)
+    } catch (err) {
+      const text = String(err)
+      if (text.includes('409')) {
+        toast.error('这个会话还在生成报告，等它跑完再删')
+      } else if (text.includes('404')) {
+        // 服务端已经没有了：本地照样摘掉，避免僵在一条不存在的会话上
+        dispatch({ type: 'sessions/removed', sessionId })
+        toast.info('该会话已不存在，已从列表移除')
+        return
+      } else {
+        toast.error(`删除失败：${text.slice(0, 100)}`)
+      }
+      throw err
+    }
+    dispatch({ type: 'sessions/removed', sessionId })
+    if (wasActive) handleNewAnalysis()
+    toast.success('已删除该会话')
   }
 
   function handleSend(textOverride?: string) {
@@ -763,6 +799,7 @@ export default function WorkbenchPage() {
             handleNewAnalysis()
             composerRef.current?.focus()
           }}
+          onDelete={handleDeleteSession}
           hasMore={hasMoreSessions}
           loadingMore={sessionsPageLoading}
           onLoadMore={() => { void loadMoreSessions() }}

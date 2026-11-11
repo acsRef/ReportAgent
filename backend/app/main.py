@@ -65,6 +65,7 @@ from app.models.requirement import RequirementCard
 from app.services import (
     requirement_service,
     report_version_service,
+    session_deletion,
     snapshot_service,
 )
 from app.infra.db import report_version_repository
@@ -1461,6 +1462,35 @@ async def get_session(
     if snap is None:
         raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
     return snap
+
+
+@app.delete("/api/v1/sessions/{session_id}")
+async def delete_session_endpoint(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """硬删除一条会话及其全部派生数据（plan 2026-11-11-session-hard-delete）。
+
+    三态，与既有端点语义对齐：
+
+    - 会话不存在 / 属于他人 → 404 `SESSION_NOT_FOUND`（不区分两者，避免探测）；
+    - 该会话有未完成的后台任务 → 409 `SESSION_BUSY`（任务还在往 `report_version`
+      写行，此时删会留下孤儿）；
+    - 正常 → 200 `{"deleted": {表: 行数}}`。
+
+    级联清单在 `app/services/session_deletion.py`，与 purge CLI 共用同一份，
+    不允许在这里另写一套 DELETE。
+    """
+    task = registry.get_confirmed_task(session_id)
+    if task is not None and not task.finished:
+        raise HTTPException(status_code=409, detail="SESSION_BUSY: 任务仍在执行，稍后再删")
+    try:
+        counts = await session_deletion.delete_session(
+            session_id, user_id=user["id"],
+        )
+    except session_deletion.SessionNotFound:
+        raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND") from None
+    return {"deleted": counts}
 
 
 @app.patch("/api/v1/sessions/{session_id}/reports/{version}/favorite")

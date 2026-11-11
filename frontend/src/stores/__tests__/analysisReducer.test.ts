@@ -162,6 +162,45 @@ it('sessions/page-received replaces sessions and sets offset/hasMore', () => {
     expect(state.hasMoreSessions).toBe(false)
   })
 
+  it('sessions/removed drops one row and decrements offset', () => {
+    const page: SessionSummary[] = [
+      { session_id: 's-1', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] },
+      { session_id: 's-2', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] },
+    ]
+    let state: AnalysisState = { ...initialAnalysisState }
+    state = analysisReducer(state, { type: 'sessions/page-received', sessions: page, hasMore: true })
+    state = analysisReducer(state, { type: 'sessions/removed', sessionId: 's-2' })
+
+    expect(state.sessions.map((s) => s.session_id)).toEqual(['s-1'])
+    expect(state.sessionsOffset).toBe(1)
+  })
+
+  it('sessions/removed of the active session resets the workbench but keeps the list', () => {
+    const page: SessionSummary[] = [
+      { session_id: 's-1', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] },
+      { session_id: 's-2', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] },
+    ]
+    let state: AnalysisState = { ...initialAnalysisState, activeSessionId: 's-1' }
+    state = analysisReducer(state, { type: 'sessions/page-received', sessions: page, hasMore: false })
+    state = analysisReducer(state, { type: 'sessions/removed', sessionId: 's-1' })
+
+    // 会话没了 → 回到「新分析」，但剩下的会话不能被一起清空
+    expect(state.activeSessionId).toBeNull()
+    expect(state.phase).toBe('idle')
+    expect(state.sessions.map((s) => s.session_id)).toEqual(['s-2'])
+  })
+
+  it('sessions/removed for an unknown id is a no-op', () => {
+    const page: SessionSummary[] = [
+      { session_id: 's-1', title: '', phase: 'idle', msg_count: 0, updated_at: '', report_versions: [] },
+    ]
+    let state: AnalysisState = { ...initialAnalysisState }
+    state = analysisReducer(state, { type: 'sessions/page-received', sessions: page, hasMore: true })
+    const next = analysisReducer(state, { type: 'sessions/removed', sessionId: 'nope' })
+    expect(next).toBe(state)
+    expect(next.sessionsOffset).toBe(1)
+  })
+
   it('sessions/page-loading toggles loading flag', () => {
     const state: AnalysisState = { ...initialAnalysisState }
     expect(state.sessionsPageLoading).toBe(false)

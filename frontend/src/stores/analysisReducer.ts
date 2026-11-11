@@ -58,6 +58,14 @@ export type AnalysisAction =
   | { type: 'sessions/page-appended'; sessions: SessionSummary[]; hasMore: boolean }
   | { type: 'sessions/page-loading'; loading: boolean }
   | { type: 'sessions/received'; sessions: SessionSummary[] }
+  /**
+   * 硬删除成功后把这条从列表里摘掉（plan 2026-11-11-session-hard-delete）。
+   *
+   * 只做「本地摘除」：真正的删除已经在后端完成，这里失败没有回滚语义——
+   * 所以调用方必须在 DELETE 返回 2xx 之后才 dispatch。删掉的若是当前会话，
+   * `activeSessionId` 归零（调用方随后走新建分析复位过程状态）。
+   */
+  | { type: 'sessions/removed'; sessionId: string }
   | { type: 'requirement/received'; requirement: RequirementCard }
   /**
    * 2026-11-08（plan analysis-quality-cleanup D3）：草稿被确认（后端已 lock）。
@@ -196,6 +204,19 @@ export function analysisReducer(
 
     case 'sessions/page-loading':
       return { ...state, sessionsPageLoading: action.loading }
+
+    case 'sessions/removed': {
+      const remaining = state.sessions.filter((s) => s.session_id !== action.sessionId)
+      // 没删掉任何东西（已被别处移除）→ 原样返回，避免无意义的 offset 变化
+      if (remaining.length === state.sessions.length) return state
+      const offset = Math.max(0, state.sessionsOffset - 1)
+      // 删的是当前会话 → 整块过程状态归零，界面回到「新分析」；
+      // 否则只摘列表项，不动正在看的会话。
+      if (state.activeSessionId === action.sessionId) {
+        return { ...initialAnalysisState, sessions: remaining, sessionsOffset: offset }
+      }
+      return { ...state, sessions: remaining, sessionsOffset: offset }
+    }
 
     case 'chat/turn-appended':
       // 发送即 append：用户那句 + 空的助手占位，一次动作完成（不允许只加一半）。

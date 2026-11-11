@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import Button from '../atelier/Button'
 import Modal from '../atelier/Modal'
 import Spinner from '../atelier/Spinner'
 import { Text } from '../atelier/Typography'
@@ -15,6 +16,13 @@ interface Props {
   onSelect: (sessionId: string) => void
   onSelectVersion: (version: number) => void
   onNew: () => void
+  /**
+   * 硬删除一条会话（plan 2026-11-11-session-hard-delete）。
+   *
+   * 不可恢复，所以组件内先弹确认框，用户点「确认删除」才回调；
+   * 删成功与否由调用方负责 toast，组件只负责关弹层。
+   */
+  onDelete?: (sessionId: string) => Promise<void> | void
   // Plan B 步骤 2：分页"加载更多"按钮 — Plan B 在 89+ 历史会话下让 SessionRail 30s 内能完成
   hasMore?: boolean
   loadingMore?: boolean
@@ -42,12 +50,30 @@ export default function SessionRail({
   onSelect,
   onSelectVersion,
   onNew,
+  onDelete,
   hasMore,
   loadingMore,
   onLoadMore,
 }: Props) {
   const [showAllVersions, setShowAllVersions] = useState(false)
+  // 待确认删除的会话（null = 弹层关闭）；确认后置 deleting，按钮进 loading 态防双击
+  const [pendingDelete, setPendingDelete] = useState<SessionSummary | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const now = Date.now()
+
+  async function confirmDelete() {
+    if (!pendingDelete || !onDelete) return
+    setDeleting(true)
+    try {
+      await onDelete(pendingDelete.session_id)
+      setPendingDelete(null)
+    } catch {
+      // 失败的用户提示由调用方（WorkbenchPage）负责 toast；这里只做两件事：
+      // 保证按钮退出 loading（可重试），并让弹层留着——不把「没删掉」演成「关掉了」。
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const today: SessionSummary[] = []
   const pastWeek: SessionSummary[] = []
@@ -110,6 +136,20 @@ export default function SessionRail({
                 </span>
                 <span className="wb-session-time">{relativeTime(session.updated_at, now)}</span>
               </button>
+              {onDelete && (
+                <button
+                  type="button"
+                  className="wb-session-del"
+                  aria-label={`删除会话：${title}`}
+                  title="删除这个会话（不可恢复）"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setPendingDelete(session)
+                  }}
+                >
+                  ✕
+                </button>
+              )}
               {active && reportVersions.length > 0 && (
                 <div className="wb-version-box">
                   <div className="wb-version-caption">
@@ -196,6 +236,36 @@ export default function SessionRail({
       <div className="wb-left-footer">
         对话会自动保存 · 当前 {sessions.length} 个分析任务
       </div>
+
+      <Modal
+        open={pendingDelete !== null}
+        onClose={() => {
+          if (!deleting) setPendingDelete(null)
+        }}
+        title="删除这个会话？"
+        footer={
+          // 破坏性操作不用默认的主色确认键——红色按钮让人多看一眼
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <Button variant="default" onClick={() => setPendingDelete(null)} disabled={deleting}>
+              取消
+            </Button>
+            <Button variant="danger" loading={deleting} onClick={() => void confirmDelete()}>
+              删除
+            </Button>
+          </div>
+        }
+      >
+        <div style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--ink-2)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>
+            {pendingDelete ? sessionTitle(pendingDelete) : ''}
+          </div>
+          该会话的对话、需求卡、全部报告版本、执行轨迹与检查点会一起被删除，
+          <b>不可恢复</b>。
+          <div style={{ marginTop: 6, color: 'var(--faint)' }}>
+            如果这个会话还在生成报告，会提示「任务仍在执行」，稍后再删即可。
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={showAllVersions}
