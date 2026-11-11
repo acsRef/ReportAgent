@@ -468,3 +468,25 @@ CREATE TABLE IF NOT EXISTS memory.merge_candidate (
 
 CREATE INDEX IF NOT EXISTS idx_merge_candidate_user
     ON memory.merge_candidate (user_id, created_at DESC);
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 重试尝试（plan 2026-11-11-failure-recovery-durability P1）
+-- 为什么落库：retry_counters 原先只活在图的 State（dev=MemorySaver），进程重启
+-- 即归零 → 预算可被无限绕过。这张表同时是审计（每次重试一行）与播种源。
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS agent.retry_attempt (
+    id BIGSERIAL PRIMARY KEY,
+    session_id VARCHAR(64) NOT NULL,
+    user_id INT NOT NULL,
+    requirement_draft_id BIGINT,
+    attempt INT NOT NULL,
+    -- sql_generation / plan / mcp_schema（DiagnosePolicy 的预算维度）/ auto（P2 自动重试）
+    budget_key VARCHAR(24) NOT NULL,
+    -- retry_sql / replan / retry_mcp_schema_retrieval / auto_retry
+    action VARCHAR(48) NOT NULL,
+    error_kind VARCHAR(32),
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_retry_attempt_session
+    ON agent.retry_attempt (session_id, requirement_draft_id, created_at DESC);

@@ -57,9 +57,10 @@ def test_sql_error_kinds_vocabulary():
     # P15 prelude fix：8 kind（6 原 + object_not_found + object_ambiguous）；
     # object_not_found 走 DiagnosePolicy retry_mcp_schema_retrieval，
     # object_ambiguous 直接 clarify。
+    # 2026-11-11（plan failure-recovery-durability P0）：+ interrupted（服务重启打断任务）
     assert set(SQL_ERROR_KINDS) == {
         "syntax", "object", "object_not_found", "object_ambiguous",
-        "timeout", "connection", "permission", "other",
+        "timeout", "connection", "permission", "interrupted", "other",
     }
 
 
@@ -83,8 +84,10 @@ def test_agent_recoverable_table_matches_p8_verdict():
 def test_user_recoverable_table_matches_sse_contract():
     # SSE canRetry 语义（前端 analysisReducer 已钉）：用户重试有意义
     # P15 prelude fix：加 object_not_found（MCP 拿到新 schema 后用户可继续）+ object_ambiguous（消歧）。
+    # 2026-11-11（P0）：interrupted 用户点重试就能重跑 → 用户侧可恢复
     assert set(USER_RECOVERABLE_KINDS) == {
-        "timeout", "connection", "object", "object_not_found", "object_ambiguous", "other",
+        "timeout", "connection", "object", "object_not_found", "object_ambiguous",
+        "interrupted", "other",
     }
     assert user_recoverable("timeout") is True
     assert user_recoverable("connection") is True

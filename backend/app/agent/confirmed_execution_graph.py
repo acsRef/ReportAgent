@@ -370,6 +370,14 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
     except Exception as exc:
         logger.warning("ContextRuntime.build failed: %s", exc)
 
+    # 2026-11-11（plan failure-recovery-durability P1）：重试计数从库里播种。
+    # 原先 State 里恒从 0 起（dev=MemorySaver），进程重启即清零 → 预算可被无限绕过。
+    # 读不到就按 0 起步（仓储内部吞异常，不阻塞执行）。
+    from app.infra.db import retry_attempt_repository
+
+    seeded_counters = await retry_attempt_repository.counters_for(
+        state["session_id"], state.get("draft_id"),
+    )
     ss = await sql_graph.ainvoke({
         "schema_context": schema_input,
         "user_query": user_query,
@@ -379,7 +387,15 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
         "sql_result": "",
         "execution_status": "",
         "error": None,
-        "retry_counters": {"plan": 0, "sql_generation": 0},
+        "retry_counters": {
+            "plan": seeded_counters.get("plan", 0),
+            "sql_generation": seeded_counters.get("sql_generation", 0),
+            "mcp_schema": seeded_counters.get("mcp_schema", 0),
+        },
+        # P1：重试记录 / 审计的归属（legacy 路径为空 → 仓储 no-op）
+        "session_id": state["session_id"],
+        "user_id": state["user_id"],
+        "requirement_draft_id": state.get("draft_id"),
         "trace_id": state.get("trace_id", ""),
         "chosen_tool": None,  # legacy field; ignored in new flow
         "confirmed_requirement": confirmed_requirement,

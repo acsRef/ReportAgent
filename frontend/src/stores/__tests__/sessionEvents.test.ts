@@ -33,6 +33,31 @@ beforeEach(() => {
 })
 
 describe('loadSessionSnapshot', () => {
+  it('error 相位 + last_failed_action → 还原成可重试的错误态', async () => {
+    // plan failure-recovery-durability P0：服务重启打断任务后，后端把会话置成
+    // phase=error + last_failed_action=confirm。快照恢复时必须还原错误对象，
+    // 否则刷新之后重试按钮永远不出现（canRetryFailedAction 要求 error 非空）。
+    fetchSessionMock.mockResolvedValue({
+      ...snapshot('error'),
+      last_failed_action: 'confirm',
+    } as any)
+
+    await loadSessionSnapshot('s1', noopToast)
+
+    const s = useAnalysisStore.getState()
+    expect(s.phase).toBe('error')
+    expect(s.error?.recoverable).toBe(true)
+    expect(s.error?.failed_action).toBe('confirm')
+  })
+
+  it('error 相位但没有 failed_action → 不伪造错误', async () => {
+    fetchSessionMock.mockResolvedValue(snapshot('error') as any)
+
+    await loadSessionSnapshot('s1', noopToast)
+
+    expect(useAnalysisStore.getState().error).toBeNull()
+  })
+
   it('resume 恢复 requirement + versions + 终态 phase', async () => {
     fetchSessionMock.mockResolvedValue({
       ...snapshot('report_ready', [

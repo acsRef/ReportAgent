@@ -67,6 +67,7 @@ from app.services import (
     report_version_service,
     session_deletion,
     snapshot_service,
+    startup_recovery,
 )
 from app.infra.db import report_version_repository
 from app.reliability.errors import classify_exception, normalize_kind, user_code, user_message, user_recoverable
@@ -361,6 +362,9 @@ async def _run_confirmed_graph(
             "data": json.dumps({"final_phase": final_phase}, ensure_ascii=False),
         })
         registry.complete(task, events)
+        # P2：可恢复失败 → 排一次延迟自动重试（预算先记账再跑；不可恢复直接跳过）
+        if final_phase == "error":
+            _spawn_auto_retry(session_id, task.user_id, initial, events)
         tracer = get_tracer(initial.get("trace_id", ""))
         # P9-2：graph 未跑完（超时/异常提前退出）→ trace 终态必须 FAILED，
         # 否则 flush 落库的 trace 永远停在 RUNNING（end 才写 status/end_time）。
@@ -368,6 +372,100 @@ async def _run_confirmed_graph(
         if not graph_completed:
             tracer.end("FAILED")
         await tracer.flush()
+
+
+def _last_error_payload(events: list[dict]) -> dict:
+    """取最后一帧 error 事件里的 recoverable / kind（P2 自动重试的判定依据）。"""
+    for evt in reversed(events):
+        if evt.get("event") != "error":
+            continue
+        try:
+            payload = json.loads(evt.get("data") or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+    return {}
+
+
+def _spawn_auto_retry(
+    session_id: str,
+    user_id: int,
+    initial: ConfirmedExecutionState,
+    events: list[dict],
+) -> None:
+    """可恢复失败 → 排一次延迟自动重试（plan failure-recovery-durability P2）。
+
+    要点：
+    - **预算先记账再跑**：`agent.retry_attempt` 落一行 `budget_key='auto'`，
+      所以进程在重试途中死掉不会把这次算漏，也不会重复计数；
+    - **延迟不在 runner 里睡**：runner 返回前 task 仍算「在跑」，睡在这里会把自己
+      锁成 Busy；所以这里只 fire-and-forget 一个独立任务；
+    - **触发前再查一次占用**：用户在三秒内自己点了重试时，自动重试让位。
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:  # 单测直调 runner 时没有 loop
+        return
+    payload = _last_error_payload(events)
+    if not payload.get("recoverable"):
+        return
+    try:
+        max_auto = int(os.getenv("AUTO_RETRY_MAX", "1"))
+    except (TypeError, ValueError):
+        max_auto = 1
+    if max_auto <= 0:
+        return
+    draft_id = initial.get("draft_id")
+    kind = str(payload.get("kind") or "other")
+    asyncio.create_task(
+        _auto_retry_later(session_id, user_id, draft_id, kind, max_auto),
+        name=f"auto-retry:{session_id}",
+    )
+
+
+async def _auto_retry_later(
+    session_id: str, user_id: int, draft_id: int | None, kind: str, max_auto: int,
+) -> None:
+    from app.infra.db import retry_attempt_repository
+
+    used = await retry_attempt_repository.count_auto(session_id, draft_id)
+    if used >= max_auto:
+        logger.info("auto retry skipped (budget %s/%s) session=%s", used, max_auto, session_id)
+        return
+    await retry_attempt_repository.record(
+        session_id=session_id,
+        user_id=user_id,
+        requirement_draft_id=draft_id,
+        budget_key="auto",
+        action="auto_retry",
+        error_kind=kind,
+        reason=f"自动重试第 {used + 1}/{max_auto} 次（失败 kind={kind}，可恢复）",
+    )
+    try:
+        base = float(os.getenv("AUTO_RETRY_BACKOFF_S", "3"))
+    except (TypeError, ValueError):
+        base = 3.0
+    delay = max(0.0, base) * (2 ** used)
+    await asyncio.sleep(delay)
+
+    existing = registry.get_confirmed_task(session_id)
+    if existing is not None and not existing.finished:
+        logger.info("auto retry deferred: session %s already busy", session_id)
+        return
+    graph = build_confirmed_execution_graph()
+    initial = _confirmed_initial(session_id, user_id, user_query="", fault_override=None)
+    try:
+        registry.start_confirmed_task(
+            session_id, user_id, "confirm",
+            lambda t: _run_confirmed_graph(t, graph, initial, session_id, "confirm"),
+        )
+    except registry.BusyError:
+        logger.info("auto retry lost the race for session %s", session_id)
+        return
+    logger.warning(
+        "auto retry started session=%s attempt=%s/%s after %.1fs (kind=%s)",
+        session_id, used + 1, max_auto, delay, kind,
+    )
 
 
 async def _subscribe_events(
@@ -494,6 +592,14 @@ async def lifespan(app: FastAPI):
     # build_parent_graph，让 legacy 图拿到正确的 checkpointer。非开发环境顺带
     # 建 langgraph checkpoint 表。
     await init_checkpointer()
+    # 2026-11-11（plan failure-recovery-durability P0）：上个进程若在后台任务中途死掉，
+    # 会话会永远停在 generating 且没有任何失败记录（前端轮询永不结束）。启动时收敛：
+    # 真跑完的只修 phase，没跑成的落一条 interrupted 错误版本并置为可重试。
+    # 单实例假设——多实例部署前必须先落任务租约，见该模块 docstring。
+    try:
+        await startup_recovery.reconcile_orphan_sessions()
+    except Exception as exc:  # noqa: BLE001 - 收敛失败不阻塞启动
+        logger.warning("orphan session recovery failed: %s", exc)
     _agent = build_parent_graph()
     yield
     await close_checkpointer()

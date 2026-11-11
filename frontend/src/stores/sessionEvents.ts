@@ -140,6 +140,27 @@ export async function loadSessionSnapshot(
     const phase = snap.session.phase
     if (isAnalysisPhase(phase)) {
       dispatch({ type: 'phase/received', phase })
+      // 2026-11-11（plan failure-recovery-durability P0）：`last_failed_action` 以前
+      // 只出现在类型里、没有任何消费方——于是刷新/重进会话后就再也拿不到重试按钮，
+      // 哪怕后端已经把这个会话标成可重试（例如服务重启打断了正在跑的任务）。
+      // 用快照把它还原成错误态，`canRetryFailedAction` 才能通过。
+      if (phase === 'error' && snap.last_failed_action) {
+        dispatch({
+          type: 'analysis/failed',
+          error: {
+            code: 'QUERY_FAILED',
+            message: '上一次执行没有完成，可以直接重试',
+            recoverable: true,
+            failed_action: snap.last_failed_action as
+              | 'new'
+              | 'supplement'
+              | 'confirm'
+              | 'adjust'
+              | 'retry'
+              | 'sql',
+          },
+        })
+      }
       return isBusyPhase(phase)
     }
     return false

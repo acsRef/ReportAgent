@@ -23,7 +23,7 @@ from pydantic import BaseModel
 #   - object_ambiguous：AmbiguousColumn 列名歧义（直接 clarify 让用户消歧）
 # 'object' 保留作向后兼容兜底（未识别 ProgrammingError 仍归 'object'）。
 SQL_ERROR_KINDS = ("syntax", "object", "object_not_found", "object_ambiguous",
-                   "timeout", "connection", "permission", "other")
+                   "timeout", "connection", "permission", "interrupted", "other")
 
 # Agent 侧（DiagnosePolicy 消费）：syntax/object/object_not_found/other 可 repair。
 # P15 prelude fix 加 object_not_found（走 retry_mcp_schema_retrieval 路径，独立预算）。
@@ -33,8 +33,11 @@ AGENT_RECOVERABLE_KINDS = ("syntax", "object", "object_not_found", "other")
 # 用户侧（SSE _build_sse_error 消费）：timeout/connection/object/object_not_found/
 # object_ambiguous/other 用户重试有意义。
 # P15 prelude fix 加 object_not_found（schema retrieval 后用户可补充）+ object_ambiguous（消歧）。
+# 2026-11-11（plan failure-recovery-durability P0）：`interrupted` = 服务重启导致任务中断，
+# 用户点一次重试就能重跑，所以**用户侧可恢复**；但它**不在** agent 可恢复表里——
+# 同一条 SQL 重跑没有意义，需要的是整轮重来（走 /retry 而不是 repair）。
 USER_RECOVERABLE_KINDS = ("timeout", "connection", "object", "object_not_found",
-                          "object_ambiguous", "other")
+                          "object_ambiguous", "interrupted", "other")
 
 
 class ErrorCode(str, Enum):
@@ -199,6 +202,9 @@ _USER_MESSAGES: dict[str, str] = {
     # normalize_kind 放行 8 kind，而本表只有 6 个 key）。
     "object_not_found": "查询引用的表或字段不存在,请检查维度后重试",
     "object_ambiguous": "字段名存在歧义,请明确指定要查询的列后重试",
+    # 2026-11-11（P0）：服务重启把跑到一半的任务打断了——不是用户的查询有问题，
+    # 所以文案只让他重试，不建议改需求。
+    "interrupted": "任务在执行中被中断(服务重启),直接重试即可",
     "other":      "查询执行失败,请稍后重试或调整需求",
 }
 
@@ -219,6 +225,8 @@ _USER_CODES: dict[str, str] = {
     # （SSE payload 里带 kind 字段），codes 是稳定契约，不扩新码值。
     "object_not_found": "QUERY_OBJECT",
     "object_ambiguous": "QUERY_OBJECT",
+    # 同上：复用 QUERY_FAILED，不扩新码值；SSE payload 的 kind 已经能区分 interrupted
+    "interrupted": "QUERY_FAILED",
     "other":      "QUERY_FAILED",
 }
 

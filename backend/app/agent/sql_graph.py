@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -299,6 +300,11 @@ class SQLAgentState(TypedDict, total=False):
     # 指标白名单渲染结果（2026-11-03）：需求卡解析出的指标表达式，只渲染这些。
     # 为空时退回全量注册表（无卡片场景）。
     metric_hints: Optional[str]
+    # 2026-11-11（plan failure-recovery-durability P1）：重试记录的归属。
+    # 由 `_confirmed_sql_agent` 透传；legacy / 工具直调路径为空 → 仓储直接 no-op。
+    session_id: str
+    user_id: int
+    requirement_draft_id: Optional[int]
 
 
 _FK_CHAIN_HINTS = """事实表 → 维度表外键链路:
@@ -1260,6 +1266,54 @@ def _execute(state: SQLAgentState) -> dict:
 
 _GROUP_KEY_HINT_RE = re.compile(r"月|年|周|季|日|区|省|市|店|品类|渠道|客户|产品")
 
+# 审计写入的任务引用：create_task 出来的 task 若没人持有会被 GC 回收
+_PENDING_WRITES: set[asyncio.Task] = set()
+
+
+def _spawn_write(coro: Any) -> None:
+    """在事件循环里 fire-and-forget 一次审计写入。
+
+    为什么不做成 await：`_diagnose` 是同步节点（还被多条单测同步直调），改成 async
+    会波及调用点。审计丢一条不影响结论（计数在 State 里照常递增，DB 只是跨重启副本），
+    所以 fire-and-forget 是可接受的取舍；没有运行中的 loop（单测直调）时静默跳过。
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        coro.close()
+        return
+    task = loop.create_task(coro)
+    _PENDING_WRITES.add(task)
+    task.add_done_callback(_PENDING_WRITES.discard)
+
+
+def _record_retry(state: "SQLAgentState", decision: Any, kind: str) -> None:
+    """把一次「算作重试」的决策落进 `agent.retry_attempt`（P1）。"""
+    action = str(getattr(decision, "action", "") or "")
+    budget_key = {
+        "retry_sql": "sql_generation",
+        "replan": "plan",
+        "retry_mcp_schema_retrieval": "mcp_schema",
+    }.get(action)
+    if budget_key is None:
+        return
+    session_id = state.get("session_id") or ""
+    if not session_id:
+        return
+    from app.infra.db import retry_attempt_repository
+
+    _spawn_write(
+        retry_attempt_repository.record(
+            session_id=session_id,
+            user_id=int(state.get("user_id") or 0),
+            requirement_draft_id=state.get("requirement_draft_id"),
+            budget_key=budget_key,
+            action=action,
+            error_kind=kind,
+            reason=str(getattr(decision, "reason", "") or ""),
+        )
+    )
+
 
 def _warn_null_group(result: dict) -> None:
     """SUCCESS 但分组维度出现 NULL → 记一条 warning（2026-11-11，plan sql-filter-in-join-on）。
@@ -1438,6 +1492,9 @@ def _diagnose(state: SQLAgentState) -> dict:
         validation_failed=validation_failed,
         raw_empty=raw_empty,
     )
+    # 2026-11-11（P1）：重试类决策先落一行审计（best-effort），再执行对应分支。
+    # 这样即使进程在这轮重试中途死掉，「重试过几次」也不会随 State 一起消失。
+    _record_retry(state, decision, kind)
     tracer = current_tracer()
     if tracer is not None:
         tracer.add_decision(

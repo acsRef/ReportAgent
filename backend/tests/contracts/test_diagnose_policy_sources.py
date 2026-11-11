@@ -17,9 +17,11 @@ def test_diagnose_policy_kind_vocabulary_is_errors_source():
     """源同源钉：DiagnosePolicy normalize 用的白名单必须是 errors.SQL_ERROR_KINDS 本尊。"""
     assert sql_graph_module.SQL_ERROR_KINDS is errors.SQL_ERROR_KINDS
     # P15 prelude fix：8 kind（6 原 + object_not_found + object_ambiguous）
+    # 2026-11-11（plan failure-recovery-durability P0）：+ interrupted
+    # （服务重启打断任务；由启动收敛写入，用户侧可重试、agent 侧不可 repair）
     assert set(SQL_ERROR_KINDS) == {
         "syntax", "object", "object_not_found", "object_ambiguous",
-        "timeout", "connection", "permission", "other",
+        "timeout", "connection", "permission", "interrupted", "other",
     }
 
 
@@ -29,11 +31,13 @@ def test_diagnose_policy_fail_branch_uses_agent_recoverable_source():
     P15 prelude 方案 A（用户 2026-09-02 拍板）落地后：
     - AGENT_RECOVERABLE_KINDS 加 'object_not_found'（走 retry_mcp_schema_retrieval）
     - object_ambiguous 仍故意不进 AGENT 表——直接 clarify
-    故差集固定 {"timeout", "connection", "permission", "object_ambiguous"}。
+    2026-11-11 再加 interrupted：同一条 SQL 重跑没有意义，要的是整轮重来（/retry），
+    所以它也不在 AGENT 表里。
+    故差集固定 {"timeout", "connection", "permission", "object_ambiguous", "interrupted"}。
     """
     assert sql_graph_module.agent_recoverable is errors.agent_recoverable
     assert set(SQL_ERROR_KINDS) - set(AGENT_RECOVERABLE_KINDS) == {
-        "timeout", "connection", "permission", "object_ambiguous",
+        "timeout", "connection", "permission", "object_ambiguous", "interrupted",
     }
 
 

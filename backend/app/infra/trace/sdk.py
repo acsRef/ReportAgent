@@ -86,6 +86,13 @@ class Tracer:
         self._prompt_versions: list[dict] = []  # P7 D3: 本地 prompt 版本追踪
         self._decisions: list[dict] = []  # P8 D5: Diagnose 决策本地记录
         self._stack: list[Span] = []
+        # 2026-11-11（plan failure-recovery-durability P3）：增量落盘游标。
+        # 原来只在请求结束 flush，进程被强杀时**整批丢失**——真机实测崩溃后只剩
+        # 需求阶段的 23 个 span，最贵的 sql_plan 一个不剩（最需要现场的时候没现场）。
+        self._persisted_spans = 0
+        self._persisted_llm_calls = 0
+        self._trace_saved = False
+        self._flush_lock = asyncio.Lock()
 
     def backfill_identity(self, session_id: Optional[str] = None,
                           user_query: Optional[str] = None,
@@ -216,6 +223,27 @@ class Tracer:
             # C-4: 无论落库成败都要释放桶，否则异常路径下 tracer 永驻 _local → 内存泄露。
             _local.pop(self.trace_id, None)
 
+    async def flush_partial(self) -> None:
+        """只把「还没落库的 span」补写进 PG（P3，崩溃时保住现场）。
+
+        与 `flush()` 的区别：**不 pop `_local`、不改 trace 终态、不碰 Langfuse**。
+        落库游标记在 tracer 上，所以同一批 span 不会被重复 INSERT
+        （`TraceRepository.save_span` 是纯 INSERT，没有 ON CONFLICT 兜底）。
+        同样套总超时：DB 卡住不能拖慢主流程。
+        """
+        if self._persisted_spans >= len(self._spans) and self._persisted_llm_calls >= len(self._llm_calls):
+            return
+        try:
+            async with self._flush_lock:
+                await asyncio.wait_for(_flush_pg(self), timeout=_FLUSH_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "partial trace flush timed out after %ss for trace_id=%s",
+                _FLUSH_TIMEOUT, self.trace_id,
+            )
+        except Exception as exc:
+            logger.warning("partial trace flush failed for trace_id=%s: %s", self.trace_id, exc)
+
     async def _flush(self):
         """双 sink 内部入口：PG 与 Langfuse 独立 best-effort，互不阻塞。"""
         # 2026-11-08（真机排查）：trace 没落库时，日志里只有「total 超时」一行，
@@ -236,22 +264,34 @@ class Tracer:
 
 
 async def _flush_pg(tracer: "Tracer") -> None:
-    """PG sink：原 _flush_db 逻辑（module-level 便于测试 patch）。单点失败不拖垮其余。"""
+    """PG sink：原 _flush_db 逻辑（module-level 便于测试 patch）。单点失败不拖垮其余。
+
+    2026-11-11（P3）：改成**按游标增量写**——首次落 trace 行，之后每次只补写新增的
+    span / llm_call。这样 `flush_partial()`（每 N 个 span）与终态 `flush()` 共用同一条
+    写入路径，不会把同一行 INSERT 两次。`save_span` 是纯 INSERT（无 ON CONFLICT），
+    所以游标不是优化而是正确性要求。
+    """
     repo = TraceRepository()
-    try:
-        await repo.save_trace(tracer._trace)
-    except Exception as exc:
-        logger.warning("save_trace failed for trace_id=%s: %s", tracer.trace_id, exc)
-    for llm_call in tracer._llm_calls:
+    if not tracer._trace_saved:
+        try:
+            await repo.save_trace(tracer._trace)
+            tracer._trace_saved = True
+        except Exception as exc:
+            logger.warning("save_trace failed for trace_id=%s: %s", tracer.trace_id, exc)
+    pending_calls = tracer._llm_calls[tracer._persisted_llm_calls:]
+    for llm_call in pending_calls:
         try:
             await repo.save_llm_call(llm_call)
         except Exception as exc:
             logger.warning("save_llm_call failed for trace_id=%s: %s", tracer.trace_id, exc)
-    for span in tracer._spans:
+    tracer._persisted_llm_calls = len(tracer._llm_calls)
+    pending_spans = tracer._spans[tracer._persisted_spans:]
+    for span in pending_spans:
         try:
             await repo.save_span(span)
         except Exception as exc:
             logger.warning("save_span failed for trace_id=%s: %s", tracer.trace_id, exc)
+    tracer._persisted_spans = len(tracer._spans)
 
 
 async def _flush_langfuse(tracer: "Tracer") -> None:
@@ -272,6 +312,29 @@ def get_tracer(trace_id: str, session_id: Optional[str] = None,
         # A-3：已存在则回填——traced_node 先建的无主 tracer 在 priming 时补齐身份。
         _local[trace_id].backfill_identity(session_id, user_query, user_id)
     return _local[trace_id]
+
+
+def _flush_every() -> int:
+    """增量落盘阈值（span 个数）。0 = 关闭，回到「只在请求结束 flush」的旧行为。"""
+    try:
+        return int(os.getenv("TRACE_FLUSH_EVERY", "10"))
+    except (TypeError, ValueError):
+        return 10
+
+
+async def _maybe_flush_partial(tracer: "Tracer") -> None:
+    """节点边界处的增量落盘判定（P3）。
+
+    只在**异步**节点里调用——同步节点没有 await 点，硬塞会把主链变慢；
+    而贵的那几个节点（turn_understand / sql_plan / sql_generate / report_*）都是异步的，
+    崩在这几处才是真会丢现场的场景。
+    """
+    every = _flush_every()
+    if every <= 0:
+        return
+    if len(tracer._spans) - tracer._persisted_spans < every:
+        return
+    await tracer.flush_partial()
 
 
 def traced_node(name: str, span_type: str = "NODE"):
@@ -296,6 +359,8 @@ def traced_node(name: str, span_type: str = "NODE"):
                         _handle_output_span(tracer, result)
                     return result
                 finally:
+                    # P3：节点边界顺手把攒够阈值的 span 落库（崩溃时能保住现场）
+                    await _maybe_flush_partial(tracer)
                     _current_tracer.reset(token)
             return async_wrapper
         else:
