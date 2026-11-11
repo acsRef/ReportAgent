@@ -2,12 +2,14 @@
 
 一份把**当前代码里真实的 LangGraph 拓扑**画出来的可交互页面：5 张图 / 41 个节点 / 46 条边，
 每个节点可点开看职责、输入输出、失败分支、代码行号与**实测耗时**，并能按真实 trace 顺序回放。
+第 6 个标签是**故障处理矩阵**（20 条 / 5 类处置 / 6 步排查），把「节点挂了谁兜、兜几次」写成表。
 
 |  | 位置 |
 |---|---|
 | 页面（唯一真源） | 博客仓库 `source/graph/index.html` |
 | 线上 | https://acsref.github.io/graph/ |
 | 配套文章 | https://acsref.github.io/posts/runtime-node-map/ |
+| 崩溃恢复深挖 | https://acsref.github.io/posts/deepdive-crash-recovery/ |
 
 页面不在本仓库里，是有意的：它是**博客产物**（自包含单文件，无构建、无外链依赖），
 放两份必然漂移。本文件只记录「它是怎么来的、怎么更新」。
@@ -40,6 +42,24 @@ where trace_id in (
 
 一次两阶段请求约 67 个 span，其中 `span_type='NODE'` 的 33 个就是回放序列
 （`DATA` 是节点输出快照，`TOOL` 是工具调用，`embedding` 也走 TOOL）。
+
+## 故障视图：数据也是抄的，不是设计意图
+
+「故障处理」标签里的每一行都对应代码里的确定值，改它们要同步改契约测试：
+
+| 项 | 来源 |
+|---|---|
+| 重试预算（SQL 2 / MCP 2 / LLM 2 / 重规划 1） | `reliability/retry.RETRY_BUDGETS` |
+| 决策分支（retry_sql / retry_mcp / replan / end / fail / clarify） | `sql_graph.DiagnosePolicy` |
+| SQL 超时 30s、连接 10s | `tools/sql_tools.STATEMENT_TIMEOUT_MS` / `CONNECT_TIMEOUT_S` |
+| 整条请求 600s | `reliability/timeout.MAX_TASK_DURATION` |
+| 单轮理解 120s 总预算 | `llm/budgets.turn_request_budget()` |
+| 自动重试预算 / 退避 | `AUTO_RETRY_MAX`（默认 1）/ `AUTO_RETRY_BACKOFF_S`（默认 3，翻倍） |
+| 增量落盘阈值 | `TRACE_FLUSH_EVERY`（默认 10，0 关闭） |
+| 崩溃收敛 | `services/startup_recovery.reconcile_orphan_sessions()` |
+
+五类处置：**自动重试 / 降级继续 / 停下来问你 / 停下来失败 / 崩了也能救**（最后一类是
+2026-11-11「跑到一半强杀后端」实验补出来的，见 plan `2026-11-11-failure-recovery-durability`）。
 
 ## 怎么更新
 
