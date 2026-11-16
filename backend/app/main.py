@@ -1570,6 +1570,42 @@ async def get_session(
     return snap
 
 
+@app.post("/api/v1/sessions/{session_id}/compact")
+async def compact_session_endpoint(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """手动压缩对话上下文（对标 DSH 的 `/compact`）。
+
+    为什么要有这个端点：自动压缩只有两条闸（token 压力 / 条数兜底），且会走「收益上界闸」——
+    会话消息短的时候它经常**主动放弃**（压缩后不变小就不落库）。用户若明确要求「把历史收一收」，
+    需要一个不等阈值的入口，否则只能干等到长会话自己触发。
+
+    三态：
+
+    - 会话不存在 / 属于他人 → 404 `SESSION_NOT_FOUND`；
+    - 该会话有未完成的后台任务 → 409 `SESSION_BUSY`（压缩会改 `agent.session.digest`，
+      执行中的任务正读它，边跑边改属于竞态）；
+    - 正常 → 200 `{compacted, reason, digest_msg_count, digest_version, context_chars, raw_chars}`，
+      `reason` 会老实说明为什么没压（`EMPTY_SESSION` / `NOTHING_TO_COMPACT` / `NOT_WORTH_IT`）。
+    """
+    sess = await session_manager.get_session(session_id)
+    if sess is None or sess.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="SESSION_NOT_FOUND")
+    task = registry.get_confirmed_task(session_id)
+    if task is not None and not task.finished:
+        raise HTTPException(status_code=409, detail="SESSION_BUSY: 任务仍在执行，稍后再压缩")
+    from app.memory import conversation as conversation_memory
+
+    try:
+        return await conversation_memory.compact_session_now(session_id, user["id"])
+    except Exception as exc:  # noqa: BLE001 - 压缩是维护动作，失败不该 500 打挂界面
+        logger.warning("manual compaction failed for %s: %s", session_id, exc)
+        raise HTTPException(
+            status_code=503, detail=f"COMPACTION_FAILED: {exc}",
+        ) from exc
+
+
 @app.delete("/api/v1/sessions/{session_id}")
 async def delete_session_endpoint(
     session_id: str,

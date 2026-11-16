@@ -190,4 +190,54 @@ measure → trigger → select(保尾) → summarize(checkpoint + 数据事实�
 真实业务数值逐字可核对 / checkpoint 数字对账 / 压缩确实变小 / 无新消息不重复调 LLM /
 滚动压缩前进且老数字不丢 / 压缩与原文给出同样执行计划 / 短会话不压缩 / 真实失败降级不空。
 
+## 第三轮：手动压缩 + 空转闸（2026-11-16，用户追问「有没有手动 compact」）
+
+**手动入口**（原先不存在，DSH 有 `/compact`）：
+
+```
+POST /api/v1/sessions/{session_id}/compact
+→ 200 {compacted, reason, digest_msg_count, digest_version, context_chars, raw_chars}
+→ 404 SESSION_NOT_FOUND（不存在/他人，不区分）
+→ 409 SESSION_BUSY（任务在跑：压缩会改 agent.session.digest，执行中的任务正在读它）
+→ 503 COMPACTION_FAILED（维护动作失败不该 500 打挂界面）
+```
+
+`reason` 老实说明为什么没压：`EMPTY_SESSION` / `NOTHING_TO_COMPACT`（连折叠区间都没有）/
+`ALREADY_COMPACTED`（同一 fold_end 已压过）/ `NOT_WORTH_IT`（压了不会更小）。
+
+**空转闸**（真流程暴露的副作用，本轮一并修）：只加「净收益守门」会让短消息会话每轮都白调一次
+LLM 然后放弃（digest 不推进 → 下一轮再来）。补两道：
+
+1. **收益上界闸**：`上限 = estimate_tokens(原文) − estimate_tokens(floor)`，floor = 尾部 + 数据块 + 标签
+   （不含摘要）。上限 < `COMPACTION_MIN_GAIN_TOKENS`（默认 40）就直接跳过，**不调 LLM**；
+2. **拒绝记忆**：同一 `(session_id, fold_end)` 判过「不值得」后 `COMPACTION_REFUSAL_TTL_S`（默认 600s）
+   内不再试；手动压缩 / 删会话会 `clear_compaction_refusals()`。
+
+真机验证（真后端 + 真会话，44 条消息）：
+
+```
+第一次点   → {"compacted":true,"digest_msg_count":33,"digest_version":1,
+               "context_chars":1500,"raw_chars":4808}      15.5s   ← 降 69%
+同边界再点 → {"compacted":false,"reason":"ALREADY_COMPACTED"} 0.02s   ← 不烧 LLM
+追加 2 条  → {"compacted":true,"digest_msg_count":35,"digest_version":2,
+               "context_chars":1333}                        6.8s
+8 条会话   → {"compacted":false,"reason":"NOTHING_TO_COMPACT"}         ← 连折叠区间都没有
+```
+
+新增契约测试 `tests/contracts/test_session_compact_gate.py`（7 例：404/409/503/reason 透传/JWT 取
+user_id）+ `TestNoWastedCalls`（3 例：收益闸不调 LLM / 拒绝记忆只试一次 / force 跳过两道闸）。
+
+## 仍然没做：执行中上下文溢出（诚实清单）
+
+DSH 的第三触发 `context-overflow`（provider 报窗口超限 → 强制压缩 → 重试一次）**没有实现**：
+
+- 现状：`llm_resilience` 把这类错误当普通错误重试 2 次（无用），最终任务失败 → 落
+  `report_version` FAILED（`kind=other`）+ SSE error，不会永远停在 `generating`；但**没有“压缩后重试”**；
+- 风险实际上很小：单轮执行期间对话不增长（消息在轮次边界写），prompt 实测 ~4k tokens vs 65k 窗口，
+  且 `MAX_TASK_DURATION=600` 兜住最坏耗时；
+- 若要补：在 LLM adapter 里识别 `context_length_exceeded` / `maximum context length` → 归类
+  `context_overflow` → 触发一次 `force=True, retain=0` 的全量折叠 → 重试一次（`maxOverflowRetries=1`）。
+  这是明确的下一步，本轮没做是因为没有证据表明会撞上（无一条真实溢出记录）。
+
+
 

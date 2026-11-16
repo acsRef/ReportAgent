@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 from app.llm import budgets, call_llm
 from app.memory.compaction import (
@@ -158,6 +159,46 @@ def _render_context(
     return "\n\n".join(parts)
 
 
+def _min_gain_tokens() -> int:
+    """值得为一次压缩付出 LLM 调用的**最小收益上界**（tokens）。
+
+    短消息会话里摘要永远救不回一个数据块的成本，先算上限再决定要不要花调用。
+    """
+    return int(os.getenv("COMPACTION_MIN_GAIN_TOKENS", "40"))
+
+
+def _refusal_ttl_s() -> float:
+    return float(os.getenv("COMPACTION_REFUSAL_TTL_S", "600"))
+
+
+# 空转保护：同一 (session, fold_end) 已经判过「不值得」就不再每轮重试。
+# 单实例假设（与 `startup_recovery` 一致）：多实例部署时这条只是缓存失效，不是正确性依赖。
+_REFUSED: dict[tuple[str, int], float] = {}
+
+
+def _recently_refused(session_id: str, fold_end: int) -> bool:
+    stamp = _REFUSED.get((session_id, fold_end))
+    if stamp is None:
+        return False
+    if time.monotonic() - stamp > _refusal_ttl_s():
+        _REFUSED.pop((session_id, fold_end), None)
+        return False
+    return True
+
+
+def _mark_refused(session_id: str, fold_end: int) -> None:
+    _REFUSED[(session_id, fold_end)] = time.monotonic()
+
+
+def clear_compaction_refusals(session_id: str | None = None) -> None:
+    """清空「不值得压缩」缓存（手动压缩/删除会话时调用，保证下次能重试）。"""
+    if session_id is None:
+        _REFUSED.clear()
+        return
+    for key in [k for k in _REFUSED if k[0] == session_id]:
+        _REFUSED.pop(key, None)
+
+
 def build_context(
     *,
     messages: list[dict],
@@ -168,6 +209,8 @@ def build_context(
     context_window: int | None = None,
     reserved_completion_tokens: int | None = None,
     headroom_tokens: int | None = None,
+    session_id: str | None = None,
+    force: bool = False,
 ) -> tuple[str, dict, list[dict]]:
     """从对话历史构建注入 LLM 的上下文字符串（DSH compaction 五步）。
 
@@ -186,10 +229,18 @@ def build_context(
        逐字原样注入 `<数据事实>` 块；
     5. **guard**：候选（checkpoint + 事实）不比被折叠内容短 → 退回确定性折法；LLM 抛错同样退回，
        **绝不把整块上下文丢空**（原实现的缺陷，见 plan §Context 缺陷 ②）。
+
+    额外两道「别白花钱」的闸（真流程测试撞出来的）：
+
+    - **收益上界闸**：`上限 = 原文 − floor`（floor 不含摘要），上限太小就直接跳过、不调 LLM；
+    - **拒绝记忆**：同一 `(session_id, fold_end)` 判过「不值得」后 10 分钟内不再试。
+
+    `force=True` 跳过这两道闸与触发闸，供**手动压缩**（`POST /sessions/{sid}/compact`）使用。
     """
     total = len(messages)
     updates: dict = {}
     compressed_batch: list[dict] = []
+    raw_text = format_messages(messages)
     units = classify_units(messages)
 
     try:
@@ -201,17 +252,17 @@ def build_context(
     except CompactionConfigError as exc:
         # 配置打架属于**配置**错误：降级为「本轮不压缩」，不拖垮主链。
         logger.warning("compaction config rejected (%s); skip compaction this turn", exc)
-        return format_messages(messages), updates, compressed_batch
+        return raw_text, updates, compressed_batch
 
     measured_tokens = sum(unit.tokens for unit in units)
-    if not should_compact(
+    if not force and not should_compact(
         message_count=total,
         measured_tokens=measured_tokens,
         spec=spec,
         message_ceiling=RECENT_WINDOW + COMPRESS_BATCH,
     ):
         # 消息还不多：无需压缩，原始输出即可
-        return format_messages(messages), updates, compressed_batch
+        return raw_text, updates, compressed_batch
 
     fold_units, keep_units = select_fold_span(
         units,
@@ -219,12 +270,28 @@ def build_context(
         ceiling_messages=RECENT_WINDOW,
     )
     if not fold_units:
-        return format_messages(messages), updates, compressed_batch
+        return raw_text, updates, compressed_batch
 
     fold_end = keep_units[0].start          # 折叠区间的右开边界（原始消息下标）
     shadowed_tokens = sum(unit.tokens for unit in fold_units)
     facts = collect_data_facts(fold_units)
     facts_text = "、".join(facts)
+
+    # 收益上界 = 原文 − floor（floor 是「不许再小」的下限：尾部 + 数据块 + 标签，不含摘要）。
+    # 摘要再完美也省不出超过这个数的量；所以**先算上限再决定要不要花一次 LLM 调用**。
+    floor_render = _render_context(
+        mid_digest=mid_digest, digest="", facts=facts, keep_units=keep_units,
+    )
+    max_gain = estimate_tokens(raw_text) - estimate_tokens(floor_render)
+    if not force and max_gain < _min_gain_tokens():
+        logger.info(
+            "compaction: max gain %s tokens < %s; skipped without calling LLM",
+            max_gain, _min_gain_tokens(),
+        )
+        return raw_text, updates, compressed_batch
+    if not force and session_id is not None and _recently_refused(session_id, fold_end):
+        logger.info("compaction: recently refused at fold_end=%s; skipped", fold_end)
+        return raw_text, updates, compressed_batch
 
     if digest_msg_count < fold_end:
         batch = list(messages[digest_msg_count:fold_end])
@@ -281,9 +348,6 @@ def build_context(
         if digest_version % L2_ARCHIVE_INTERVAL == 0:
             mid_digest = archive_to_l2_5(digest)
             updates["mid_digest"] = mid_digest
-        if degraded and not digest:
-            # 极端情况（折法也空）：宁可不给摘要，也不要一个空块。
-            digest = None
 
     rendered = _render_context(
         mid_digest=mid_digest,
@@ -291,19 +355,37 @@ def build_context(
         facts=facts,
         keep_units=keep_units,
     )
-    raw_text = format_messages(messages)
     if estimate_tokens(rendered) >= estimate_tokens(raw_text):
-        # 净收益为负：压缩后反而更大（短消息对话 + 数据块自身有成本，实测真流程会撞上）。
-        # DSH 的语义是「压缩必须降低压力」，所以这种情况**本轮不压缩**，原样返回。
-        logger.warning(
-            "compaction: rendered %s tokens >= raw %s tokens; skipped (keep raw context)",
-            estimate_tokens(rendered), estimate_tokens(raw_text),
+        # 净收益为负：压缩后反而更大（短消息对话 + 数据块自身有成本，真流程会撞上）。
+        # 先试确定性骨架（LLM 摘要可能比骨架长），确实救不回来才放弃——放弃时记住这个边界，
+        # 免得下一轮再白调一次 LLM（同一条会话同一 fold_end 只试一次）。
+        fallback = fold_deterministic(fold_units)
+        alternative = _render_context(
+            mid_digest=mid_digest, digest=fallback, facts=facts, keep_units=keep_units,
         )
-        return raw_text, {}, []
+        if estimate_tokens(alternative) < estimate_tokens(raw_text):
+            digest = fallback
+            if compressed_batch:
+                updates["digest"] = digest
+            rendered = alternative
+            logger.warning("compaction: LLM summary not worth it; kept deterministic skeleton")
+        else:
+            logger.warning(
+                "compaction: rendered %s tokens >= raw %s tokens; skipped (keep raw context)",
+                estimate_tokens(rendered), estimate_tokens(raw_text),
+            )
+            if not force and session_id is not None:
+                _mark_refused(session_id, fold_end)
+            return raw_text, {}, []
     return rendered, updates, compressed_batch
 
 
-async def prepare_conversation_context(session_id: str, user_id: int | str) -> str:
+async def prepare_conversation_context(
+    session_id: str,
+    user_id: int | str,
+    *,
+    force: bool = False,
+) -> str:
     """会话级 conversation context async glue（自 P3 `context` 包迁入 memory 域）。
 
     取消息 + 当前 digest 状态 → `build_context` → 回写 digest（L2/L2.5）→ 把抽取的
@@ -323,6 +405,8 @@ async def prepare_conversation_context(session_id: str, user_id: int | str) -> s
         digest_msg_count=state["digest_msg_count"],
         digest_version=state["digest_version"],
         mid_digest=state["mid_digest"],
+        session_id=session_id,
+        force=force,
     )
     if updates:
         await session_manager.save_context_state(session_id, updates)
@@ -332,6 +416,89 @@ async def prepare_conversation_context(session_id: str, user_id: int | str) -> s
             user_id, updates, compressed_batch, session_id=session_id,
         )
     return context
+
+
+async def compact_session_now(session_id: str, user_id: int | str) -> dict:
+    """**手动压缩**：立刻压缩一次，不等阈值（对标 DSH `compactNow` / `/compact`）。
+
+    与自动路径共用同一套守卫（数据事实、数值一致性、shrink guard、净收益），
+    只是跳过「触发闸 / 收益上界闸 / 拒绝记忆」三道「该不该做」的闸——人已经要求了。
+
+    返回给 API 的观测值：`compacted` / `reason` / `digest_msg_count` / `digest_version`
+    / `context_chars` / `raw_chars`。**不阻塞主链**：读失败就返回 `compacted=False`。
+    """
+    from app.infra.checkpoint.session import session_manager
+    from app.infra.conversation.repository import get_messages
+
+    messages = await get_messages(session_id, int(user_id))
+    state = await session_manager.get_context_state(session_id)
+    clear_compaction_refusals(session_id)      # 手动压缩=明确要重试，先清拒绝缓存
+    # 先判「有没有东西可压」：没有就别白调一次 LLM，也别骗用户说「压了但不划算」。
+    nothing_to_compact = False
+    already_compacted = False
+    if not messages:
+        nothing_to_compact = True
+    else:
+        try:
+            spec = _compaction_spec()
+            fold_units, keep_units = select_fold_span(
+                classify_units(messages),
+                retain_tokens=spec.retain_tokens,
+                ceiling_messages=RECENT_WINDOW,
+            )
+            nothing_to_compact = not fold_units
+            # 已经压到同一个边界、又没有新消息 → 重复点按钮不该再烧一次 LLM
+            already_compacted = (
+                bool(fold_units)
+                and bool(state["digest"])
+                and state["digest_msg_count"] >= keep_units[0].start
+            )
+        except CompactionConfigError:
+            nothing_to_compact = False
+    if nothing_to_compact or already_compacted:
+        return {
+            "compacted": False,
+            "reason": (
+                "EMPTY_SESSION" if not messages
+                else "ALREADY_COMPACTED" if already_compacted
+                else "NOTHING_TO_COMPACT"
+            ),
+            "digest_msg_count": state["digest_msg_count"],
+            "digest_version": state["digest_version"],
+            "context_chars": len(format_messages(messages)),
+            "raw_chars": len(format_messages(messages)),
+        }
+    context, updates, compressed_batch = build_context(
+        messages=messages,
+        digest=state["digest"],
+        digest_msg_count=state["digest_msg_count"],
+        digest_version=state["digest_version"],
+        mid_digest=state["mid_digest"],
+        session_id=session_id,
+        force=True,
+    )
+    if updates:
+        await session_manager.save_context_state(session_id, updates)
+        await remember_conversation_facts(
+            user_id, updates, compressed_batch, session_id=session_id,
+        )
+    compacted = bool(updates.get("digest"))
+    if compacted:
+        reason = None
+    elif not messages:
+        reason = "EMPTY_SESSION"
+    elif not updates:
+        reason = "NOT_WORTH_IT"      # 摘要救不回数据块成本（会打印 logger.warning）
+    else:
+        reason = "NOTHING_TO_COMPACT"
+    return {
+        "compacted": compacted,
+        "reason": reason,
+        "digest_msg_count": updates.get("digest_msg_count", state["digest_msg_count"]),
+        "digest_version": updates.get("digest_version", state["digest_version"]),
+        "context_chars": len(context),
+        "raw_chars": len(format_messages(messages)),
+    }
 
 
 # 2026-11-08（用户拍板）：对话上下文**始终给**，用预算 + compact 控制长度，

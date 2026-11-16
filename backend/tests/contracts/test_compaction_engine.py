@@ -388,3 +388,66 @@ class TestAssemblerKeepsTail:
         assembled = bundle["assembled_context"]
         assert len(assembled) <= 180
         assert "最新" in assembled
+
+
+class TestNoWastedCalls:
+    """两道「别白花钱」的闸（真流程撞出来的空转）：收益上界闸 + 拒绝记忆。"""
+
+    @staticmethod
+    def _short_messages(turns: int = 11) -> list[dict]:
+        rows: list[dict] = []
+        for index in range(turns):
+            rows.append({"id": index * 2 + 1, "role": "user",
+                         "message_type": "text", "content": f"m{index}"})
+            rows.append({"id": index * 2 + 2, "role": "assistant",
+                         "message_type": "assistant_text", "content": f"a{index}"})
+        return rows
+
+    def test_收益上界太小时不调LLM(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("COMPACTION_MIN_GAIN_TOKENS", "100000")
+        calls = {"n": 0}
+
+        def spy(old, batch):
+            calls["n"] += 1
+            return {"summary": "## 用户目标\n- x", "extracted_schemas": [], "extracted_preferences": []}
+
+        monkeypatch.setattr(conv, "compress_and_extract", spy)
+        monkeypatch.setattr(conv, "clear_compaction_refusals", conv.clear_compaction_refusals)
+
+        ctx, updates, batch = conv.build_context(
+            messages=self._short_messages(), session_id="s-gain",
+        )
+        assert calls["n"] == 0, "收益上限都过不了还去调 LLM = 白烧一次调用"
+        assert updates == {}
+        assert "m0" in ctx
+
+    def test_判过不值得就不再每轮重试(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("COMPACTION_MIN_GAIN_TOKENS", "0")
+        calls = {"n": 0}
+
+        def huge(old, batch):
+            calls["n"] += 1
+            return {"summary": "长" * 3000, "extracted_schemas": [], "extracted_preferences": []}
+
+        monkeypatch.setattr(conv, "compress_and_extract", huge)
+
+        conv.clear_compaction_refusals()
+        conv.build_context(messages=self._short_messages(), session_id="s-refuse")
+        assert calls["n"] == 1
+        conv.build_context(messages=self._short_messages(), session_id="s-refuse")
+        assert calls["n"] == 1, "同一 fold_end 判过不值得，不该再调一次"
+        conv.clear_compaction_refusals()
+        conv.build_context(messages=self._short_messages(), session_id="s-refuse")
+        assert calls["n"] == 2, "清缓存（手动压缩/删会话）后应能重试"
+
+    def test_force_跳过两道闸(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("COMPACTION_MIN_GAIN_TOKENS", "100000")
+        calls = {"n": 0}
+
+        def spy(old, batch):
+            calls["n"] += 1
+            return {"summary": "## 用户目标\n- x", "extracted_schemas": [], "extracted_preferences": []}
+
+        monkeypatch.setattr(conv, "compress_and_extract", spy)
+        conv.build_context(messages=self._short_messages(), session_id="s-force", force=True)
+        assert calls["n"] == 1, "手动压缩是「人已经要求了」，不该被收益闸拦住"
