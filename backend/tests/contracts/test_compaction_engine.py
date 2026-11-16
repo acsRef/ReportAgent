@@ -199,19 +199,32 @@ class TestDataFacts:
         assert all(f in text for f in facts)      # 一条都没被截断
 
 
-class TestNumericGuard:
-    @pytest.mark.parametrize(("text", "blocked"), [
-        ("## 用户目标\n- 想看月度趋势", False),
-        ("## 已确认口径\n- 销售额（2024年）", True),
-        ("## 用户纠正\n- 不是环比，是同比 12.5%", True),
-        ("- 全角数字１２３", True),
+class TestNumericConsistency:
+    """数值一致性闸：引用合法、改写/编造越界（2026-11-16 替换「一刀切禁数字」）。"""
+
+    FACTS = "2024年11月、9631.81 万元、12.5%"
+
+    def test_逐字引用不越界(self) -> None:
+        summary = "## 已确认口径\n- 净销售额，最高是 11 月（9631.81 万元），同比 12.5%"
+        assert C.numbers_not_in_facts(summary, self.FACTS) == []
+
+    @pytest.mark.parametrize("summary", [
+        "- 净销售额约 9631 万元（把 9631.81 四舍五入了）",
+        "- 全年 9999 万元（编造）",
+        "- 同比 13%（把 12.5 改了）",
     ])
-    def test_checkpoint_里出现数字即越界(self, text: str, blocked: bool) -> None:
-        assert C.has_numeric_literals(text) is blocked
+    def test_改写或编造即越界(self, summary: str) -> None:
+        assert C.numbers_not_in_facts(summary, self.FACTS) != []
+
+    def test_全角数字归一后比对(self) -> None:
+        assert C.numeric_tokens("１２３ 与 123") == {"123"}
+
+    def test_纯叙述不越界(self) -> None:
+        assert C.numbers_not_in_facts("## 用户目标\n- 想看月度趋势", "") == []
 
 
 class TestFoldDeterministic:
-    def test_数字逐字保留且比原文短(self) -> None:
+    def test_只留骨架且比原文短(self) -> None:
         unit = C.ConversationUnit(
             start=0, message_ids=(), messages=(
                 {"role": "user", "message_type": "text",
@@ -220,7 +233,12 @@ class TestFoldDeterministic:
             text="",
         )
         folded = C.fold_deterministic([unit])
-        assert "2024年11月" in folded and "2630 万元" in folded and "12.5%" in folded
+        # 2026-11-16 更正：数据只走 <数据事实> 一处，叙述通道不再追加「（数据：…）」
+        # （重复会把折叠体积撑得比原文还大，真流程测试实测 258 > 204 tokens）
+        assert "（数据：" not in folded
+        assert folded.startswith("user: 帮我分析一下")
+        # 骨架不许切出半截日期（`2024年1` 比丢掉它更危险）
+        assert "2024年1 " not in folded and not folded.rstrip("…").endswith("2024年11")
         assert len(folded) < len("user: " + unit.messages[0]["content"])
 
 
@@ -230,17 +248,22 @@ class TestFoldDeterministic:
 _SPEC_KWARGS = {"context_window": 200, "reserved_completion_tokens": 0, "headroom_tokens": 50}
 
 
+_FILLER_USER = "，口径按订单金额算，筛选条件沿用上一轮，门店明细一起带上，按金额从高到低排，不要合并成一行"
+_FILLER_ASSISTANT = "已按你的要求处理：口径沿用订单金额，未做合并，门店明细按金额倒序排列，时间范围与筛选条件都与上一轮一致"
+
+
 def _numbered_messages(turns: int = 9) -> list[dict]:
+    """真长消息（每条约 100+ 字）：短消息压骨架等于没压，会被净收益守门拒绝。"""
     rows: list[dict] = []
     for index in range(turns):
         month = index % 12 + 1
         rows.append({
             "id": index * 2 + 1, "role": "user", "message_type": "text",
-            "content": f"看 2024年{month}月 华东的净销售额，大概 {month}000 万元",
+            "content": f"看 2024年{month}月 华东的净销售额，大概 {month}000 万元{_FILLER_USER}",
         })
         rows.append({
             "id": index * 2 + 2, "role": "assistant", "message_type": "assistant_text",
-            "content": f"好，2024年{month}月华东净销售额。",
+            "content": f"好，2024年{month}月华东净销售额。{_FILLER_ASSISTANT}",
         })
     return rows
 
@@ -275,14 +298,17 @@ class TestBuildContextCompaction:
         assert updates["digest_msg_count"] > 0
         assert batch
 
-    def test_checkpoint_写了数字就退回确定性折法(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_summary(monkeypatch, "## 用户目标\n- 看 2024年1月 的 1000 万元")
+    def test_checkpoint_编造数字就退回确定性折法(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 9999 万元 在折叠区间的数据事实里不存在 → 越界
+        _patch_summary(monkeypatch, "## 用户目标\n- 看 9999 万元的月度分布")
 
         ctx, updates, _ = conv.build_context(messages=_numbered_messages(), **_SPEC_KWARGS)
 
-        # 越界的 checkpoint 不许落库：digest 变成确定性折法（骨架 + 数据）
-        assert "2024年1月 的 1000 万元" not in updates["digest"]
-        assert "…（数据：" in updates["digest"]
+        # 越界的 checkpoint 不许落库：digest 变成确定性折法（只留骨架）
+        assert "9999 万元" not in updates["digest"]
+        assert updates["digest"].startswith("user: ")
+        facts_block = ctx.split("<数据事实>")[1]
+        assert "1000 万元" in facts_block        # 真实数字仍在数据通道里
         assert "<对话摘要>" in ctx
 
     def test_LLM_失败降级不空(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -296,7 +322,7 @@ class TestBuildContextCompaction:
         assert ctx.strip() != ""
         assert "<最新对话>" in ctx
         assert updates["digest"]                     # 兜底折法仍落库
-        assert "2024年" in updates["digest"]
+        assert "2024年" in ctx                       # 数字在数据事实块里
 
     def test_shrink_guard_拒绝更长的摘要(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_summary(monkeypatch, "长" * 2000)
@@ -304,7 +330,9 @@ class TestBuildContextCompaction:
         _, updates, _ = conv.build_context(messages=_numbered_messages(), **_SPEC_KWARGS)
 
         assert len(updates["digest"]) < 2000
-        assert "…（数据：" in updates["digest"]
+        # 退化成确定性折法（骨架），不是模型那段 2000 字的长文
+        assert updates["digest"].startswith("user: ")
+        assert "长" * 50 not in updates["digest"]
 
     def test_最新几轮永远原样(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_summary(monkeypatch, "## 用户目标\n- 按月看")
@@ -329,7 +357,7 @@ class TestCheckpointPrompt:
         prompt = " ".join(CONVERSATION_CHECKPOINT_V2.values())
         for section in ("用户目标", "已确认口径", "用户纠正", "已否决的写法", "未完成事项"):
             assert f"## {section}" in prompt
-        assert "Do NOT write numbers" in prompt
+        assert "Numbers must come from the conversation verbatim" in prompt
 
 
 # --- assembler 预算：保尾 ---------------------------------------------------

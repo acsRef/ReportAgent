@@ -33,9 +33,11 @@ class TestProtectedFragments:
     def test_去重保序(self) -> None:
         assert _protected_fragments("2024年11月 和 2024年11月") == ["2024年11月"]
 
-    def test_只有年份不算完整日期(self) -> None:
-        # 「2024年」这种裸年份由结构化字段（time_range）承载，不进文本保护片段
-        assert _protected_fragments("2024年") == []
+    def test_裸年份也保护(self) -> None:
+        # 2026-11-16 修订（真流程测试抓到的缺口）：`2024 年` 是**时间范围数据**，
+        # 旧规则把它交给结构化 time_range，但在折叠后的叙述里它必须能逐字出现。
+        assert _protected_fragments("2024年") == ["2024年"]
+        assert _protected_fragments("先看 2024 年华东的净销售额") == ["2024 年"]
 
 
 class TestCompactUtterance:

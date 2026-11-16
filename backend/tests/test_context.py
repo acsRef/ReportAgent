@@ -108,14 +108,16 @@ def test_build_context_no_recompress_when_no_new_batch(monkeypatch):
 def test_build_context_archives_l2_5_at_interval(monkeypatch):
     monkeypatch.setattr(
         _engine, "compress_and_extract",
-        lambda old, batch: {"summary": "S" * 100, "extracted_schemas": [], "extracted_preferences": []},
+        lambda old, batch: {"summary": "S", "extracted_schemas": [], "extracted_preferences": []},
     )
     # digest_version=4 → 压缩后 =5，命中 L2_ARCHIVE_INTERVAL → 归档 L2.5
+    # 注：2026-11-16 起有「净收益守门」——摘要如果比被折叠内容还大，本轮直接放弃压缩。
+    # 这里用极短 summary（"S"）确保压缩确实变小，用例只验证归档间隔这一个语义。
     ctx, updates, _ = context.build_context(
         messages=_msgs(22), digest="old", digest_msg_count=0, digest_version=4,
     )
     assert updates["digest_version"] == 5
-    assert updates["mid_digest"] == "S" * 100
+    assert updates["mid_digest"] == "S"
     assert "<长期脉络>" in ctx
 
 

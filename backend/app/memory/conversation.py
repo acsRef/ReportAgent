@@ -26,7 +26,7 @@ from app.memory.compaction import (
     ensure_shrunk,
     estimate_tokens,
     fold_deterministic,
-    has_numeric_literals,
+    numbers_not_in_facts,
     protected_fragments,
     render_units,
     resolve_spec,
@@ -232,12 +232,15 @@ def build_context(
         try:
             result = compress_and_extract(digest, batch)
             candidate = result["summary"]
-            if has_numeric_literals(candidate):
-                # 数值出口闸：checkpoint 只许写叙述，数字一律走 <数据事实> 通道。
+            invented = numbers_not_in_facts(candidate, facts_text)
+            if invented:
+                # 数值一致性闸：checkpoint 里的每个数字都必须在数据事实里**逐字**存在。
+                # 引用 `11 月`、`9631.81 万元` 合法；自己算的/四舍五入的（`9631 万元`）判越界。
                 candidate = fold_deterministic(fold_units)
                 degraded = True
                 logger.warning(
-                    "compaction: checkpoint contained numeric literals; used deterministic fold",
+                    "compaction: checkpoint has numbers not in data facts %s; used deterministic fold",
+                    invented[:5],
                 )
             elif not ensure_shrunk(
                 candidate_tokens=estimate_tokens(candidate) + estimate_tokens(facts_text),
@@ -282,16 +285,22 @@ def build_context(
             # 极端情况（折法也空）：宁可不给摘要，也不要一个空块。
             digest = None
 
-    return (
-        _render_context(
-            mid_digest=mid_digest,
-            digest=digest,
-            facts=facts,
-            keep_units=keep_units,
-        ),
-        updates,
-        compressed_batch,
+    rendered = _render_context(
+        mid_digest=mid_digest,
+        digest=digest,
+        facts=facts,
+        keep_units=keep_units,
     )
+    raw_text = format_messages(messages)
+    if estimate_tokens(rendered) >= estimate_tokens(raw_text):
+        # 净收益为负：压缩后反而更大（短消息对话 + 数据块自身有成本，实测真流程会撞上）。
+        # DSH 的语义是「压缩必须降低压力」，所以这种情况**本轮不压缩**，原样返回。
+        logger.warning(
+            "compaction: rendered %s tokens >= raw %s tokens; skipped (keep raw context)",
+            estimate_tokens(rendered), estimate_tokens(raw_text),
+        )
+        return raw_text, {}, []
+    return rendered, updates, compressed_batch
 
 
 async def prepare_conversation_context(session_id: str, user_id: int | str) -> str:

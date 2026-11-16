@@ -49,24 +49,38 @@ def estimate_tokens(text: str) -> int:
 
 # --- 数据通道：受保护片段 ---------------------------------------------------
 # 绝不能压缩的片段——用户明确要求「数字那些数据要保留原样」。
-# 只认三类完整语义单元（顺序即优先级）：
+# 顺序即优先级（越具体的语义单元越先抽）：
 #   1) 年月/日期，含「月/日」后缀——否则 `2024年11月` 会被截成 `2024年11`；
-#   2) 金额/百分比（带单位）；
-#   3) 长编号（订单号）。
-# 刻意**不**单独匹配裸数字：它会和上面几条互相切碎（`2024年11月` 里抠出个 `11`），
-# 而裸数字对「指代消解」没有价值。
+#   2) 裸月/日（`11月` / `3日`）——2026-11-16 真流程测试抓到的缺口：用户在长对话里说
+#      「最高是 11 月」，裸月没有年份前缀，旧词表不认 → 折叠后这个月份彻底消失
+#      （checkpoint 又禁止写数字）。带「月/日」后缀的才是完整语义单元，不是裸数字；
+#   3) 金额/百分比（带单位）；
+#   4) 长编号（订单号）。
+# 仍然**不**单独匹配裸数字：它会把 `2024年11月` 切出个 `11`，且对指代消解没价值。
 _PROTECTED_PATTERNS = (
     re.compile(r"\d{4}\s*[-/年]\s*\d{1,2}\s*月?(?:\s*\d{1,2}\s*[日号])?"),
+    # 裸年份：真流程测试抓到的第二个缺口——「先看 2024 年华东」里的 `2024 年` 是**时间范围数据**，
+    # 旧词表只认带月的完整日期，于是年份在折叠后消失（checkpoint 又不许凭空造数）。
+    re.compile(r"\d{4}\s*[-/年]"),
+    re.compile(r"\d{1,2}\s*[月日号]"),
     re.compile(r"\d+(?:\.\d+)?\s*(?:%|％|万元|亿元|万|亿|元)"),
     re.compile(r"(?<!\d)\d{5,}(?!\d)"),
 )
 
 
-def protected_fragments(text: str) -> list[str]:
-    """抽出一条文本里**必须原样保留**的片段（去重保序）。
+def _drop_subsumed(fragments: list[str]) -> list[str]:
+    """去掉被更长片段包含的短片段（`2024年11月` 已含 `11月`，不重复记两条）。"""
+    return [
+        piece for piece in fragments
+        if not any(other != piece and piece in other for other in fragments)
+    ]
 
-    只认「数值类」：日期 / 金额 / 百分比 / 编号。业务实体名（区域、品类）由结构化字段
-    承载（上一轮卡），不在这里重复抽——文本里出现几次都一样，压掉不影响正确性。
+
+def protected_fragments(text: str) -> list[str]:
+    """抽出一条文本里**必须原样保留**的片段（去重保序、去掉被更长片段包含的）。
+
+    只认「数值类」：日期 / 月份 / 金额 / 百分比 / 编号。业务实体名（区域、品类）由结构化
+    字段承载（上一轮卡），不在这里重复抽——文本里出现几次都一样，压掉不影响正确性。
     """
     seen: list[str] = []
     for pattern in _PROTECTED_PATTERNS:
@@ -74,7 +88,7 @@ def protected_fragments(text: str) -> list[str]:
             piece = match.group(0).strip()
             if piece and piece not in seen:
                 seen.append(piece)
-    return seen
+    return _drop_subsumed(seen)
 
 
 def compact_utterance(text: str, *, keep_head: int) -> str:
@@ -285,11 +299,13 @@ def select_fold_span(
 def collect_data_facts(
     units: Sequence[ConversationUnit],
     *,
-    max_facts: int = 40,
+    max_facts: int = 200,
 ) -> list[str]:
     """抽取折叠区间里的**数据事实**（逐字、去重保序、不经模型）。
 
     上限按**条数**而不是字符数：宁可少收几条事实，也不把一个金额截成两半。
+    默认值取得很宽（200）——真正的兜底是 `build_context` 的**净收益守门**：
+    数据块太大导致压缩不划算时，本轮整段不压缩，而不是悄悄丢数据。
     """
     facts: list[str] = []
     for unit in units:
@@ -306,15 +322,37 @@ def render_units(units: Sequence[ConversationUnit]) -> str:
     return "\n".join(unit.text for unit in units)
 
 
+def _safe_truncate(text: str, limit: int) -> str:
+    """截到 `limit` 字符，但**不切断受保护片段**（宁可少留几个字）。
+
+    否则骨架会产出 `2024年1`（截断的日期）这类半截数据——比丢掉它更危险，因为看起来像另一个日期。
+    """
+    if len(text) <= limit:
+        return text
+    cut = limit
+    for pattern in _PROTECTED_PATTERNS:
+        for match in pattern.finditer(text):
+            if match.start() < cut < match.end():
+                cut = match.start()
+                break
+    return text[:cut].rstrip()
+
+
 def fold_deterministic(
     units: Sequence[ConversationUnit],
     *,
     keep_head_user: int = 24,
     keep_head_assistant: int = 12,
 ) -> str:
-    """无 LLM 的确定性折法：逐行截骨架，数据片段原样附在行尾。
+    """无 LLM 的确定性折法：逐行只留骨架，**不再重复数据**。
 
     这是 LLM 摘要失败时的兜底——**不允许**因为一次超时就把对话上下文整块丢空。
+
+    2026-11-16 更正两点（都是真流程测试抓出来的）：
+
+    1. 原实现在每行尾部追加「（数据：…）」，与 `<数据事实>` 块**重复**，而重复本身会把折叠后
+       体积撑得比原文还大（实测 258 > 204 tokens）。数据通道只保留一处：`<数据事实>`。
+    2. 骨架按字符硬截会切出 `2024年1` 这种半截日期 → 改走 `_safe_truncate`。
     """
     lines: list[str] = []
     for unit in units:
@@ -325,7 +363,7 @@ def fold_deterministic(
             is_user = row.get("role") == "user" or str(row.get("message_type") or "") == "text"
             head = keep_head_user if is_user else keep_head_assistant
             who = "user" if is_user else "assistant"
-            lines.append(f"{who}: {compact_utterance(content, keep_head=head)}")
+            lines.append(f"{who}: {_safe_truncate(content, head)}…")
     return "\n".join(lines)
 
 
@@ -334,16 +372,46 @@ def ensure_shrunk(*, candidate_tokens: int, shadowed_tokens: int) -> bool:
     return candidate_tokens < shadowed_tokens
 
 
-# 半角 + 全角阿拉伯数字：checkpoint 里出现任何一个都算越界。
+# 半角 + 全角阿拉伯数字：checkpoint 里出现任何一个都算「碰了数字」。
 _NUMERIC_LITERAL = re.compile(r"[0-9０-９]")
 
 
 def has_numeric_literals(text: str) -> bool:
-    """checkpoint 是否越界写了数值。
-
-    摘要模型**必须读得到**被折叠的原文（否则总结不了），所以「不让模型看到数字」做不到；
-    能做的是**出口闸**：只要它把数字写进 checkpoint，本轮就判定越界、退回确定性折法
-    （确定性折法的数字是逐字复制的，不存在改写）。这样 checkpoint 永远只承载叙述，
-    数值只走 `<数据事实>` 通道。
-    """
+    """文本里是否出现阿拉伯数字（仅用于诊断/日志，不作为放行判据）。"""
     return bool(_NUMERIC_LITERAL.search(text or ""))
+
+
+# 数值 token：整数或小数（`11` / `9631.81` / `20.0`），全角先归一成半角再抽。
+_NUMBER_TOKEN = re.compile(r"\d+(?:\.\d+)?")
+
+
+def numeric_tokens(text: str) -> set[str]:
+    """抽出文本里的数值 token 集合（用于和「数据事实」逐字对账）。"""
+    normalized = (text or "").translate(_FULLWIDTH_DIGITS)
+    return set(_NUMBER_TOKEN.findall(normalized))
+
+
+def _same_number(left: str, right: str) -> bool:
+    """`20` 与 `20.0` 视为同一个数（同一个值，写法不同不算改写）。"""
+    try:
+        return float(left) == float(right)
+    except (TypeError, ValueError):
+        return left == right
+
+
+def numbers_not_in_facts(summary: str, facts_text: str) -> list[str]:
+    """checkpoint 里**不在数据事实中**的数字（= 编造或改写过的数值）。
+
+    这是 2026-11-16 把「一刀切禁止数字」换掉的正确判据：模型引用 `11 月`、`9631.81 万元`
+    都是合法的（数据事实里逐字存在），但一旦自己算了/四舍五入了（`9631 万元`、`1000 万元`），
+    这个 token 就不在事实集合里 → 判定越界，本轮退回确定性折法。
+    """
+    allowed = numeric_tokens(facts_text)
+    missing = [
+        token for token in numeric_tokens(summary)
+        if token not in allowed and not any(_same_number(token, other) for other in allowed)
+    ]
+    return sorted(missing)
+
+
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９．", "0123456789.")

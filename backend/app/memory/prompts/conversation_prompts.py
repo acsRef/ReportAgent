@@ -69,7 +69,7 @@ CONVERSATION_SUMMARIZE_META: dict[str, Any] = {
 # 与 V1 的差别只有一处，但很关键：**禁止模型碰数据**。
 # V1 要求「只保留话题脉络/用户反馈/决策背景，不含具体字段名和数值」——把数值和口径一起
 # 赶走，于是执行/报告侧的历史既没有数字也没有字段；V2 把两件事分开：口径（字段名/维度名）
-# 允许写，**数值一律禁止**（数值由 `app/memory/compaction.collect_data_facts` 逐字抽取，
+# 允许写；**数值只能逐字引用**（数值真源是 `app/memory/compaction.collect_data_facts` 逐字抽取的事实，
 # 另行注入 `<数据事实>` 块）。模型看不到数字，就没有篡改数字的机会。
 # 段位对标 DSH compaction-basic 的 8 段 checkpoint，按数据分析场景裁剪为 5 段。
 CONVERSATION_CHECKPOINT_V2: dict[str, str] = {
@@ -93,7 +93,7 @@ CONVERSATION_CHECKPOINT_V2: dict[str, str] = {
         "只输出 JSON，禁止解释、禁止 markdown 围栏："
         "\n{{"
         '\n  "summary": "结构化 checkpoint，不超过 {max_chars} 字；严格按下面 5 段、按序，'
-        '每段 terse bullet，空段写（无），缺段视为不合格；不要写任何数值",'
+        '每段 terse bullet，空段写（无），缺段视为不合格；数值只能逐字引用，禁止自己算",'
         '\n  "extracted_schemas": ['
         '\n    {{"type": "field_mapping", "user_term": "销售额", '
         '"db_field": "order_amount", "table": "fact_orders"}}'
@@ -102,7 +102,7 @@ CONVERSATION_CHECKPOINT_V2: dict[str, str] = {
         "\n}}"
         "\n\nsummary 的段位（缺一不可）："
         "\n## 用户目标"
-        "\n## 已确认口径（只写指标名/维度名/时间形态，不写数值）"
+        "\n## 已确认口径（只写指标名/维度名/时间形态；数值可逐字引用，不得自算）"
         "\n## 用户纠正（照抄用户的否定与改口，如「不是环比，是同比」）"
         "\n## 已否决的写法"
         "\n## 未完成事项（用户提过但还没做的）"
@@ -112,10 +112,11 @@ CONVERSATION_CHECKPOINT_V2: dict[str, str] = {
         "\n3. extracted_preferences 只提取明确、稳定的用户偏好指令。"
     ),
     "safety_policy": (
-        "Do NOT write numbers（禁止出现任何阿拉伯数字/金额/百分比/日期，包括年份）——"
-        "数值由系统另行原样注入，你写一个就是篡改，宁可写成「（数值见数据事实）」。"
+        "Numbers must come from the conversation verbatim（数值只能逐字引用对话里已有的写法，"
+        "例如 `11 月`、`9631.81 万元`）；禁止自己计算、四舍五入、改写单位或编造数值——"
+        "系统会拿你写的每个数字和数据事实逐字比对，对不上就判越界并退回确定性折法。"
         "Do NOT invent tables/columns（不要为不在对话中的字段编 db_field）。"
-        "Do NOT fabricate query results（不写趋势判断、不写结论性数字）。"
+        "Do NOT fabricate query results（不写结论性数字；趋势判断可以写，数据以系统注入的事实为准）。"
         "Do NOT extract preferences that the user did not state explicitly."
         "Do NOT mention this checkpoint request or that the context was compressed."
         "Do NOT bypass max_chars limit——超长要主动裁剪。"
@@ -125,7 +126,7 @@ CONVERSATION_CHECKPOINT_V2: dict[str, str] = {
 CONVERSATION_CHECKPOINT_META: dict[str, Any] = {
     "name": "conversation_checkpoint",
     "version": 2,
-    "purpose": "把旧 checkpoint + 最新对话合并成结构化 5 段 checkpoint（禁止写数值）",
+    "purpose": "把旧 checkpoint + 最新对话合并成结构化 5 段 checkpoint（数值只能逐字引用）",
     "input": ["old_checkpoint", "batch_messages", "max_chars"],
     "output": "{summary, extracted_schemas, extracted_preferences}",
 }
