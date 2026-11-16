@@ -23,6 +23,7 @@ import {
   settlePhaseFor,
 } from '../components/workbench/phaseText'
 import {
+  compactSession,
   deleteSession,
   fetchSessions,
   fetchSession,
@@ -30,6 +31,7 @@ import {
   SESSIONS_PAGE_SIZE,
 } from '../api/sessionsClient'
 import type { SessionSummary as ApiSessionSummary } from '../api/sessionsClient'
+import { compactResultToast } from './workbenchCompact'
 import { openChat } from '../api/analysisClient'
 import { postConfirmStream } from '../api/confirmStream'
 import { armStream, abortStream } from '../api/streamAbort'
@@ -137,6 +139,8 @@ export default function WorkbenchPage() {
   const [answering, setAnswering] = useState(false)
   const refreshedTurnRef = useRef<string>('')
   const busy = isBusyPhase(phase)
+  // 手动压缩（plan 2026-11-16-compaction-overflow-and-manual-ui）：秒级同步端点，loading 就够
+  const [compacting, setCompacting] = useState(false)
 
   // 需求已确认并开始执行（或已出报告）→ 需求区不再出编辑动作。
   // 2026-11-05 修订 A：执行中（generating/adjusting）不再渲染只读整卡——
@@ -410,6 +414,33 @@ export default function WorkbenchPage() {
     dispatch({ type: 'sessions/removed', sessionId })
     if (wasActive) handleNewAnalysis()
     toast.success('已删除该会话')
+  }
+
+
+  /**
+   * 「整理上下文」= 手动压缩（后端 POST /sessions/{id}/compact）。
+   *
+   * 后端可能什么都不压（收益不划算 / 已压过 / 对话太短），`reason` 会说实话——
+   * 这比假装成功重要：用户得知道「整理过了」和「整理不了」的区别。
+   */
+  async function handleCompactSession() {
+    if (!activeSessionId || compacting) return
+    setCompacting(true)
+    try {
+      const result = await compactSession(activeSessionId)
+      const message = compactResultToast(result)
+      if (message.level === 'success') toast.success(message.text)
+      else toast.info(message.text)
+    } catch (err) {
+      const text = String(err)
+      if (text.includes('409')) {
+        toast.error('这个会话还在生成报告，等它跑完再整理')
+      } else {
+        toast.error(`整理上下文失败：${text.slice(0, 100)}`)
+      }
+    } finally {
+      setCompacting(false)
+    }
   }
 
   function handleSend(textOverride?: string) {
@@ -817,6 +848,17 @@ export default function WorkbenchPage() {
               </div>
             </div>
             <div className="wb-head-actions">
+              {activeSessionId && (
+                <button
+                  type="button"
+                  className="wb-quiet-btn"
+                  title="把这个会话的老对话压成一段摘要（数值原样保留在数据事实里）"
+                  disabled={busy || compacting}
+                  onClick={() => { void handleCompactSession() }}
+                >
+                  {compacting ? '整理中…' : '整理上下文'}
+                </button>
+              )}
               <button
                 type="button"
                 className="wb-quiet-btn"

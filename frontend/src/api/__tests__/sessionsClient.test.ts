@@ -4,6 +4,7 @@ import {
   fetchSession,
   fetchReportVersion,
   downloadReportXlsx,
+  compactSession,
   setReportFavorite,
 } from '../sessionsClient'
 
@@ -132,6 +133,27 @@ describe('sessionsClient', () => {
     await expect(downloadReportXlsx('s-1', 3, 'x.xlsx')).rejects.toThrow(/401/)
     expect(blobs).toHaveLength(0)
     window.history.pushState({}, '', '/')
+  })
+
+  it('compactSession POSTs to the compact route and returns the reason', async () => {
+    localStorage.setItem('ragent_auth', JSON.stringify({ state: { token: 'tk-1' } }))
+    const body = {
+      compacted: false, reason: 'NOT_WORTH_IT', digest_msg_count: 0,
+      digest_version: 0, context_chars: 192, raw_chars: 192,
+    }
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      mockJsonResponse(body) as unknown as ReturnType<typeof fetch>,
+    )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const out = await compactSession('s-1')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit?]
+    expect(url).toBe('/api/v1/sessions/s-1/compact')
+    expect(init?.method).toBe('POST')
+    // 后端「不压」也要照实传出去，界面不能当成功
+    expect(out.compacted).toBe(false)
+    expect(out.reason).toBe('NOT_WORTH_IT')
   })
 
   it('setReportFavorite PATCHes the favorite flag', async () => {

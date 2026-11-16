@@ -140,7 +140,7 @@ class TestContextRuntimeFiveStepOrchestration:
         # mock 5 步涉及的全部外部依赖
         captured: dict = {"recall_calls": []}
 
-        async def fake_prepare_ctx(session_id, user_id):
+        async def fake_prepare_ctx(session_id, user_id, **_kwargs):
             captured["conversation"] = (session_id, user_id)
             return "CTX_FROM_ENGINE"
 
@@ -202,7 +202,7 @@ class TestContextRuntimeFiveStepOrchestration:
             def decide(self, *, query, agent_policy, session_state):
                 return RecallDecision(conversation=True, semantic=False, query=False)
 
-        async def fake_prepare_ctx(session_id, user_id):
+        async def fake_prepare_ctx(session_id, user_id, **_kwargs):
             return "CTX"
 
         recall_called = {"hit": False}
@@ -284,7 +284,7 @@ class TestContextRuntimeFiveStepOrchestration:
     @pytest.mark.asyncio
     async def test_build_empty_recall_yields_empty_items(self):
         """recall_structured() 返回空 list（无召回）→ RecallItem 列表为空。"""
-        async def fake_prepare_ctx(session_id, user_id):
+        async def fake_prepare_ctx(session_id, user_id, **_kwargs):
             return "CTX"
 
         async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,

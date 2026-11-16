@@ -114,6 +114,29 @@ export function deleteSession(
   })
 }
 
+export interface CompactionResult {
+  compacted: boolean
+  /** 没压缩时的原因：EMPTY_SESSION / NOTHING_TO_COMPACT / ALREADY_COMPACTED / NOT_WORTH_IT */
+  reason: string | null
+  digest_msg_count: number
+  digest_version: number
+  context_chars: number
+  raw_chars: number
+}
+
+/**
+ * 手动压缩这个会话的对话上下文（对应 DSH 的 `/compact`）。
+ *
+ * 后端会跳过自动触发的两道闸（token 压力 / 条数兜底），但保留数据事实、数值一致性、
+ * shrink 与净收益守卫；因此**可能什么都不压**——`compacted=false` + `reason` 会说实话。
+ * 404 会话不存在 / 409 任务仍在跑（压缩会改 digest，执行中的任务正在读它）。
+ */
+export function compactSession(sessionId: string): Promise<CompactionResult> {
+  return jsonFetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`, {
+    method: 'POST',
+  })
+}
+
 export function fetchReportVersion(
   sessionId: string,
   version: number,

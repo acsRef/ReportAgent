@@ -60,7 +60,7 @@ async def test_requirement_agent_entry_has_conversation_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_confirmed_execution_agent_entry_has_conversation_context(monkeypatch):
     """_confirmed_sql_agent 入口: ContextRuntime.build() 返回 bundle.conversation_context 非空."""
-    async def fake_prepare(sid, uid):
+    async def fake_prepare(sid, uid, **_kwargs):
         return "<L2>confirmed-context</L2>"
 
     monkeypatch.setattr(
@@ -78,7 +78,7 @@ async def test_confirmed_execution_agent_entry_has_conversation_context(monkeypa
 @pytest.mark.asyncio
 async def test_selective_policy_injects_recall_into_assembled(monkeypatch):
     """SelectiveRecallPolicy 启动: decision.semantic=True 时 assembled_context 包含 recall_items raw_text."""
-    async def fake_prepare(sid, uid):
+    async def fake_prepare(sid, uid, **_kwargs):
         return "<L1>conv</L1>"
 
     async def fake_recall(q, uid, *, top_k_preferences=3, session_id=None):

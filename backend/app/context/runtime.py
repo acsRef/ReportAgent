@@ -54,6 +54,8 @@ class ContextRuntime:
         state_dict: dict | None = None,
         remaining_token_budget: int | None = None,  # P4c post-review F2: 透传给 assembler
         force_conversation: bool = False,
+        force_compaction: bool = False,   # 溢出恢复：强制压缩，不等阈值
+        retain_tokens: int | None = None,  # 溢出恢复传 0：只留最近一问一答
     ) -> ContextBundle:
         # Step 1：解析 agent_policy
         agent_policy: AgentContextPolicy = self._resolver.resolve(agent)
@@ -84,6 +86,8 @@ class ContextRuntime:
             else:
                 conversation_context = await prepare_conversation_context(
                     session_id, user_id,
+                    force=force_compaction,
+                    retain_tokens=retain_tokens,
                 )
         # Step 4：memory recall（P4b 结构化 + F3 经 domain views）
         recall_items: list[RecallItem] = []

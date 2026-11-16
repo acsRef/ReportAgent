@@ -211,6 +211,7 @@ def build_context(
     headroom_tokens: int | None = None,
     session_id: str | None = None,
     force: bool = False,
+    retain_tokens: int | None = None,
 ) -> tuple[str, dict, list[dict]]:
     """从对话历史构建注入 LLM 的上下文字符串（DSH compaction 五步）。
 
@@ -266,7 +267,8 @@ def build_context(
 
     fold_units, keep_units = select_fold_span(
         units,
-        retain_tokens=spec.retain_tokens,
+        # 溢出恢复传 0：只保底 floor_messages 条，尽量把空间腾出来（DSH 的 retain=0 同款）
+        retain_tokens=spec.retain_tokens if retain_tokens is None else retain_tokens,
         ceiling_messages=RECENT_WINDOW,
     )
     if not fold_units:
@@ -385,6 +387,7 @@ async def prepare_conversation_context(
     user_id: int | str,
     *,
     force: bool = False,
+    retain_tokens: int | None = None,
 ) -> str:
     """会话级 conversation context async glue（自 P3 `context` 包迁入 memory 域）。
 
@@ -407,6 +410,7 @@ async def prepare_conversation_context(
         mid_digest=state["mid_digest"],
         session_id=session_id,
         force=force,
+        retain_tokens=retain_tokens,
     )
     if updates:
         await session_manager.save_context_state(session_id, updates)

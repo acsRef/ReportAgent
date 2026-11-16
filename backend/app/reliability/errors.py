@@ -23,7 +23,41 @@ from pydantic import BaseModel
 #   - object_ambiguous：AmbiguousColumn 列名歧义（直接 clarify 让用户消歧）
 # 'object' 保留作向后兼容兜底（未识别 ProgrammingError 仍归 'object'）。
 SQL_ERROR_KINDS = ("syntax", "object", "object_not_found", "object_ambiguous",
-                   "timeout", "connection", "permission", "interrupted", "other")
+                   "timeout", "connection", "permission", "interrupted",
+                   "context_overflow", "other")
+
+# 2026-11-16（plan compaction-overflow-and-manual-ui）：provider 报「上下文放不下」。
+# 它不是 SQL 错误，也不是瞬时故障——`_classify_retryable` 不认它（重试必然复现），
+# 所以单独一个 kind：用户侧可恢复（缩小范围/新开一轮），**不进** agent repair 表
+# （同一条 SQL 重写没有意义，需要整轮重来 + 压缩后再试）。
+CONTEXT_OVERFLOW_KIND = "context_overflow"
+
+# OpenAI 兼容 provider 的溢出文案（大小写不敏感匹配；不依赖异常类名，因为
+# SiliconFlow/DeepSeek 兼容层不一定抛 BadRequestError 子类）。
+_CONTEXT_OVERFLOW_MARKERS = (
+    # OpenAI / 兼容层通用说法
+    "context_length_exceeded",
+    "maximum context length",
+    "context window",
+    "too many tokens",
+    "reduce the length",
+    # 真机实测（SiliconFlow + DeepSeek-V3，2026-11-16）：
+    # `Error code: 400 - {'code': 20015, 'message': 'number of input tokens (210003)
+    #  has exceeded max_seq_len (163840) limit.'}`
+    # —— 上面那五个词一个都不命中，所以模型窗口超限会被当成普通 400。
+    "max_seq_len",
+    "exceeded max_seq_len",
+)
+
+
+def is_context_overflow_error(exc: BaseException) -> bool:
+    """判断异常是否为「上下文窗口超限」。
+
+    只认 provider 明确说窗口放不下；认证/参数错不在此列——误判会把正常失败
+    变成一次无用的「压缩 + 重试」。
+    """
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(marker in text for marker in _CONTEXT_OVERFLOW_MARKERS)
 
 # Agent 侧（DiagnosePolicy 消费）：syntax/object/object_not_found/other 可 repair。
 # P15 prelude fix 加 object_not_found（走 retry_mcp_schema_retrieval 路径，独立预算）。
@@ -37,7 +71,7 @@ AGENT_RECOVERABLE_KINDS = ("syntax", "object", "object_not_found", "other")
 # 用户点一次重试就能重跑，所以**用户侧可恢复**；但它**不在** agent 可恢复表里——
 # 同一条 SQL 重跑没有意义，需要的是整轮重来（走 /retry 而不是 repair）。
 USER_RECOVERABLE_KINDS = ("timeout", "connection", "object", "object_not_found",
-                          "object_ambiguous", "interrupted", "other")
+                          "object_ambiguous", "interrupted", "context_overflow", "other")
 
 
 class ErrorCode(str, Enum):
@@ -205,6 +239,9 @@ _USER_MESSAGES: dict[str, str] = {
     # 2026-11-11（P0）：服务重启把跑到一半的任务打断了——不是用户的查询有问题，
     # 所以文案只让他重试，不建议改需求。
     "interrupted": "任务在执行中被中断(服务重启),直接重试即可",
+    # 2026-11-16：上下文放不下——让用户做能真正解决的那件事（缩范围/新开一轮），
+    # 而不是「稍后重试」（重试同一份上下文必然复现）。
+    "context_overflow": "这轮对话的上下文太长,已尝试压缩;请缩小时间范围或新开一轮再问",
     "other":      "查询执行失败,请稍后重试或调整需求",
 }
 
@@ -227,6 +264,8 @@ _USER_CODES: dict[str, str] = {
     "object_ambiguous": "QUERY_OBJECT",
     # 同上：复用 QUERY_FAILED，不扩新码值；SSE payload 的 kind 已经能区分 interrupted
     "interrupted": "QUERY_FAILED",
+    # 复用 QUERY_FAILED（codes 是稳定契约，kind 已能区分 context_overflow）
+    "context_overflow": "QUERY_FAILED",
     "other":      "QUERY_FAILED",
 }
 

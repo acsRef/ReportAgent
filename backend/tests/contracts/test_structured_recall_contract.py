@@ -82,7 +82,7 @@ async def test_context_runtime_step4_uses_structured(monkeypatch):
     from app.context.decision import LegacyFallbackPolicy  # P4c post-review F1
     from app.infra.memory import memory_manager as mm
 
-    async def fake_prepare(session_id, user_id):
+    async def fake_prepare(session_id, user_id, **_kwargs):
         return "CTX"
     async def fake_recall_structured(self, query, user_id, *, top_k_queries=2,
         top_k_preferences=3, session_id=None):

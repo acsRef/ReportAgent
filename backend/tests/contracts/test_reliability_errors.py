@@ -58,9 +58,12 @@ def test_sql_error_kinds_vocabulary():
     # object_not_found 走 DiagnosePolicy retry_mcp_schema_retrieval，
     # object_ambiguous 直接 clarify。
     # 2026-11-11（plan failure-recovery-durability P0）：+ interrupted（服务重启打断任务）
+    # 2026-11-16（plan compaction-overflow-and-manual-ui）：+ context_overflow——
+    # provider 报窗口超限，不是瞬时故障（重试必然复现），单独一个 kind 走「压缩 + 重试一次」。
     assert set(SQL_ERROR_KINDS) == {
         "syntax", "object", "object_not_found", "object_ambiguous",
-        "timeout", "connection", "permission", "interrupted", "other",
+        "timeout", "connection", "permission", "interrupted",
+        "context_overflow", "other",
     }
 
 
@@ -85,9 +88,10 @@ def test_user_recoverable_table_matches_sse_contract():
     # SSE canRetry 语义（前端 analysisReducer 已钉）：用户重试有意义
     # P15 prelude fix：加 object_not_found（MCP 拿到新 schema 后用户可继续）+ object_ambiguous（消歧）。
     # 2026-11-11（P0）：interrupted 用户点重试就能重跑 → 用户侧可恢复
+    # 2026-11-16：+ context_overflow（用户能自救：缩范围 / 新开一轮）
     assert set(USER_RECOVERABLE_KINDS) == {
         "timeout", "connection", "object", "object_not_found", "object_ambiguous",
-        "interrupted", "other",
+        "interrupted", "context_overflow", "other",
     }
     assert user_recoverable("timeout") is True
     assert user_recoverable("connection") is True

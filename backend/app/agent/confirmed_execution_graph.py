@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Optional, TypedDict
+from typing import Any, Awaitable, Callable, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 from langchain_core.runnables import RunnableConfig
@@ -33,7 +33,7 @@ from app.infra.db.postgres import get_pool
 from app.infra.trace.sdk import current_tracer, get_tracer, traced_node
 from app.models.contracts import ErrorDetail, SchemaContext
 from app.models.requirement import RequirementCard
-from app.reliability.errors import ErrorCode
+from app.reliability.errors import ErrorCode, is_context_overflow_error
 from app.report.validator import validate_report_spec
 from app.services import requirement_service, report_version_service
 from app.state.checkpoint_adapter import migrate_checkpoint
@@ -266,6 +266,75 @@ async def _confirmed_data_agent(state: ConfirmedExecutionState, config: Optional
     return {"schema_context": ds.get("schema_context")}
 
 
+async def _forced_compaction_context(
+    *,
+    session_id: str,
+    user_id: Any,
+    user_query: str,
+    state_dict: dict,
+) -> tuple[str, str]:
+    """强制全量折叠后重建上下文（DSH 的 `retain=0` 同款，供溢出恢复用）。
+
+    失败不阻塞：拿不到就退回空上下文——至少第二次尝试不会比第一次更差。
+    """
+    try:
+        from app.context.runtime import ContextRuntime
+
+        try:
+            uid = int(user_id) if user_id not in (None, "") else 0
+        except (TypeError, ValueError):
+            uid = 0
+        bundle = await ContextRuntime().build(
+            session_id=session_id,
+            user_id=uid,
+            query=user_query,
+            agent="confirmed_execution_sql_agent",
+            state_dict=state_dict,
+            force_compaction=True,
+            retain_tokens=0,
+        )
+        return bundle["conversation_context"], bundle["assembled_context"]
+    except Exception as exc:  # noqa: BLE001 - 恢复动作失败不该盖掉原始错误
+        logger.warning("forced compaction failed (%s); retrying with empty context", exc)
+        return "", ""
+
+
+async def _invoke_sql_agent_with_overflow_recovery(
+    *,
+    session_id: str,
+    user_id: Any,
+    user_query: str,
+    state_dict: dict,
+    conversation_context: str,
+    assembled_context: str,
+    build_state: Callable[[str, str], dict],
+    invoke: Callable[[dict], Awaitable[dict]],
+) -> dict:
+    """DSH 的第三触发 `context-overflow`：压缩一次 + **只重试一次**。
+
+    2026-11-16（plan compaction-overflow-and-manual-ui）：provider 报窗口超限时，
+    `reliability/retry.py::_classify_retryable` 不认它（不是瞬时故障，重试必然复现），
+    所以在这里救：强制全量折叠 → 重建上下文 → 原样重跑一次。第二次还炸就把异常抛出去，
+    不再压缩第二次（避免「压缩风暴」，与 DSH `maxOverflowRetries = 1` 一致）。
+    """
+    try:
+        return await invoke(build_state(conversation_context or "", assembled_context or ""))
+    except Exception as exc:
+        if not is_context_overflow_error(exc):
+            raise
+        logger.warning(
+            "context overflow in sql agent (session=%s): %s; forcing full compaction, retry once",
+            session_id, exc,
+        )
+        new_conversation, new_assembled = await _forced_compaction_context(
+            session_id=session_id,
+            user_id=user_id,
+            user_query=user_query,
+            state_dict=state_dict,
+        )
+        return await invoke(build_state(new_conversation, new_assembled))
+
+
 @traced_node("confirmed_sql_agent")
 async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[RunnableConfig] = None) -> dict:
     """Run the SQL subgraph. Note: we deliberately reuse `build_sql_graph`
@@ -378,42 +447,55 @@ async def _confirmed_sql_agent(state: ConfirmedExecutionState, config: Optional[
     seeded_counters = await retry_attempt_repository.counters_for(
         state["session_id"], state.get("draft_id"),
     )
-    ss = await sql_graph.ainvoke({
-        "schema_context": schema_input,
-        "user_query": user_query,
-        "query_plan": None,
-        "generated_sql": "",
-        "validation_result": {},
-        "sql_result": "",
-        "execution_status": "",
-        "error": None,
-        "retry_counters": {
-            "plan": seeded_counters.get("plan", 0),
-            "sql_generation": seeded_counters.get("sql_generation", 0),
-            "mcp_schema": seeded_counters.get("mcp_schema", 0),
-        },
-        # P1：重试记录 / 审计的归属（legacy 路径为空 → 仓储 no-op）
-        "session_id": state["session_id"],
-        "user_id": state["user_id"],
-        "requirement_draft_id": state.get("draft_id"),
-        "trace_id": state.get("trace_id", ""),
-        "chosen_tool": None,  # legacy field; ignored in new flow
-        "confirmed_requirement": confirmed_requirement,
-        "conversation_context": conversation_context or None,
-        "assembled_context": assembled_context or None,  # P4c: 含 recall 的全景 context
-        "granularity": getattr(card, "granularity", None),  # 粒度确定性透传（_plan 改写 dimensions）
-        "detail_level": getattr(card, "detail_level", None),  # 明细模式：_plan 清空维度/聚合
-        # 2026-11-04（top-period-detail-intent）：最高/最低的一期 → sql_graph 需要
-        # 在生成阶段再强调、在校验阶段检查「真的只取那一期」。
-        "top_period": top_period_state,
-        # 2026-11-08（plan analysis-quality-cleanup D1）：对比基线透传给生成阶段。
-        # 子图没有需求卡，靠 plan.dimensions 猜不可靠——「销售额同比怎么样」实测
-        # 只出了 12 个月的量，同比一个数都没有。
-        "comparison_baseline": _comparison_baseline_from_card(card),
-        # 指标白名单（2026-11-03）：卡片解析出的指标才给模型，避免把整张注册表塞进去
-        "metric_hints": _metric_hints_for(card),
-        "fault_override": state.get("fault_override"),  # P15 e2e T4: e2e fault seam 透传
-    }, _callbacks_only(config))
+    def _sql_state(conv: str, asm: str) -> dict:
+        """SQL 子图入参构造器（溢出恢复要用**新上下文**重跑同一份状态）。"""
+        return {
+            "schema_context": schema_input,
+            "user_query": user_query,
+            "query_plan": None,
+            "generated_sql": "",
+            "validation_result": {},
+            "sql_result": "",
+            "execution_status": "",
+            "error": None,
+            "retry_counters": {
+                "plan": seeded_counters.get("plan", 0),
+                "sql_generation": seeded_counters.get("sql_generation", 0),
+                "mcp_schema": seeded_counters.get("mcp_schema", 0),
+            },
+            # P1：重试记录 / 审计的归属（legacy 路径为空 → 仓储 no-op）
+            "session_id": state["session_id"],
+            "user_id": state["user_id"],
+            "requirement_draft_id": state.get("draft_id"),
+            "trace_id": state.get("trace_id", ""),
+            "chosen_tool": None,  # legacy field; ignored in new flow
+            "confirmed_requirement": confirmed_requirement,
+            "conversation_context": conv or None,
+            "assembled_context": asm or None,  # P4c: 含 recall 的全景 context
+            "granularity": getattr(card, "granularity", None),  # 粒度确定性透传（_plan 改写 dimensions）
+            "detail_level": getattr(card, "detail_level", None),  # 明细模式：_plan 清空维度/聚合
+            # 2026-11-04（top-period-detail-intent）：最高/最低的一期 → sql_graph 需要
+            # 在生成阶段再强调、在校验阶段检查「真的只取那一期」。
+            "top_period": top_period_state,
+            # 2026-11-08（plan analysis-quality-cleanup D1）：对比基线透传给生成阶段。
+            # 子图没有需求卡，靠 plan.dimensions 猜不可靠——「销售额同比怎么样」实测
+            # 只出了 12 个月的量，同比一个数都没有。
+            "comparison_baseline": _comparison_baseline_from_card(card),
+            # 指标白名单（2026-11-03）：卡片解析出的指标才给模型，避免把整张注册表塞进去
+            "metric_hints": _metric_hints_for(card),
+            "fault_override": state.get("fault_override"),  # P15 e2e T4: e2e fault seam 透传
+        }
+
+    ss = await _invoke_sql_agent_with_overflow_recovery(
+        session_id=state["session_id"],
+        user_id=state.get("user_id"),
+        user_query=user_query,
+        state_dict=dict(state),
+        conversation_context=conversation_context or "",
+        assembled_context=assembled_context or "",
+        build_state=_sql_state,
+        invoke=lambda payload: sql_graph.ainvoke(payload, _callbacks_only(config)),
+    )
     qr = ss.get("query_result")
     # Passthrough of error + last-tried SQL so the parent graph can emit
     # a structured SSE error event and persist a status='error' version

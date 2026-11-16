@@ -21,7 +21,8 @@ def test_diagnose_policy_kind_vocabulary_is_errors_source():
     # （服务重启打断任务；由启动收敛写入，用户侧可重试、agent 侧不可 repair）
     assert set(SQL_ERROR_KINDS) == {
         "syntax", "object", "object_not_found", "object_ambiguous",
-        "timeout", "connection", "permission", "interrupted", "other",
+        "timeout", "connection", "permission", "interrupted",
+    "context_overflow", "other",
     }
 
 
@@ -36,8 +37,11 @@ def test_diagnose_policy_fail_branch_uses_agent_recoverable_source():
     故差集固定 {"timeout", "connection", "permission", "object_ambiguous", "interrupted"}。
     """
     assert sql_graph_module.agent_recoverable is errors.agent_recoverable
+    # 2026-11-16：+ context_overflow——同一条 SQL 重写救不了「窗口放不下」，
+    # 需要的是压缩 + 整轮重来（走执行节点的 overflow 恢复），所以也不在 AGENT 表里。
     assert set(SQL_ERROR_KINDS) - set(AGENT_RECOVERABLE_KINDS) == {
         "timeout", "connection", "permission", "object_ambiguous", "interrupted",
+        "context_overflow",
     }
 
 
