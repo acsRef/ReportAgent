@@ -280,3 +280,21 @@ DSH 的第三触发 `context-overflow`（provider 报窗口超限 → 强制压�
 
 顺带修一个真 bug：`_budget_chars` 用 1.7 系数后返回 float，`_drop_tail_lines(line[:keep_chars])`
 会因浮点切片报错 → 改成 `int(...)`（`test_remaining_token_budget_clamps_to_min` 抓出来的）。
+
+
+## 第五轮：把窗口调到 provider 允许的安全上限（2026-11-16，用户拍板）
+
+`LLM_CONTEXT_WINDOW` **65 536 → 131 072**（`.env` + `backend/.env.example` + `README.md` / `CLAUDE.md` / `AGENTS.md` 同步）。
+理由：provider 实测硬上限 `max_seq_len = 163840`，131 072 留 **32 768 tokens** 给输出预留（1 500）与估算误差；
+旧值 65 536 让压缩阈值只有 52 428，纯属自我设限。
+
+| 项 | 旧（65 536） | 新（131 072） |
+|---|---|---|
+| 可容纳 | ≈ 10.9 万汉字 | **≈ 21.9 万汉字** |
+| 压缩阈值 `threshold_tokens` | 52 428（≈8.8 万字） | **104 857（≈17.5 万字）** |
+| 尾部保留 `retain_tokens` | 10 245（≈1.7 万字） | **20 731（≈3.5 万字）** |
+| headroom（窗口/8） | 8 192 | 16 384 |
+
+验证：`_compaction_spec()` 真读 `.env` → `context_window=131072 / threshold=104857 / retain=20731`；
+后端按新 env 重启后 `/health` 正常、`POST /sessions/{sid}/compact` 仍返回 `NOTHING_TO_COMPACT`（8 条消息的会话）。
+**代码默认值本来就是 131072**（`app/llm/config.py`），`test_context_window_default` 不用改。

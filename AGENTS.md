@@ -46,7 +46,7 @@ docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/seed_b
 docker exec -i ragent-postgres psql -U ragent -d ragent < backend/scripts/setup_app_role.sql
 ```
 
-Key `.env` vars: `LLM_API_KEY` (SiliconFlow key; falls back to legacy `MINIMAX_API_KEY`), `LLM_MODEL` (`deepseek-ai/DeepSeek-V3`), `LLM_BASE_URL` (`https://api.siliconflow.cn/v1`), `LLM_CONTEXT_WINDOW` (`65536` matches DeepSeek-V3), `SILICONFLOW_API_KEY` + `EMBEDDING_MODEL` (must match `EMBEDDING_DIM=1536`/`VECTOR(1536)`), `DATABASE_URL`, `JWT_SECRET`, `DEFAULT_USERNAME`/`DEFAULT_PASSWORD`, `APP_ENV` + `ALLOW_INSECURE_DEFAULT_AUTH=1` (dev escape hatch), `MEM0_ENABLED` (optional L3 extractor, default false). Auth startup gate is fail-closed: non-dev envs refuse to start with weak secret/password.
+Key `.env` vars: `LLM_API_KEY` (SiliconFlow key; falls back to legacy `MINIMAX_API_KEY`), `LLM_MODEL` (`deepseek-ai/DeepSeek-V3`), `LLM_BASE_URL` (`https://api.siliconflow.cn/v1`), `LLM_CONTEXT_WINDOW` (`131072`; provider hard limit `max_seq_len=163840`, kept 32k below it for output + estimate error), `SILICONFLOW_API_KEY` + `EMBEDDING_MODEL` (must match `EMBEDDING_DIM=1536`/`VECTOR(1536)`), `DATABASE_URL`, `JWT_SECRET`, `DEFAULT_USERNAME`/`DEFAULT_PASSWORD`, `APP_ENV` + `ALLOW_INSECURE_DEFAULT_AUTH=1` (dev escape hatch), `MEM0_ENABLED` (optional L3 extractor, default false). Auth startup gate is fail-closed: non-dev envs refuse to start with weak secret/password.
 
 ## Commands
 

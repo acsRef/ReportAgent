@@ -351,7 +351,7 @@ Important root `.env` variables:
 | `MINIMAX_API_KEY` | 历史别名；仅当 `LLM_API_KEY` 缺失时回退读取（勿新填） |
 | `LLM_MODEL` | `deepseek-ai/DeepSeek-V3` in code; configurable |
 | `LLM_BASE_URL` | `https://api.siliconflow.cn/v1` |
-| `LLM_CONTEXT_WINDOW` | `131072` in code（对应 MiniMax 旧默认）；本机 `.env` 设 `65536` 对齐 DeepSeek-V3 |
+| `LLM_CONTEXT_WINDOW` | `131072` in code 与 `.env` 一致。**2026-11-16 实测**：provider 硬上限 `max_seq_len=163840`；`131072` 留 3.2 万 token 给输出与估算误差（旧值 65536 过于保守，压缩阈值只有 52k） |
 | `SILICONFLOW_API_KEY` | Embedding provider key |
 | `EMBEDDING_MODEL` | `Qwen/Qwen2.5-7B-Instruct` in code |
 | `EMBEDDING_DIM` | `1536`; must match `VECTOR(1536)` in `init_pg.sql` |

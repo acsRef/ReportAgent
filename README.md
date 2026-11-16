@@ -143,7 +143,7 @@ docker run -d --name ragent-postgres \
 LLM_API_KEY=your-siliconflow-key
 LLM_MODEL=deepseek-ai/DeepSeek-V3
 LLM_BASE_URL=https://api.siliconflow.cn/v1
-LLM_CONTEXT_WINDOW=65536          # DeepSeek-V3 = 64K
+LLM_CONTEXT_WINDOW=131072         # DeepSeek-V3 硬上限 163840；留 3.2 万给输出与估算误差
 SILICONFLOW_API_KEY=your-siliconflow-key
 DATABASE_URL=postgresql://ragent:ragent@localhost:5432/ragent
 # Embedding：当前默认模型 `Qwen/Qwen3-Embedding-8B` 实测输出 1536 维（与
