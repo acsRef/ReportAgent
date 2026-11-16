@@ -34,6 +34,22 @@ class TestEstimateTokens:
     def test_按三字符估一token(self, text: str, expected: int) -> None:
         assert C.estimate_tokens(text) == expected
 
+    def test_中文按实测比例估算(self) -> None:
+        """2026-11-16 实测（真 provider usage.prompt_tokens）：
+
+        中文 5 000 字 → 2 992 tokens（1.67 字/token），旧估算按 3 字/token 只报 1 667，
+        把中文**低估 1.79 倍**——那会让「以为还有余量」时直接撞窗口。
+        """
+        prose = "华东区域今年的净销售额比去年同期增长，增速在第三季度放缓。" * 200
+        tokens = C.estimate_tokens(prose)
+        ratio = len(prose) / tokens
+        assert 1.55 <= ratio <= 1.80, f"中文比例 {ratio:.2f} 偏离实测 1.67 太多"
+
+    def test_英文偏保守不低估(self) -> None:
+        """英文实测 5.64 字/token；我们按 3.0 估 → 只会比真实更多（保守，不冒险）。"""
+        text = "The quarterly revenue grew by twelve percent year over year. " * 100
+        assert C.estimate_tokens(text) > len(text) / 5.64
+
 
 class TestResolveSpec:
     def test_阈值取窗口比例与压力预算的较小者(self) -> None:

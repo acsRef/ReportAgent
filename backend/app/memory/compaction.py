@@ -23,8 +23,25 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
-# 与 `app/context/assembler.py` 同口径：1 token ≈ 3 chars（粗估，够用于阈值判断）。
-CHARS_PER_TOKEN = 3
+# --- token 估算：2026-11-16 实测校准（真 provider，读 usage.prompt_tokens） --------
+#
+# | 样本            | 字符  | 实测 tokens | 字/token |
+# |-----------------|-------|-------------|----------|
+# | 中文散文        | 5 000 | 2 992       | 1.67     |
+# | 中文散文        | 100 k | 59 797      | 1.67     |
+# | 中文 + 数据/SQL | 5 000 | 2 011       | 2.49     |
+# | 纯英文          | 5 000 | 887         | 5.64     |
+#
+# 旧实现一律按 3 chars/token 估：中文会被**低估 1.79 倍**（自认为只用了 52k tokens，
+# 其实已 ~93k），英文被高估 1.88 倍（保守）。中文是本产品的绝对主力文本，所以拆成
+# 两个系数：CJK 用实测 1.67，其余仍按 3.0（保守，且保持既有 ASCII 用例语义不变）。
+CJK_CHARS_PER_TOKEN = 1.67
+OTHER_CHARS_PER_TOKEN = 3.0
+CHARS_PER_TOKEN = OTHER_CHARS_PER_TOKEN   # 兼容旧引用（只对 ASCII 成立）
+
+# CJK 表意文字 + 中文标点 + 全角符号：这些几乎都一字一 token 量级
+_CJK_CLASS = "\u3400-\u4dbf\u4e00-\u9fff\u3000-\u303f\uff00-\uffef"
+_CJK_RE = re.compile(f"[{_CJK_CLASS}]")
 
 # --- DSH 默认策略参数 -------------------------------------------------------
 DEFAULT_THRESHOLD_RATIO = 0.8    # DSH `DEFAULT_THRESHOLD_RATIO`
@@ -41,10 +58,12 @@ class CompactionConfigError(ValueError):
 
 
 def estimate_tokens(text: str) -> int:
-    """字符数估算 token（1 token ≈ 3 chars）。空串为 0。"""
+    """按实测比例估算 token（CJK 1.67 字/token，其余 3.0 字/token）。空串为 0。"""
     if not text:
         return 0
-    return max(1, math.ceil(len(text) / CHARS_PER_TOKEN))
+    cjk = len(_CJK_RE.findall(text))
+    other = len(text) - cjk
+    return max(1, math.ceil(cjk / CJK_CHARS_PER_TOKEN + other / OTHER_CHARS_PER_TOKEN))
 
 
 # --- 数据通道：受保护片段 ---------------------------------------------------

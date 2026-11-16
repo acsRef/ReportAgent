@@ -49,9 +49,11 @@ class ContextBundle(TypedDict):
 # P4c Task 4: §七 kind 排序固定序 (query > semantic > preference).
 _KIND_ORDER: dict[str, int] = {"query": 0, "semantic": 1, "preference": 2}
 
-# P4c Task 4: Token Budget 默认值. 1 token ≈ 3 chars (粗估).
+# P4c Task 4: Token Budget 默认值. 2026-11-16 实测校准：中文 1.67 字/token、
+# 英文 5.64 字/token（见 app/memory/compaction.py 的注释表）——旧值 3 会让中文预算
+# 实际放大 1.79 倍。这里取中文实测值（本产品中文为主），对英文偏保守。
 _DEFAULT_TOKEN_BUDGET = 4000
-_CHARS_PER_TOKEN = 3
+_CHARS_PER_TOKEN = 1.7
 
 
 def _filter_and_dedup_and_sort(items: list[RecallItem]) -> list[RecallItem]:
@@ -79,7 +81,7 @@ def _budget_chars(remaining_token_budget: int | None = None) -> int:
     budget_tokens = int(os.getenv("P4C_ASSEMBLER_TOKEN_BUDGET", _DEFAULT_TOKEN_BUDGET))
     if remaining_token_budget is not None:
         budget_tokens = min(budget_tokens, remaining_token_budget)
-    return max(0, budget_tokens * _CHARS_PER_TOKEN)
+    return max(0, int(budget_tokens * _CHARS_PER_TOKEN))
 
 
 def _keep_tail_lines(text: str, char_cap: int) -> str:

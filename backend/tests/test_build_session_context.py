@@ -27,7 +27,12 @@ pytestmark = pytest.mark.smoke
 
 
 def _msgs(n):
-    return [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(n)]
+    """每条 ~60 字符：2026-11-16 起 build_context 有「收益上界闸」（上限 < 40 tokens 就不压），
+    2 字符的玩具消息算出来的上限只有 39 tokens → 会被正确拒绝，测不到压缩 glue。"""
+    return [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i} " + "x" * 60}
+        for i in range(n)
+    ]
 
 
 _ZERO = {"digest": None, "digest_msg_count": 0, "digest_version": 0, "mid_digest": None}

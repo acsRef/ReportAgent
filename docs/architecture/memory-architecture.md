@@ -151,6 +151,10 @@ Conversation Memory（L1/L2/L2.5）的**压缩策略**与装配层的**预算裁
 > 这一轮还抓出 3 个合成用例抓不到的算法缺陷（裸月份/裸年份不被保护、确定性折法重复数据导致
 > 压缩变大），修法见 plan `2026-11-16-compaction-dsh-alignment` 第二轮。
 >
+> **token 估算（2026-11-16 实测校准）**：CJK 1.67 字/token、其余 3.0 字/token（旧的一刀切 3.0
+> 把中文低估 1.79 倍）。因此 `threshold_tokens = 52 428` 对应 ≈ 8.8 万汉字，
+> `retain_tokens = 10 245` ≈ 1.7 万汉字；装配层 4 000 tokens ≈ 6 800 字符。
+>
 > 未做（与 DSH 的差异，均有理由）：日志式 surface 替换与 `compaction/start|end` 锁
 > （消息表 + `report_version` 已是 append-only 事实源）、tool-pair 边界（对话表无 tool 消息）、
 > `/compact` 命令（无命令面板）、provider 溢出触发（当前 prompt ≈ 4k tokens ≪ 65k 窗口）。
