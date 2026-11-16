@@ -117,3 +117,32 @@ backend/app/context/assembler.py  # Filter → Conflict Resolution → Token Bud
 | Selective Recall 决策 | 未实现——现全量召回注入 | P4（decision.py/policy.py） |
 | semantic_entry 补字段 | 表结构未扩展 | P4 |
 | Context Runtime 四文件 | 目录不存在（勿假设已建） | P3/P4 |
+
+## 十、修订（2026-11-16）：对话压缩对标 DSH compaction，数据不参与压缩
+
+plan：`docs/plans/2026-11-16-compaction-dsh-alignment.md`。**不改变**四类记忆的职责边界，改的是
+Conversation Memory（L1/L2/L2.5）的**压缩策略**与装配层的**预算裁剪方式**：
+
+1. **策略层独立**：`backend/app/memory/compaction.py` 承载纯函数——token 预算
+   （`resolve_spec`，阈值 = min(窗口×0.8, 窗口 − 预留输出 − 余量)）、单元切分（一问一答成对）、
+   **保尾选范围**（`select_fold_span`）、数据事实抽取（`collect_data_facts`）、确定性折法、
+   shrink guard、数值出口闸（`has_numeric_literals`）。
+2. **双闸触发**：token 压力闸（DSH 形态）**或** 条数兜底闸（`> RECENT_WINDOW + COMPRESS_BATCH`，
+   保留历史行为，因为本项目消息可能极短）。折叠区间恒为**最老的前缀**，最近 `RECENT_WINDOW` 条、
+   至少 3 条，且绝不切开一问一答。
+3. **数据通道与叙述通道分离**：日期/金额/百分比/编号由确定性正则从被折叠区间**逐字抽取**，
+   注入 `<数据事实>` 块，**不经任何模型**；模型写的 checkpoint 只承载叙述（5 段：用户目标 /
+   已确认口径 / 用户纠正 / 已否决的写法 / 未完成事项），且**一旦出现任何数字即判越界**，
+   本轮退回确定性折法。口径的权威来源仍是结构化槽位（`agent.requirement_draft` /
+   `agent.report_version`），不是摘要散文。
+4. **失败不空**：LLM 抛错或摘要没变短 → 退回确定性折法（骨架 + 数据原样）并告警，
+   绝不把整块上下文丢空；`digest` 状态仍推进，避免每轮重试。
+5. **装配层保尾**：`context/assembler.py` 的预算裁剪从 `text[:cap]`（砍尾=丢最新）改为
+   整行粒度保尾（对话丢最老、召回按 §七 优先级从尾部丢），且不切断单个数值。
+
+> 数据事实块**不落库**、每轮从消息确定性重算（`digest` / `digest_msg_count` /
+> `digest_version` / `mid_digest` 四列不变，无 schema 迁移）。
+>
+> 未做（与 DSH 的差异，均有理由）：日志式 surface 替换与 `compaction/start|end` 锁
+> （消息表 + `report_version` 已是 append-only 事实源）、tool-pair 边界（对话表无 tool 消息）、
+> `/compact` 命令（无命令面板）、provider 溢出触发（当前 prompt ≈ 4k tokens ≪ 65k 窗口）。

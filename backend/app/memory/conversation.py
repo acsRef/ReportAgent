@@ -14,21 +14,40 @@ P4b 议题（本模块不动）：写入时机从「读路径顺手写」移到�
 from __future__ import annotations
 
 import logging
-import re
+import os
 
 from app.llm import budgets, call_llm
+from app.memory.compaction import (
+    CompactionConfigError,
+    CompactionSpec,
+    classify_units,
+    collect_data_facts,
+    compact_utterance,
+    ensure_shrunk,
+    estimate_tokens,
+    fold_deterministic,
+    has_numeric_literals,
+    protected_fragments,
+    render_units,
+    resolve_spec,
+    select_fold_span,
+    should_compact,
+)
 from app.memory.manager import remember_conversation_facts
-from app.memory.prompts import build_conversation_summarize_prompt
+from app.memory.prompts import build_conversation_checkpoint_prompt
 from app.utils.text import safe_json_parse
 
 logger = logging.getLogger(__name__)
 
 # --- 关键常量 ---------------------------------------------------------------
-RECENT_WINDOW = 10        # L1：保留最近 N 条原始消息
-COMPRESS_BATCH = 10       # 每 M 条超出窗口的消息触发一次压缩
+RECENT_WINDOW = 10        # L1：保留最近 N 条原始消息（保留尾部上限）
+COMPRESS_BATCH = 10       # 条数兜底闸：超过 RECENT_WINDOW + COMPRESS_BATCH 必压缩
 L2_MAX_CHARS = 800        # L2 digest 硬上限
 L2_5_MAX_CHARS = 400      # L2.5 归档硬上限
 L2_ARCHIVE_INTERVAL = 5   # 每 N 次 L2 重写归档一次 L2.5
+# 压缩阈值要给主请求的**输出**留位置：DSH 用 `maxTokens` 预留，这里给一个保守默认，
+# 可用 env 覆盖（真窗口从 LLMConfig.context_window 读）。见 plan §二触发。
+DEFAULT_RESERVED_OUTPUT_TOKENS = 1500
 
 
 def format_messages(messages: list[dict]) -> str:
@@ -69,12 +88,16 @@ def archive_to_l2_5(summary: str) -> str:
 
 
 def compress_and_extract(old_digest: str | None, batch_messages: list[dict]) -> dict:
-    """单次 LLM 调用：把「旧摘要 + 新批次」压缩成新摘要，并顺带抽取 L3 结构化事实。
+    """单次 LLM 调用：把「旧 checkpoint + 新批次」融合成新 checkpoint，并顺带抽取 L3 事实。
 
     返回 ``{"summary", "extracted_schemas", "extracted_preferences"}``。
     summary 是**替换**旧摘要（不是追加），严格 ≤ L2_MAX_CHARS。
+
+    2026-11-16（plan compaction-dsh-alignment）：prompt 换成结构化 checkpoint（V2）——
+    段位固定、**禁止出现任何数值**（数值由 `<数据事实>` 块另行原样注入，见
+    `app/memory/compaction.py` 的 `collect_data_facts`）。JSON 契约与函数签名不变。
     """
-    prompt = build_conversation_summarize_prompt(old_digest, batch_messages)
+    prompt = build_conversation_checkpoint_prompt(old_digest, batch_messages)
     raw = call_llm(prompt, max_tokens=budgets.max_tokens("memory_summary"))
     result = safe_json_parse(raw) if isinstance(raw, str) else raw
     if not isinstance(result, dict):
@@ -89,6 +112,52 @@ def compress_and_extract(old_digest: str | None, batch_messages: list[dict]) -> 
     }
 
 
+def _compaction_spec(
+    *,
+    context_window: int | None = None,
+    reserved_completion_tokens: int | None = None,
+    headroom_tokens: int | None = None,
+) -> CompactionSpec:
+    """解析本轮压缩预算（窗口来自 LLMConfig，预留输出可 env 覆盖）。"""
+    if context_window is None:
+        try:
+            from app.llm.config import LLMConfig
+
+            context_window = int(LLMConfig().context_window)
+        except Exception as exc:  # noqa: BLE001 - 配置读不到就用保守默认，不阻塞压缩判定
+            logger.warning("compaction: context_window unavailable (%s), assume 65536", exc)
+            context_window = 65536
+    if reserved_completion_tokens is None:
+        reserved_completion_tokens = int(os.getenv(
+            "COMPACTION_RESERVED_OUTPUT_TOKENS", str(DEFAULT_RESERVED_OUTPUT_TOKENS),
+        ))
+    return resolve_spec(
+        context_window=context_window,
+        reserved_completion_tokens=reserved_completion_tokens,
+        headroom_tokens=headroom_tokens,
+    )
+
+
+def _render_context(
+    *,
+    mid_digest: str | None,
+    digest: str | None,
+    facts: list[str],
+    keep_units: list,
+) -> str:
+    """拼装注入 prompt 的对话上下文：长期脉络 / 对话摘要 / 数据事实 / 最新对话。"""
+    parts: list[str] = []
+    if mid_digest:
+        parts.append(f"<长期脉络>\n{mid_digest}\n</长期脉络>")
+    if digest:
+        parts.append(f"<对话摘要>\n{digest}\n</对话摘要>")
+    if facts:
+        # 数据通道：逐字原样，不经任何模型改写（plan §Context「要改的那一处」）。
+        parts.append(f"<数据事实>\n{'、'.join(facts)}\n</数据事实>")
+    parts.append(f"<最新对话>\n{render_units(keep_units)}\n</最新对话>")
+    return "\n\n".join(parts)
+
+
 def build_context(
     *,
     messages: list[dict],
@@ -96,55 +165,133 @@ def build_context(
     digest_msg_count: int = 0,
     digest_version: int = 0,
     mid_digest: str | None = None,
+    context_window: int | None = None,
+    reserved_completion_tokens: int | None = None,
+    headroom_tokens: int | None = None,
 ) -> tuple[str, dict, list[dict]]:
-    """从对话历史构建注入 LLM 的上下文字符串。
+    """从对话历史构建注入 LLM 的上下文字符串（DSH compaction 五步）。
 
     返回 ``(context_str, updates, compressed_batch)``：
-      - context_str   前置进 LLM prompt 的上下文（<长期脉络>/<对话摘要>/<最新对话>）。
-      - updates       需回写 agent.session 的 digest 字段（未触发压缩时为空 dict），
-                      含本次抽取的 extracted_schemas / extracted_preferences（供 L3 落库）。
-      - compressed_batch  本次被压缩的消息批次（未压缩时为空），供异步层做 mem0 增强。
+      - context_str   ``<长期脉络>`` / ``<对话摘要>`` / ``<数据事实>`` / ``<最新对话>``；
+      - updates       需回写 agent.session 的 digest 字段（未触发压缩时为空 dict）；
+      - compressed_batch  本次被折叠的原始消息（未折叠时为空），供异步层做 mem0 增强。
 
-    压缩触发：消息总数超过 RECENT_WINDOW + COMPRESS_BATCH，且自上次压缩后又累积了
-    新批次（digest_msg_count < total - RECENT_WINDOW）。压缩为覆盖重写，绝不追加。
+    五步（对标 DSH `compaction-basic`）：
+
+    1. **measure**：`estimate_tokens` 按字符估 token（1 token ≈ 3 chars，与 assembler 同口径）；
+    2. **trigger**：token 压力闸（`threshold = min(窗口×0.8, 窗口−预留输出−余量)`）**或** 条数兜底闸；
+    3. **select**：保尾选范围——从最新往回攒 `retain_tokens`，上限 `RECENT_WINDOW` 条，
+       且**绝不切开一问一答**（DSH 的 tool-pair 边界在对话侧的对应物）；
+    4. **summarize**：折叠区间交给 LLM 写结构化 checkpoint；**数据事实**另行确定性抽取、
+       逐字原样注入 `<数据事实>` 块；
+    5. **guard**：候选（checkpoint + 事实）不比被折叠内容短 → 退回确定性折法；LLM 抛错同样退回，
+       **绝不把整块上下文丢空**（原实现的缺陷，见 plan §Context 缺陷 ②）。
     """
     total = len(messages)
     updates: dict = {}
     compressed_batch: list[dict] = []
+    units = classify_units(messages)
 
-    # 消息还不多：无需压缩，原始输出即可
-    if total <= RECENT_WINDOW + COMPRESS_BATCH:
+    try:
+        spec = _compaction_spec(
+            context_window=context_window,
+            reserved_completion_tokens=reserved_completion_tokens,
+            headroom_tokens=headroom_tokens,
+        )
+    except CompactionConfigError as exc:
+        # 配置打架属于**配置**错误：降级为「本轮不压缩」，不拖垮主链。
+        logger.warning("compaction config rejected (%s); skip compaction this turn", exc)
         return format_messages(messages), updates, compressed_batch
 
-    recent = messages[-RECENT_WINDOW:]
-    old_count = total - RECENT_WINDOW
+    measured_tokens = sum(unit.tokens for unit in units)
+    if not should_compact(
+        message_count=total,
+        measured_tokens=measured_tokens,
+        spec=spec,
+        message_ceiling=RECENT_WINDOW + COMPRESS_BATCH,
+    ):
+        # 消息还不多：无需压缩，原始输出即可
+        return format_messages(messages), updates, compressed_batch
 
-    if digest_msg_count < old_count:
-        batch = messages[digest_msg_count:old_count]
-        result = compress_and_extract(digest, batch)
-        digest = result["summary"]            # 覆盖，不是追加
-        digest_msg_count = old_count
+    fold_units, keep_units = select_fold_span(
+        units,
+        retain_tokens=spec.retain_tokens,
+        ceiling_messages=RECENT_WINDOW,
+    )
+    if not fold_units:
+        return format_messages(messages), updates, compressed_batch
+
+    fold_end = keep_units[0].start          # 折叠区间的右开边界（原始消息下标）
+    shadowed_tokens = sum(unit.tokens for unit in fold_units)
+    facts = collect_data_facts(fold_units)
+    facts_text = "、".join(facts)
+
+    if digest_msg_count < fold_end:
+        batch = list(messages[digest_msg_count:fold_end])
+        degraded = False
+        try:
+            result = compress_and_extract(digest, batch)
+            candidate = result["summary"]
+            if has_numeric_literals(candidate):
+                # 数值出口闸：checkpoint 只许写叙述，数字一律走 <数据事实> 通道。
+                candidate = fold_deterministic(fold_units)
+                degraded = True
+                logger.warning(
+                    "compaction: checkpoint contained numeric literals; used deterministic fold",
+                )
+            elif not ensure_shrunk(
+                candidate_tokens=estimate_tokens(candidate) + estimate_tokens(facts_text),
+                shadowed_tokens=shadowed_tokens,
+            ):
+                # shrink guard：摘要没比原文短，落库等于白花一次调用。
+                candidate = fold_deterministic(fold_units)
+                degraded = True
+                logger.warning(
+                    "compaction: checkpoint not smaller than shadowed span "
+                    "(%s vs %s tokens); used deterministic fold",
+                    estimate_tokens(result["summary"]) + estimate_tokens(facts_text),
+                    shadowed_tokens,
+                )
+            digest = candidate
+            extracted_schemas = result["extracted_schemas"]
+            extracted_preferences = result["extracted_preferences"]
+        except Exception as exc:  # noqa: BLE001 - 压缩失败降级为确定性折法，绝不丢空
+            digest = fold_deterministic(fold_units)
+            extracted_schemas = []
+            extracted_preferences = []
+            degraded = True
+            logger.warning(
+                "compaction: LLM summarization failed (%s); degraded to deterministic fold", exc,
+            )
+
+        digest_msg_count = fold_end
         digest_version += 1
         updates = {
             "digest": digest,
             "digest_msg_count": digest_msg_count,
             "digest_version": digest_version,
-            "extracted_schemas": result["extracted_schemas"],
-            "extracted_preferences": result["extracted_preferences"],
+            "extracted_schemas": extracted_schemas,
+            "extracted_preferences": extracted_preferences,
         }
         compressed_batch = batch
         # 每 N 次重写归档一次 L2.5
         if digest_version % L2_ARCHIVE_INTERVAL == 0:
             mid_digest = archive_to_l2_5(digest)
             updates["mid_digest"] = mid_digest
+        if degraded and not digest:
+            # 极端情况（折法也空）：宁可不给摘要，也不要一个空块。
+            digest = None
 
-    parts = []
-    if mid_digest:
-        parts.append(f"<长期脉络>\n{mid_digest}\n</长期脉络>")
-    if digest:
-        parts.append(f"<对话摘要>\n{digest}\n</对话摘要>")
-    parts.append(f"<最新对话>\n{format_messages(recent)}\n</最新对话>")
-    return "\n\n".join(parts), updates, compressed_batch
+    return (
+        _render_context(
+            mid_digest=mid_digest,
+            digest=digest,
+            facts=facts,
+            keep_units=keep_units,
+        ),
+        updates,
+        compressed_batch,
+    )
 
 
 async def prepare_conversation_context(session_id: str, user_id: int | str) -> str:
@@ -185,49 +332,11 @@ USER_UTTERANCE_LIMIT = 40            # 最多取多少条，交给 compact 决�
 USER_UTTERANCE_BUDGET_CHARS = 1800   # ≈ 600 tokens
 USER_UTTERANCE_KEEP_RECENT = 4       # 最近 4 条**原样**保留（不压缩）
 
-# 绝不能压缩的片段——用户明确要求「数字那些数据要保留原样」。
-# 只认三类完整语义单元（顺序即优先级）：
-#   1) 年月/日期，含「月/日」后缀——否则 `2024年11月` 会被截成 `2024年11`；
-#   2) 金额/百分比（带单位）；
-#   3) 长编号（订单号）。
-# 刻意**不**单独匹配裸数字：它会和上面几条互相切碎（`2024年11月` 里抠出个 `11`），
-# 而裸数字对「指代消解」没有价值。
-_PROTECTED_PATTERNS = (
-    re.compile(r"\d{4}\s*[-/年]\s*\d{1,2}\s*月?(?:\s*\d{1,2}\s*[日号])?"),
-    re.compile(r"\d+(?:\.\d+)?\s*(?:%|％|万元|亿元|万|亿|元)"),
-    re.compile(r"(?<!\d)\d{5,}(?!\d)"),
-)
-
-
-def _protected_fragments(text: str) -> list[str]:
-    """抽出一条文本里**必须原样保留**的片段（去重保序）。
-
-    只认「数值类」：日期 / 金额 / 百分比 / 编号。业务实体名（区域、品类）由结构化字段
-    承载（上一轮卡），不在这里重复抽——文本里出现几次都一样，压掉不影响正确性。
-    """
-    seen: list[str] = []
-    for pattern in _PROTECTED_PATTERNS:
-        for match in pattern.finditer(text or ""):
-            piece = match.group(0).strip()
-            if piece and piece not in seen:
-                seen.append(piece)
-    return seen
-
-
-def _compact_utterance(text: str, *, keep_head: int) -> str:
-    """把一条历史压成「骨架 + 全部数据原样」。
-
-    用户原话（question）比助手确认句信息量大，所以 user 保留更长的头；
-    但**两者的数字一律原样**——数字被压掉等于篡改事实。
-    """
-    flat = " ".join(str(text or "").split())
-    if not flat:
-        return ""
-    head = flat[:keep_head].rstrip()
-    fragments = _protected_fragments(flat)
-    if not fragments:
-        return f"{head}…"
-    return f"{head}…（数据：{'、'.join(fragments)}）"
+# 数据保护的原语已迁到 `app.memory.compaction`（策略层纯函数），这里只做兼容别名：
+# 需求侧（`prepare_user_utterances_context`）与既有测试仍按 `_protected_fragments` /
+# `_compact_utterance` 引用，行为逐字节不变。
+_protected_fragments = protected_fragments
+_compact_utterance = compact_utterance
 
 
 async def prepare_user_utterances_context(
