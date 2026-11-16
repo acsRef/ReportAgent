@@ -11,6 +11,8 @@ UserMemory.search / get_user_preferences 用 `k = top_k or self._top_k`，0 当 
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import uuid
 
@@ -42,7 +44,7 @@ def _run(coro):
 
 def _make_user() -> int:
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute(
@@ -56,7 +58,7 @@ def _make_user() -> int:
 
 def _cleanup(user_id: int):
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute("DELETE FROM memory.semantic_entry WHERE user_id=%s", (user_id,))
@@ -66,7 +68,7 @@ def _cleanup(user_id: int):
 
 def _read_access_count(user_id: int, content: str) -> int:
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     cur = conn.cursor()
     cur.execute(
         "SELECT access_count FROM memory.semantic_entry "

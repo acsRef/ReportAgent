@@ -490,3 +490,21 @@ CREATE TABLE IF NOT EXISTS agent.retry_attempt (
 
 CREATE INDEX IF NOT EXISTS idx_retry_attempt_session
     ON agent.retry_attempt (session_id, requirement_draft_id, created_at DESC);
+
+-- 2026-11-16：`agent.analysis_task_revision`（Turn Understanding 的任务修订审计）
+-- 此前只在开发机上手工建过，init_pg.sql 里漏了 —— 全新库（CI / 新环境）会缺表。
+-- 由 `docs/plans/2026-11-05-turn-understanding-agent.md` 引入，代码写方：
+-- `backend/app/infra/db/task_revision_repository.py`。
+CREATE TABLE IF NOT EXISTS agent.analysis_task_revision (
+    id BIGSERIAL PRIMARY KEY,
+    session_id VARCHAR(64) NOT NULL,
+    user_id INTEGER,
+    revision INTEGER NOT NULL,
+    act VARCHAR(32) NOT NULL,
+    task JSONB NOT NULL,
+    changes JSONB NOT NULL DEFAULT '{}'::jsonb,
+    evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_analysis_task_revision_session
+    ON agent.analysis_task_revision (session_id, revision DESC);

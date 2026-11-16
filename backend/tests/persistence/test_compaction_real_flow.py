@@ -47,7 +47,7 @@ from app.memory.compaction import (
 
 pytestmark = pytest.mark.persistence
 
-_DSN = "postgresql://ragent:ragent@localhost:5432/ragent"
+_DSN = os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent")
 
 # 真实追问：必须命中 SelectiveRecallPolicy 的「历史引用」词表（刚才/那个/再按/按月），
 # 否则咨询策略会判「不需要历史」，压缩路径根本不会被调用（这是链路的真实行为）。

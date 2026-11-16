@@ -14,6 +14,8 @@ Fixture 模式复用 test_user_memory_eviction.py（psycopg2 直连真 PG + monk
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import uuid
 
@@ -45,7 +47,7 @@ def _run(coro):
 
 def _make_user() -> int:
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute(
@@ -59,7 +61,7 @@ def _make_user() -> int:
 
 def _cleanup(user_id: int):
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute("DELETE FROM memory.semantic_entry WHERE user_id=%s", (user_id,))
@@ -69,7 +71,7 @@ def _cleanup(user_id: int):
 
 def _read_row(user_id: int, content: str) -> dict | None:
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     cur = conn.cursor()
     cur.execute(
         "SELECT memory_type, status, confidence FROM memory.semantic_entry "

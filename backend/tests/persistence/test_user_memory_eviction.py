@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import uuid
 
@@ -37,7 +39,7 @@ def _run(coro):
 
 def _make_user() -> int:
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute(
@@ -51,7 +53,7 @@ def _make_user() -> int:
 
 def _cleanup(user_id: int):
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute("DELETE FROM memory.semantic_entry WHERE user_id=%s", (user_id,))
@@ -61,7 +63,7 @@ def _cleanup(user_id: int):
 
 def _count(user_id: int) -> int:
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     cur = conn.cursor()
     cur.execute("SELECT count(*) FROM memory.semantic_entry WHERE user_id=%s", (user_id,))
     n = cur.fetchone()[0]
@@ -87,7 +89,7 @@ def test_eviction_keeps_capacity_and_protects_importance(monkeypatch):
         assert _count(user_id) == 3  # 不超过容量
 
         import psycopg2
-        conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+        conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
         cur = conn.cursor()
         cur.execute(
             "SELECT content FROM memory.semantic_entry WHERE user_id=%s ORDER BY importance_score DESC",

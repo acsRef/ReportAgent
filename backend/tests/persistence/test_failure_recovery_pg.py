@@ -30,10 +30,12 @@ def _run(coro):
     return asyncio.run(_body())
 
 
-async def _user_id(pool) -> int:
-    value = await pool.fetchval("SELECT id FROM app.users ORDER BY id LIMIT 1")
-    assert value is not None
-    return int(value)
+async def _make_user(pool) -> int:
+    """自己造用户：CI 是全新库，`app.users` 可能为空（2026-11-16 同 test_session_delete 的修复）。"""
+    return int(await pool.fetchval(
+        "INSERT INTO app.users (username, password_hash) VALUES ($1, 'x') RETURNING id",
+        f"recovery-{uuid.uuid4().hex[:12]}",
+    ))
 
 
 async def _seed_stuck(pool, session_id: str, user_id: int) -> int:
@@ -69,6 +71,8 @@ async def _cleanup(pool, session_id: str) -> None:
             await delete_session(session_id, user_id=int(user_id))
         except Exception:  # noqa: BLE001 - 收尾尽力而为
             pass
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM app.users WHERE id = $1", int(user_id))
 
 
 def test_reconcile_marks_interrupted_and_retryable() -> None:
@@ -79,7 +83,7 @@ def test_reconcile_marks_interrupted_and_retryable() -> None:
 
     async def body():
         pool = get_pool()
-        user_id = await _user_id(pool)
+        user_id = await _make_user(pool)
         await _seed_stuck(pool, session_id, user_id)
         try:
             stats = await reconcile_orphan_sessions()
@@ -121,7 +125,7 @@ def test_reconcile_only_repairs_phase_when_work_actually_finished() -> None:
 
     async def body():
         pool = get_pool()
-        user_id = await _user_id(pool)
+        user_id = await _make_user(pool)
         draft_id = await _seed_stuck(pool, session_id, user_id)
         async with pool.acquire() as conn:
             await conn.execute(
@@ -163,7 +167,7 @@ def test_retry_attempt_roundtrip() -> None:
 
     async def body():
         pool = get_pool()
-        user_id = await _user_id(pool)
+        user_id = await _make_user(pool)
         await repo.record(
             session_id=session_id, user_id=user_id, requirement_draft_id=7,
             budget_key="sql_generation", action="retry_sql",

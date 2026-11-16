@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import uuid
 
@@ -29,7 +31,7 @@ def _run(coro):
 
 def _make_user() -> int:
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute(
@@ -43,7 +45,7 @@ def _make_user() -> int:
 
 def _cleanup(session_id: str, user_id: int):
     import psycopg2
-    conn = psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute("DELETE FROM agent.session WHERE thread_id=%s", (session_id,))

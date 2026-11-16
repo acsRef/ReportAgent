@@ -32,7 +32,7 @@ def _conn():
     import psycopg2
 
     return psycopg2.connect(
-        os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent")
+        os.getenv("DATABASE_URL", os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
     )
 
 

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import uuid
 
 import pytest
@@ -33,18 +34,56 @@ def _run(coro):
     return asyncio.run(_body())
 
 
+def _ensure_checkpoint_tables() -> None:
+    """补建 LangGraph 的 checkpoint 三件套（幂等）。
+
+    它们由 `AsyncPostgresSaver.setup()` 建，`init_pg.sql` 里没有；本地因为跑过应用所以
+    碰巧存在，**CI 是全新库**——缺表的话本文件对 checkpoint 的断言全部落空。
+    """
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    from app.infra.db.postgres import POSTGRES_DSN, close_pool, init_pool
+
+    async def body():
+        await init_pool()
+        try:
+            async with AsyncPostgresSaver.from_conn_string(POSTGRES_DSN) as saver:
+                await saver.setup()
+        finally:
+            await close_pool()
+
+    # Windows：psycopg 的 async 连接不支持默认的 ProactorEventLoop（Linux CI 无此问题）
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(body())
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _checkpoint_schema():
+    _ensure_checkpoint_tables()
+
+
 def _sid() -> str:
     return f"test-del-{uuid.uuid4().hex[:10]}"
 
 
-async def _user_id(pool) -> int:
-    """`agent.requirement_draft.user_id` 有外键指向 `app.users`，必须用真实 user。
+async def _make_user(pool) -> int:
+    """自己造一个用户（`agent.requirement_draft.user_id` 有外键指向 `app.users`）。
 
-    不新建用户（要造 hash/权限），直接借现有的一条；测试结束会把会话删干净。
+    2026-11-16 CI 红转绿的修复：旧实现是「借库里现成的一条」（`SELECT ... LIMIT 1`），
+    本地因为跑过应用有 admin 所以绿；**CI 是全新库、`app.users` 为空**，于是
+    `assert value is not None` 必然失败（该红从 2026-11-11 的 907c74d 起一直挂着）。
+    改成自己造 + 测试结束删掉，与其余 persistence 测试（`test_session_context_state.py` 等）一致。
     """
-    value = await pool.fetchval("SELECT id FROM app.users ORDER BY id LIMIT 1")
-    assert value is not None, "app.users 为空，persistence 测试需要至少一个用户"
-    return int(value)
+    return int(await pool.fetchval(
+        "INSERT INTO app.users (username, password_hash) VALUES ($1, 'x') RETURNING id",
+        f"del-test-{uuid.uuid4().hex[:12]}",
+    ))
+
+
+async def _drop_user(pool, user_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM app.users WHERE id = $1", user_id)
 
 
 async def _seed_session(pool, session_id: str, user_id: int) -> str:
@@ -141,7 +180,7 @@ def test_delete_session_clears_every_table() -> None:
 
     async def body():
         pool = get_pool()
-        user_id = await _user_id(pool)
+        user_id = await _make_user(pool)
         try:
             await _seed_session(pool, session_id, user_id)
             async with pool.acquire() as conn:
@@ -165,6 +204,7 @@ def test_delete_session_clears_every_table() -> None:
                 await delete_session(session_id, user_id=user_id)
             except Exception:  # noqa: BLE001 - 收尾尽力而为
                 pass
+            await _drop_user(pool, user_id)
 
     before, counts, after = _run(body())
 
@@ -185,7 +225,7 @@ def test_delete_session_refuses_other_users_session() -> None:
 
     async def body():
         pool = get_pool()
-        owner = await _user_id(pool)
+        owner = await _make_user(pool)
         intruder = owner + 1000  # 不存在的 user：owner 不匹配即拒
         await _seed_session(pool, session_id, owner)
         try:
@@ -198,6 +238,7 @@ def test_delete_session_refuses_other_users_session() -> None:
         finally:
             # 用真正的 owner 收尾，失败也不留垃圾
             await delete_session(session_id, user_id=owner)
+            await _drop_user(pool, owner)
         return alive
 
     assert _run(body()) == 1  # 越权那次一行都没删
@@ -208,8 +249,12 @@ def test_delete_session_missing_raises_not_found() -> None:
     from app.services.session_deletion import SessionNotFound, delete_session
 
     async def body():
-        owner = await _user_id(get_pool())
-        with pytest.raises(SessionNotFound):
-            await delete_session(f"does-not-exist-{uuid.uuid4().hex[:8]}", user_id=owner)
+        pool = get_pool()
+        owner = await _make_user(pool)
+        try:
+            with pytest.raises(SessionNotFound):
+                await delete_session(f"does-not-exist-{uuid.uuid4().hex[:8]}", user_id=owner)
+        finally:
+            await _drop_user(pool, owner)
 
     _run(body())

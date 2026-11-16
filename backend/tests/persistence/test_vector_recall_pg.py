@@ -42,7 +42,7 @@ class _FakeEmbedder:
 
 def _conn():
     import psycopg2
-    return psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    return psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
 
 
 def _make_user_id() -> int:

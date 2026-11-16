@@ -89,7 +89,16 @@ async def delete_session(session_id: str, user_id: int) -> dict[str, int]:
             if owner is None or owner != user_id:
                 raise SessionNotFound(session_id)
             counts: dict[str, int] = {}
+            present = await _present_relations(conn)
             for label, sql in _CASCADE_STEPS:
+                schema = label.split(".", 1)[0]
+                if schema in _KNOWN_SCHEMAS and label not in present:
+                    # LangGraph 的 checkpoint 三件套只在非 dev（AsyncPostgresSaver.setup()）
+                    # 时存在；dev 用 MemorySaver，表根本不存在——删会话不该因此 500。
+                    # 2026-11-16 CI 抓到的真缺陷（本地跑过应用才建过表，所以一直没暴露）。
+                    logger.info("session deletion: skip missing table %s", label)
+                    counts[label] = 0
+                    continue
                 status = await conn.execute(sql, session_id)
                 # asyncpg 的 execute 返回命令标签，如 "DELETE 3"；取尾部行数
                 counts[label] = int(status.rsplit(" ", 1)[-1]) if status else 0
@@ -98,6 +107,20 @@ async def delete_session(session_id: str, user_id: int) -> dict[str, int]:
         session_id, user_id, counts,
     )
     return counts
+
+
+# 已知 schema：用来区分「表步骤」和「不是表的步骤」（如 session.unlink_draft 是 UPDATE）。
+_KNOWN_SCHEMAS = frozenset({"public", "agent", "app", "memory", "observability"})
+
+
+async def _present_relations(conn) -> set[str]:
+    """当前库里真实存在的 `schema.table` 集合（用于跳过可选表）。"""
+    rows = await conn.fetch(
+        "SELECT table_schema || '.' || table_name AS rel FROM information_schema.tables "
+        "WHERE table_schema = ANY($1::text[])",
+        list(_KNOWN_SCHEMAS),
+    )
+    return {row["rel"] for row in rows}
 
 
 async def list_session_ids(prefix: str = "", user_id: int | None = None) -> list[str]:

@@ -11,6 +11,8 @@ Fixture 模式：psycopg2 直连 + monkeypatch-free（与 test_user_memory_evict
 """
 from __future__ import annotations
 
+import os
+
 import uuid
 
 import pytest
@@ -20,7 +22,7 @@ pytestmark = pytest.mark.persistence
 
 def _conn():
     import psycopg2
-    return psycopg2.connect("postgresql://ragent:ragent@localhost:5432/ragent")
+    return psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://ragent:ragent@localhost:5432/ragent"))
 
 
 def _make_user_id() -> int:
