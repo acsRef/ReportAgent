@@ -74,3 +74,6 @@ node_modules/
 frontend/e2e/artifacts/
 # globalSetup 起 vite 时写的 pid（进程退出后残留，不该进版本库）
 frontend/e2e/helpers/.e2e-vite.pid
+
+# 评测平台的运行记录（本地 SQLite，不进库）
+eval_platform/runs.sqlite

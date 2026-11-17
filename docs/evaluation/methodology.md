@@ -1,0 +1,85 @@
+# 评测方法论（AI 评测 / Agent 评测）
+
+> 这份文档回答四个问题：**测什么、怎么判、判到什么程度算数、这份结论能用到哪**。
+> 平台（`eval_platform/`）的每一个页面都对应下面的一节；文档与实现对不上时以代码为准，回头改文档。
+
+## 一、被测对象与能力版本
+
+| 项目 | 角色 | 能力面 | 版本标识 |
+|---|---|---|---|
+| ReportAgent | Agent / Application Runtime（LangGraph 两图 + 三态落库） | 需求理解 → SQL 计划/生成/校验/执行 → 报告 | 仓库 commit（平台每次运行记录） |
+| ragent-py | Retrieval Runtime（经 MCP 对 ReportAgent 暴露） | 文档解析 → 分块 → 向量检索 → 重排 | 仓库 commit |
+
+**能力版本必须跟结论绑定**：同一句「通过率 80%」在不同 commit、不同 prompt、不同模型下不是一回事。
+平台把 `base_url + repo commit + 资产清单` 写进每条运行记录。
+
+## 二、评测方案五要素（每个 suite 都要能填满）
+
+| 要素 | 本项目的落地 |
+|---|---|
+| 目标 | 例：ReportAgent 的**需求理解**是否把「时间/口径/维度」解析对；ragent 的**检索**是否命中金标文档 |
+| 指标 | 见下表（命中率 / 召回率 / 字段一致率 / 延迟；**不用 LLM 裁判跑分**） |
+| 用例 | `evaluation/baseline_cases.json`（21）+ `rag_testset.json`（65） |
+| 覆盖范围 | ReportAgent：需求卡 4 类字段；ragent：10 类别（A–J）× 3 年文档 |
+| 判定标准 | 三层，见下一节 |
+
+### 指标口径
+
+| 指标 | 定义 | 谁的 |
+|---|---|---|
+| `doc_hit@k` | gold_documents ∩ 返回 document_id ≠ ∅ | ragent |
+| `doc_recall@k` | \|命中金标文档\| / \|金标文档\|（跨文档题） | ragent |
+| `evidence_keyword_hit` | gold_evidence.keyword 是否出现在返回 chunk 文本 | ragent |
+| 字段一致率 | 需求卡字段（status / target_metrics / time_range / scope / dimensions）逐项比对 | ReportAgent |
+| `latency_ms` | 端到端实测（含网络与模型） | 两者 |
+| `execution_accuracy` | 金标 SQL **现跑**结果与实测结果多重集比对（容差、`NULL≠空串≠0`） | ReportAgent（在它自己的 runner 里） |
+
+**口径纪律**：数字必须能被别人复算。金标 SQL 跟着种子数据走，不把金额写死在断言里。
+
+## 三、判定标准三层
+
+| 层 | 判什么 | 进 pass 率 | 例子 |
+|---|---|---|---|
+| **deterministic** | 结构、字段、集合、命中，可离线复算 | ✅ | 需求卡 `status=complete`；`time_range` 归一后相等 |
+| **gold** | 金标比对（现跑 SQL / 现查 doc_id / 关键词） | ✅ | `doc_hit@5`；`evidence_keyword_hit` |
+| **advisory / deferred** | 启发式或本轮没覆盖 | ❌（页面标注） | 「拒答题是否真的拒答」需要生成回答；执行/报告层需要 confirm |
+
+> 只把前两层算作证据；`deferred` 不是"通过"，是"没测"。这条纪律比任何指标都重要。
+
+## 四、流程：AI 辅助，但结论要人复核
+
+1. **AI 辅助**（可以外包给模型）：批量生成用例草稿、拆解失败原因、归类日志、找覆盖缺口；
+2. **人复核**（不可外包）：参考答案的**事实正确性**、判定的**口径**、结论的**适用范围**；
+3. 资产里用 `gold_source` 记录**谁核验过、何时核验**（如 `human_verified_2026-08-23`），
+   未核验的一律标 `original_unverified`，平台把它显示为「仅参考」。
+
+真实踩坑（写在这里当反面教材）：某次压缩逻辑的合成用例全绿，换真数据一跑就抓到三个缺陷
+（裸月份/裸年份被压掉、折叠后体积反而变大）——**AI 生成的用例能覆盖"形状"，覆盖不了"真数据的坑"**。
+
+## 五、失败归因分类（报缺陷时统一用）
+
+| 归因 | 含义 | 该谁修 |
+|---|---|---|
+| `oracle` | 判定标准本身错了（金标写错、口径不一致） | 资产维护者 |
+| `capability` | 模型/检索能力不足 | 算法 |
+| `contract` | 接口契约漂移（字段改名、事件丢失） | 工程 |
+| `environment` | 服务未起、凭据、网络、数据没入库 | 运维 / 环境 |
+| `flaky` | 非确定性抖动（同输入不同结果） | 先补齐 trace 再判 |
+
+## 六、覆盖矩阵（当前真实状态）
+
+| 能力面 | 已覆盖层 | 未覆盖 |
+|---|---|---|
+| ReportAgent 需求理解 | deterministic（字段） | 澄清质量、多轮继承 |
+| ReportAgent 执行 | gold（在其 `evaluation/runner.py` 里，本平台 deferred） | 平台内未接 |
+| ReportAgent 报告 | 结构校验（其 validator） | 平台内 deferred |
+| ragent 检索 | gold（doc_id / 关键词） | 重排质量、跨库污染 |
+| ragent 生成 | 历史快照（LLM 裁判，仅参考） | 平台内 deferred |
+
+**这张表就是"诚实清单"**：任何汇报都要带它，说明这次结论覆盖了哪几层、哪几层没测。
+
+## 七、职责边界
+
+- 评测方交付**证据与风险说明**，不替代发布门禁、不替代业务验收、不替代权限审计与安全裁决；
+- 重大风险（越权、幻觉编造、错误执行造成错数）**第一时间升级**给对应责任方，不等报告写完；
+- 结论必须带"环境 + 版本 + 覆盖层 + 证据档位"，缺一项就是无效结论（见 `evidence-weights.md`）。
