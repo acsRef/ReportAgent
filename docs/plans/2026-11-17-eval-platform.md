@@ -205,3 +205,17 @@ POST /api/run?case_id=explicit-region-sales-ranking
 - 三一年报：`adapters.ragent_upload` 重传 3 份 PDF（`eval/sany_annual_reports/*.pdf`）。
 
 **恢复后必须做的事**：document_id 会变 → 重建 `assets/rag_doc_map.json`（资产重挂），否则 65 题 doc_hit 全假失败。
+
+
+## 事故恢复的运维发现（2026-11-17 晚，写进文档免得下次再踩）
+
+1. **入库是串行队列，且大文件会饿死后来的小文件**：先用 MCP `ingest_table_schemas` 灌 14+ 份字典文档
+   （每份 wait_indexed 串行），结果 3 份年报 PDF 卡在 `processing/indexing` 一个多小时，
+   `chunk_count=0`。处置：停掉串行灌库脚本 → 重启进程（BackgroundTasks 随进程丢失）→ 清掉 17 份
+   `indexing` 孤儿文档 → 只重传 3 份 PDF。**教训：批量灌库与"立刻要结果"的评测不能并行。**
+2. **PDF 入库真正的瓶颈是 OCR**：日志里 `OCR on page.number=80/81` + RapidOCR，
+   250 页 × 3 份 + 每批元数据 LLM 调用 → 分钟级到十分级。任何"上传后 N 秒断言可召回"的用例都是错的。
+3. **重启会留下 `indexing` 孤儿**：进程内 BackgroundTasks 被杀后文档状态不会回滚，
+   `documents.status` 永远是 `indexing`。恢复动作必须包含「清 stuck 文档」，否则队列看起来永远在忙。
+4. **ragent 的 `GET /documents` 加了 `kb_id`（上游修复，见 `acsRef/Rag` `3630539`）**：
+   平台侧的客户端过滤保留（双保险），但真正的用途是让"按库统计/清理"不再依赖拿全库。
