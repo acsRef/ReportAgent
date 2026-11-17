@@ -2,16 +2,16 @@
   "note": "资产重挂（re-anchoring）：rag_testset.json 的 gold_documents 是 2026-08 首次入库时的 document_id；2026-11 三一重工三份年报重新入库后 document_id 变了（库内 public.documents.document_id）。平台比对前先按本表映射，依据 = 文件名年份。重入库/删库后必须重建本表——这是资产维护动作，不写死在代码里。",
   "kb_id": "7e88fe99ccf541f3",
   "kb_name": "三一重工年报",
-  "reanchored_at": "2026-11-17（第二次：事故恢复后重传 PDF）",
+  "reanchored_at": "2026-11-17（第三次：清理卡死队列后重传）",
   "map": {
-    "c70ad0ddcb184c55": "81d98b3d18414d32",
-    "f4b0be8aaa644522": "75b8a4390d4e4d9a",
-    "aebd3be225b8471f": "a558429c877f43c1"
+    "c70ad0ddcb184c55": "8b6beb50cd7446cd",
+    "f4b0be8aaa644522": "d0b85859a4b3495e",
+    "aebd3be225b8471f": "fa9eb4d1957347e8"
   },
   "year_to_doc": {
-    "2023": "81d98b3d18414d32",
-    "2024": "75b8a4390d4e4d9a",
-    "2025": "a558429c877f43c1"
+    "2023": "8b6beb50cd7446cd",
+    "2024": "d0b85859a4b3495e",
+    "2025": "fa9eb4d1957347e8"
   },
-  "evidence": "2026-11-17 平台清理逻辑误删全部文档（GET /documents 不支持 kb_id 过滤）→ 用 mcp_server ingest_table_schemas / ingest_faq 重建字典与 FAQ，重传 3 份 PDF。新 document_id: 81d9=2023 / 75b8=2024 / a558=2025。写入本表时三份 PDF 仍在 processing，索引完成后需复核 doc_hit 再把结论写进博客/汇报。"
+  "evidence": "2026-11-17 事故恢复：清理逻辑误删全部文档 → 用 mcp_server 重建字典/FAQ、重传 PDF；首轮 PDF 卡在 indexing（队列被 14 份字典文档阻塞）→ 重启进程 + 清掉 stuck 文档后重传。当前 document_id: 8b6b=2023 / d0b8=2024 / fa9e=2025。**索引完成前 doc_hit 不可信。**"
 }
