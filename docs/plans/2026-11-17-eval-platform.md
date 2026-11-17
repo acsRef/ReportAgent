@@ -146,3 +146,37 @@ POST /api/run?case_id=explicit-region-sales-ranking
    跨文档召回阈值从 0.5 抬到 0.67（命中一半对跨文档题太弱）。
 
 **未做**：ragent 未启动，检索层 live 未跑（适配器与判定已就绪，启动 ragent 后可直接点）。
+
+
+## 第二轮：RAG 细节与场景测试（2026-11-17，用户：「rag 系统也要多测试，测测增量更新这些小功能」）
+
+**启动 ragent 后**（`:8000`，与 ReportAgent 共用同一个 PG：`public.documents/chunks/knowledge_bases`）：
+
+| 项 | 结果 |
+|---|---|
+| 生产库 | 3 个 KB：三一重工年报（3 PDF / 1381 chunks）/ 数据字典 / FAQ |
+| RAG 用例 live | Q01 / Q26 / Q56 **全 pass**（doc_hit + evidence_keyword_hit；answer 层 deferred） |
+| 场景 1 增量更新 | **pass**（297s）：同一 `document_id` 覆盖 → 文档数仍为 1、新 token 可召回、旧 token 不再召回 |
+| 场景 2 删除后无脏召回 | **pass**（153s）：删后列表清空、检索不返回该文档 |
+| 场景 3 跨库隔离 | **pass**（146s）：pin 生产库检索不返回临时库文档 |
+| 自测 | **20 passed**（新增场景注册表/`_hit`/`_index_problem`/timeout verdict 4 例） |
+
+### 这轮撞出来的四个真问题
+
+1. **资产重挂（最重要）**：`gold_documents` 是 2026-08 首次入库的 document_id，重新入库后变成
+   `e15c…/61be…/a005…` → 不重挂就**全量假失败**。落法：`eval_platform/assets/rag_doc_map.json` +
+   `registry.map_gold_documents()`，页面注明「已按 rag_doc_map 重挂」；纪律写进 `asset-registry.md`。
+2. **ragent 登录限流**：10 次 / 5 分钟 / IP。平台每次调用都登录 → 直接 429。修：进程内 token 缓存（9 min）
+   + 支持 `RA_TOKEN` / `RAG_TOKEN` 注入。
+3. **入库很慢**：3 行 markdown 从上传到 `indexed` 实测 **141s**（分块 + embedding）→ 场景等待上限 90s 太短，
+   第一次三个场景全 fail。修：上限 300s，且把「入库超时」记成 `timeout`、verdict 记 `error`
+   （**工具上限 ≠ 产品失败**）。
+4. **`_wait_indexed` 的文档列表过滤没问题**（`GET /documents?kb_id=` 实测只返回本库），最初怀疑过滤失效是误判，
+   已在文档里写清楚，避免下次再怀疑错地方。
+
+### 对外展示页
+
+- `eval_platform/export_snapshot.py`：从平台 API 导出**自包含静态页**（资产/场景/风险库/最近运行/快照/方法摘要）
+  → 博客 `source/eval/index.html`（25.5 KB）+ `eval_platform/assets/snapshot.json`（可入库的快照）；
+- 博客：`skip_render: ['graph/**','eval/**']`、about 增「评测平台」小节、新文章 `eval-platform.md`
+  （项目深挖的横向篇：讲三层判定 / 资产重挂 / 超时与失败的区分）。

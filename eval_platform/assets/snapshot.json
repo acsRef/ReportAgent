@@ -1,0 +1,800 @@
+{
+  "generated_at": "2026-11-17T19:19:13",
+  "overview": {
+    "assets": 4,
+    "cases": {
+      "reportagent": 21,
+      "ragent": 65
+    },
+    "risks": 46,
+    "human_verified": 15,
+    "gold_documents": 64,
+    "rag_snapshot": {
+      "available": true,
+      "questions": 65,
+      "scored": 65,
+      "mean_score": 2.23,
+      "normalized": 74.4,
+      "by_category": {
+        "A-单文档事实抽取": {
+          "n": 10,
+          "mean": 2.5
+        },
+        "B-表格理解与单位换算": {
+          "n": 6,
+          "mean": 2.0
+        },
+        "C-跨文档对比": {
+          "n": 8,
+          "mean": 1.88
+        },
+        "D-计算与多跳推理": {
+          "n": 7,
+          "mean": 2.29
+        },
+        "E-时序与追溯调整": {
+          "n": 6,
+          "mean": 1.67
+        },
+        "F-口径与概念辨析": {
+          "n": 6,
+          "mean": 1.83
+        },
+        "G-实体消歧": {
+          "n": 6,
+          "mean": 3.0
+        },
+        "H-错误前提纠偏": {
+          "n": 5,
+          "mean": 2.2
+        },
+        "I-拒答与知识边界": {
+          "n": 5,
+          "mean": 2.8
+        },
+        "J-细节与脚注": {
+          "n": 6,
+          "mean": 2.17
+        }
+      }
+    },
+    "ra_memory_gold": {
+      "memories": 0,
+      "queries": 30,
+      "keys": [
+        "description",
+        "memories",
+        "memory_bucket_keywords",
+        "queries",
+        "version"
+      ]
+    },
+    "versions": {
+      "reportagent": "df50eaf",
+      "ragent": "0318b02"
+    },
+    "run_stats": {
+      "total": 15,
+      "by_verdict": {
+        "error": 1,
+        "fail": 5,
+        "pass": 9
+      },
+      "by_project": {
+        "ragent": 12,
+        "reportagent": 3
+      }
+    },
+    "health": {
+      "reportagent": {
+        "up": true,
+        "base_url": "http://127.0.0.1:8100",
+        "detail": "{\"status\":\"ok\"}"
+      },
+      "ragent": {
+        "up": true,
+        "base_url": "http://127.0.0.1:8000",
+        "detail": "{\"status\":\"ok\",\"db\":true}"
+      },
+      "platform": "ok"
+    }
+  },
+  "assets": [
+    {
+      "id": "ra-baseline",
+      "project": "reportagent",
+      "path": "evaluation/baseline_cases.json",
+      "cases": 21,
+      "coverage": "需求理解 / 执行 / 报告 / 行为 4 段期望，9 维字段（requirement·execution·report·behavior·memory·retrieval·sql·tool_selection·repair）",
+      "source": "人工设计（P0 冻结基线，逐例带 golden SQL）",
+      "labeling": "expectations 手写；execution_accuracy 用金标 SQL 现跑比对",
+      "version": "df50eaf · 读取于 2026-11-17",
+      "reuse": "`python -m evaluation.runner`（需后端在跑）；本平台复用其「字段期望」做需求卡比对",
+      "tier": "仅参考（未核验）",
+      "maintain": "加 case 只改 JSON，`schema.py` 冻结不动"
+    },
+    {
+      "id": "ra-memory-gold",
+      "project": "reportagent",
+      "path": "evaluation/memory_gold_cases.json",
+      "cases": 30,
+      "coverage": "记忆召回：必中 / 禁召（forbidden）/ 保守空召回（expect_none）",
+      "source": "人工设计（词交确定性）",
+      "labeling": "hand-written gold + forbidden 列表",
+      "version": "df50eaf",
+      "reuse": "`backend/tests/persistence/test_memory_gold_recall.py`；真 embedding runner",
+      "tier": "仅参考（未核验）",
+      "maintain": "25 记忆 / 30 金标 query"
+    },
+    {
+      "id": "rag-sany",
+      "project": "ragent",
+      "path": "eval/sany_annual_reports/rag_testset.json",
+      "cases": 65,
+      "coverage": "10 类别（A–J）· 64 题带 gold_documents · 15 题人工核验（含 gold_evidence 关键词）",
+      "source": "基于三一重工 2023–2025 三份年报，人工出题 + 人工核验子集",
+      "labeling": "gold_source 字段区分 `human_verified_2026-08-23` / `original_unverified`",
+      "version": "0318b02",
+      "reuse": "本平台：检索层按 gold_documents 算命中，不跑 LLM 裁判",
+      "tier": "受限可用（人工核验）",
+      "maintain": "加题改 JSON；核实一题就把 gold_source 改成 human_verified"
+    },
+    {
+      "id": "rag-eval-snapshot",
+      "project": "ragent",
+      "path": "eval/sany_annual_reports/eval_results.json",
+      "cases": 65,
+      "coverage": "全量 65 题历史跑分（LLM 裁判 0–3 分）",
+      "source": "历史运行产物",
+      "labeling": "LLM 裁判评分，未逐题人工复核",
+      "version": "快照（不可重算，见证据分量表：仅参考）",
+      "reuse": "只做背景对照；不作 live 判定依据",
+      "tier": "仅参考（未核验）",
+      "maintain": "重跑 `eval/eval_single.py` 才更新"
+    }
+  ],
+  "risk": [
+    {
+      "id": "RA-R1",
+      "risk": "误答",
+      "title": "口径被换：问「销售额」答成「净销售额」",
+      "trigger": "候选用 `sorted(known_metrics)[:3]`，中文码点把「净」排在「销」前",
+      "evidence": "plan 2026-11-10-time-range-and-metric-slot-backfill；execution_accuracy 首跑 fail:values",
+      "guard": "`match_metric_terms` 原话命中优先 + 夹具逐字取口径"
+    },
+    {
+      "id": "RA-R2",
+      "risk": "错误执行",
+      "title": "过滤写进 LEFT JOIN 的 ON 子句 = 静默不过滤",
+      "trigger": "`region='华南'`/`year=2026` 写在 ON，结果算出全库 9.38 亿（真值 3936 万）",
+      "evidence": "plan 2026-11-11-sql-filter-in-join-on（C1/C2 两道确定性契约闸）",
+      "guard": "必需过滤必须在 WHERE；缺失/落 ON 直接进 repair"
+    },
+    {
+      "id": "RA-R3",
+      "risk": "不可追溯",
+      "title": "失败没有现场：崩了只留 phase=generating",
+      "trigger": "内存缓冲导致 span 丢失、`last_failed_action` 为空、report_version 0 行",
+      "evidence": "plan 2026-11-11-failure-recovery-durability（三次强杀实验）",
+      "guard": "启动孤儿收敛 + span 增量落盘 + `interrupted` 可重试"
+    },
+    {
+      "id": "RA-R4",
+      "risk": "幻觉",
+      "title": "编造表名/列名（dim_supplier、sales_amount）",
+      "trigger": "模型自由生成 SQL 时引入 schema 不存在的对象",
+      "evidence": "SQL 安全闸 6 层（含表 allowlist + EXPLAIN）；plan 2026-10-28-mainline-correctness-fixes",
+      "guard": "SELECT-only + 关键字黑名单 + AST + 表 allowlist + EXPLAIN"
+    },
+    {
+      "id": "RA-R5",
+      "risk": "越权",
+      "title": "跨用户读别人的会话",
+      "trigger": "session 端点只按 session_id 查，不校验 owner",
+      "evidence": "A-2 安全加固；`test_cross_user_isolation.py`；404 不区分「不存在/不是你的」",
+      "guard": "所有 session 端点强制 (user_id, session_id) 双条件"
+    },
+    {
+      "id": "RAG-Q11",
+      "risk": "单位换算",
+      "title": "三一重工年报“主要会计数据”表的金额单位是什么？",
+      "trigger": "25,930",
+      "evidence": "B-表格理解与单位换算 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q11",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q12",
+      "risk": "单位换算",
+      "title": "截至2025年末，三一重工总资产是多少亿元人民币？",
+      "trigger": "173,299,138",
+      "evidence": "B-表格理解与单位换算 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q12",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q13",
+      "risk": "单位换算",
+      "title": "2023年三一重工研发投入合计多少？占营业收入比例多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "B-表格理解与单位换算 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q13",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q14",
+      "risk": "单位换算",
+      "title": "2024年三一重工研发投入资本化的比重是多少？资本化金额多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "B-表格理解与单位换算 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q14",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q15",
+      "risk": "单位换算",
+      "title": "三一重工对娄底中兴液压件有限公司的持股比例是多少？该公司2025年净利润多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "B-表格理解与单位换算 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q15",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q16",
+      "risk": "单位换算",
+      "title": "2024年末三一重工母公司和主要子公司在职员工各多少人？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "B-表格理解与单位换算 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q16",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q25",
+      "risk": "多跳算错",
+      "title": "2025年三一重工海外四大区域收入分别是多少？合计是否与国际主营业务收入总额吻合？",
+      "trigger": "238.9",
+      "evidence": "D-计算与多跳推理 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q25",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q26",
+      "risk": "多跳算错",
+      "title": "2025年三一重工每股合计分红多少（含已实施的中期分红与年度预案）？",
+      "trigger": "3.1",
+      "evidence": "D-计算与多跳推理 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q26",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q27",
+      "risk": "多跳算错",
+      "title": "三一重工2023-2025年三年归母净利润累计约为多少亿元？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "D-计算与多跳推理 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q27",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q28",
+      "risk": "多跳算错",
+      "title": "2025年三一重工的归母净利率约为多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "D-计算与多跳推理 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q28",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q29",
+      "risk": "多跳算错",
+      "title": "2024年三一重工经营现金流净额约是当年归母净利润的多少倍？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "D-计算与多跳推理 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q29",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q30",
+      "risk": "多跳算错",
+      "title": "三一重工非洲区域收入从2023年到2025年增长了多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "D-计算与多跳推理 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q30",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q31",
+      "risk": "多跳算错",
+      "title": "结合三年数据，判断“三一重工盈利改善主要靠国内市场需求爆发”这一说法是否成立？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "D-计算与多跳推理 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q31",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q32",
+      "risk": "口径矛盾",
+      "title": "三一重工2023年归母净利润到底是4,527,498千元还是4,527,451千元？",
+      "trigger": "4,527,498",
+      "evidence": "E-时序与追溯调整 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q32",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q33",
+      "risk": "口径矛盾",
+      "title": "2025年三季报…不对，请回答：2024年归母净利润在2024年报和2025年报中分别是多少？为什么不一样？",
+      "trigger": "5,955,567",
+      "evidence": "E-时序与追溯调整 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q33",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q34",
+      "risk": "口径矛盾",
+      "title": "三一重工2024年基本每股收益是多少？（注意不同年报披露值）",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "E-时序与追溯调整 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q34",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q35",
+      "risk": "口径矛盾",
+      "title": "三一重工在2023年报中预计2024年营业收入增长10%以上，实际完成了吗？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "E-时序与追溯调整 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q35",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q36",
+      "risk": "口径矛盾",
+      "title": "2023年度分红是什么时候实施的？每股派多少、共派发多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "E-时序与追溯调整 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q36",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q37",
+      "risk": "口径矛盾",
+      "title": "三一重工2025年半年度分红方案是什么？何时发放？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "E-时序与追溯调整 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q37",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q38",
+      "risk": "口径混淆",
+      "title": "2023年三一重工“研发费用”和“研发投入合计”分别是多少？为什么不一样？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "F-口径与概念辨析 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q38",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q39",
+      "risk": "口径混淆",
+      "title": "2025年三一重工归母净利润和扣非归母净利润分别是多少？差额说明什么？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "F-口径与概念辨析 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q39",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q40",
+      "risk": "口径混淆",
+      "title": "2023年三一重工“国际收入占主营业务收入比重60.48%”，能理解为国际收入占总营收60.48%吗？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "F-口径与概念辨析 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q40",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q41",
+      "risk": "口径混淆",
+      "title": "“2025年度利润分配预案每10股派1.8元”是已经实施的分红吗？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "F-口径与概念辨析 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q41",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q42",
+      "risk": "口径混淆",
+      "title": "2025年报主要会计数据表中，2024年数据为什么会出现“调整后”和“调整前”两列？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "F-口径与概念辨析 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q42",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q43",
+      "risk": "口径混淆",
+      "title": "2024年报说“国际业务毛利率29.72%，上升0.26个百分点”，2023年报说2023年国际业务毛利率30.78%，矛盾吗？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "F-口径与概念辨析 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q43",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q44",
+      "risk": "实体混淆",
+      "title": "“三一集团”就是三一重工吗？两者什么关系？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "G-实体消歧 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q44",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q45",
+      "risk": "实体混淆",
+      "title": "三一重工的董事长是谁？梁稳根在公司担任什么职务？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "G-实体消歧 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q45",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q46",
+      "risk": "实体混淆",
+      "title": "三一重工2025年年报和2023年年报中的境内签字会计师分别是谁？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "G-实体消歧 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q46",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q47",
+      "risk": "实体混淆",
+      "title": "600031和06031是三一重工的同一只股票吗？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "G-实体消歧 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q47",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q48",
+      "risk": "实体混淆",
+      "title": "普茨迈斯特（Putzmeister）与三一重工是什么关系？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "G-实体消歧 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q48",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q49",
+      "risk": "实体混淆",
+      "title": "俞宏福在三一重工担任什么职务？2025年税前报酬多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "G-实体消歧 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q49",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q50",
+      "risk": "错误前提（迎合性）",
+      "title": "2024年三一重工混凝土机械收入同比增长了多少？",
+      "trigger": "混凝土",
+      "evidence": "H-错误前提纠偏 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q50",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q51",
+      "risk": "错误前提（迎合性）",
+      "title": "为什么三一重工连续三年加大研发投入金额？",
+      "trigger": "58.65",
+      "evidence": "H-错误前提纠偏 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q51",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q52",
+      "risk": "错误前提（迎合性）",
+      "title": "2025年三一重工分红力度明显缩水了吧？年度预案才每10股1.8元，远低于2024年的3.6元。",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "H-错误前提纠偏 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q52",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q53",
+      "risk": "错误前提（迎合性）",
+      "title": "三一重工挖掘机2023年是全球销量第一，对吗？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "H-错误前提纠偏 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q53",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q54",
+      "risk": "错误前提（迎合性）",
+      "title": "2024年三一重工海外产品覆盖的国家数量比2023年增加了多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "H-错误前提纠偏 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q54",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q55",
+      "risk": "幻觉 / 知识边界",
+      "title": "三一重工2025年新能源（电动化）产品的收入是多少亿元？",
+      "trigger": "86.4",
+      "evidence": "I-拒答与知识边界 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q55",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q56",
+      "risk": "幻觉（应拒答）",
+      "title": "三一重工2026年的营业收入增长目标是多少？",
+      "trigger": "2026",
+      "evidence": "I-拒答与知识边界 · human_verified_2026-08-23 · 受限可用（人工核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q56",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q57",
+      "risk": "幻觉 / 知识边界",
+      "title": "中联重科2025年的营业收入是多少？与三一重工相比如何？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "I-拒答与知识边界 · original_unverified · 仅参考（未核验）",
+      "guard": "无金标，仅人工评审",
+      "case_id": "Q57",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q58",
+      "risk": "幻觉 / 知识边界",
+      "title": "三一重工2025年在德国市场的销售额是多少？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "I-拒答与知识边界 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q58",
+      "project": "ragent"
+    },
+    {
+      "id": "RAG-Q59",
+      "risk": "幻觉 / 知识边界",
+      "title": "2025年末三一重工H股的总市值是多少港元？",
+      "trigger": "（该题未给 gold_evidence）",
+      "evidence": "I-拒答与知识边界 · original_unverified · 仅参考（未核验）",
+      "guard": "检索命中 gold_documents / 回答含金标关键词",
+      "case_id": "Q59",
+      "project": "ragent"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "rag-incremental-upsert",
+      "name": "增量更新（同一文档覆盖）",
+      "project": "ragent",
+      "desc": "同一 document_id 重新上传：文档数不增长、新内容可召回、旧内容被替换",
+      "steps": [
+        "v1 入库",
+        "v1 可召回",
+        "v2 入库",
+        "覆盖而非新增",
+        "v2 新内容可召回",
+        "v1 旧内容已被替换"
+      ]
+    },
+    {
+      "id": "rag-delete-no-dirty-recall",
+      "name": "删除后无脏召回",
+      "project": "ragent",
+      "desc": "删文档后：列表清空、检索不再返回该文档内容",
+      "steps": [
+        "入库",
+        "删除前可召回",
+        "删除接口返回成功",
+        "文档列表已清空",
+        "删除后无脏召回"
+      ]
+    },
+    {
+      "id": "rag-kb-isolation",
+      "name": "跨库隔离（pin kb_ids）",
+      "project": "ragent",
+      "desc": "指定别的知识库检索时，不得返回本库文档（防跨库污染）",
+      "steps": [
+        "临时库入库",
+        "本库可召回",
+        "pin 其他库时不串本库文档"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "run-9a2d3b4d3d",
+      "created_at": "2026-11-17T11:18:57+00:00",
+      "project": "ragent",
+      "case_id": "rag-delete-no-dirty-recall",
+      "title": "删除后无脏召回",
+      "verdict": "pass",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-ea9dbf721a",
+      "created_at": "2026-11-17T11:16:39+00:00",
+      "project": "ragent",
+      "case_id": "rag-incremental-upsert",
+      "title": "增量更新（同一文档覆盖）",
+      "verdict": "pass",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-ef5702b5ab",
+      "created_at": "2026-11-17T11:11:42+00:00",
+      "project": "ragent",
+      "case_id": "rag-kb-isolation",
+      "title": "跨库隔离（pin kb_ids）",
+      "verdict": "pass",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-a2c227fe80",
+      "created_at": "2026-11-17T11:09:16+00:00",
+      "project": "ragent",
+      "case_id": "rag-delete-no-dirty-recall",
+      "title": "删除后无脏召回",
+      "verdict": "pass",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-bf546eb178",
+      "created_at": "2026-11-17T11:03:02+00:00",
+      "project": "ragent",
+      "case_id": "rag-kb-isolation",
+      "title": "跨库隔离（pin kb_ids）",
+      "verdict": "fail",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-d43085af19",
+      "created_at": "2026-11-17T11:01:27+00:00",
+      "project": "ragent",
+      "case_id": "rag-delete-no-dirty-recall",
+      "title": "删除后无脏召回",
+      "verdict": "fail",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-2797e0526a",
+      "created_at": "2026-11-17T10:59:51+00:00",
+      "project": "ragent",
+      "case_id": "rag-incremental-upsert",
+      "title": "增量更新（同一文档覆盖）",
+      "verdict": "fail",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-d4d9716513",
+      "created_at": "2026-11-17T10:51:55+00:00",
+      "project": "ragent",
+      "case_id": "Q56",
+      "title": "三一重工2026年的营业收入增长目标是多少？",
+      "verdict": "pass",
+      "tier": "受限可用（人工核验）",
+      "latency_ms": 1390.0
+    },
+    {
+      "run_id": "run-cc7891e82b",
+      "created_at": "2026-11-17T10:51:54+00:00",
+      "project": "ragent",
+      "case_id": "Q26",
+      "title": "2025年三一重工每股合计分红多少（含已实施的中期分红与年度预案）？",
+      "verdict": "pass",
+      "tier": "受限可用（人工核验）",
+      "latency_ms": 4469.0
+    },
+    {
+      "run_id": "run-081375e313",
+      "created_at": "2026-11-17T10:51:49+00:00",
+      "project": "ragent",
+      "case_id": "Q01",
+      "title": "三一重工2023年的营业收入是多少？",
+      "verdict": "pass",
+      "tier": "受限可用（人工核验）",
+      "latency_ms": 250.0
+    },
+    {
+      "run_id": "run-b4a5410320",
+      "created_at": "2026-11-17T10:51:08+00:00",
+      "project": "ragent",
+      "case_id": "Q01",
+      "title": "三一重工2023年的营业收入是多少？",
+      "verdict": "fail",
+      "tier": "受限可用（人工核验）",
+      "latency_ms": 265.0
+    },
+    {
+      "run_id": "run-7e345266b0",
+      "created_at": "2026-11-17T10:49:25+00:00",
+      "project": "ragent",
+      "case_id": "Q01",
+      "title": "三一重工2023年的营业收入是多少？",
+      "verdict": "fail",
+      "tier": "受限可用（人工核验）",
+      "latency_ms": 14656.0
+    },
+    {
+      "run_id": "run-5c223b1421",
+      "created_at": "2026-11-17T10:37:14+00:00",
+      "project": "reportagent",
+      "case_id": "explicit-region-sales-ranking",
+      "title": "2024年各区域销售额排名 —— 主干 explicit 查询，表+图+行数全链路",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 19563.0
+    },
+    {
+      "run_id": "run-8db20ef83b",
+      "created_at": "2026-11-17T10:36:33+00:00",
+      "project": "reportagent",
+      "case_id": "explicit-region-sales-ranking",
+      "title": "2024年各区域销售额排名 —— 主干 explicit 查询，表+图+行数全链路",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 9343.0
+    },
+    {
+      "run_id": "run-4ed6cbf14e",
+      "created_at": "2026-11-17T10:34:59+00:00",
+      "project": "reportagent",
+      "case_id": "explicit-region-sales-ranking",
+      "title": "2024年各区域销售额排名 —— 主干 explicit 查询，表+图+行数全链路",
+      "verdict": "error",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 8281.0
+    }
+  ]
+}

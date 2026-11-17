@@ -36,6 +36,7 @@ function initTabs() {
       btn.classList.add('active');
       $(`#tab-${btn.dataset.tab}`).classList.add('active');
       if (btn.dataset.tab === 'history') loadRuns();
+      if (btn.dataset.tab === 'scenario') loadScenarios();
       if (btn.dataset.tab === 'method') loadDocs();
     });
   });
@@ -223,6 +224,64 @@ function renderRunOut(out) {
       ${checks}
     </table>
     <pre class="block">${esc(JSON.stringify(r.observation, null, 2))}</pre>`;
+}
+
+/* ---------------- scenarios ---------------- */
+async function loadScenarios() {
+  const items = await api('/api/scenarios');
+  $('#tab-scenario').innerHTML = `
+    <p class="small muted">场景测试 = 多步、有状态、会改数据的小功能验证：每个场景自建临时知识库、跑完删干净，绝不碰生产库。</p>
+    <div class="grid">
+      ${items.map((s) => `
+        <div class="card">
+          <h3>${esc(s.name)}</h3>
+          <div class="sub">${esc(s.desc)}</div>
+          <div class="small muted mono" style="margin-top:6px">${esc(s.id)} · ${esc(s.project)}</div>
+          <ul class="small muted" style="margin:8px 0 12px 18px;padding:0">
+            ${(s.steps || []).map((x) => `<li>${esc(x)}</li>`).join('')}
+          </ul>
+          <button class="btn" data-scenario="${esc(s.id)}">运行场景</button>
+          <div id="sc-${esc(s.id)}"></div>
+        </div>`).join('')}
+    </div>`;
+  document.querySelectorAll('button[data-scenario]').forEach((btn) => {
+    btn.addEventListener('click', () => runScenario(btn.dataset.scenario, btn));
+  });
+}
+
+async function runScenario(id, btn) {
+  const box = $(`#sc-${id}`);
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = '运行中…';
+  box.innerHTML = '<p class="small muted">建临时知识库 → 上传 → 等入库 → 检索断言…</p>';
+  try {
+    const out = await api(`/api/scenarios/${encodeURIComponent(id)}/run`, { method: 'POST' });
+    if (out.status === 'unavailable') {
+      box.innerHTML = `<p class="tag fail">服务不可用：${esc(out.message)}</p>`;
+      return;
+    }
+    const r = out.result;
+    const tag = r.verdict === 'pass' ? 'pass' : r.verdict === 'fail' ? 'fail' : 'deferred';
+    box.innerHTML = `
+      <div class="row" style="margin-top:10px">
+        <span class="tag ${tag}">${esc(r.verdict)}</span>
+        <span class="small muted">${Math.round(r.duration_ms)} ms · run ${esc(r.run_id)}</span>
+      </div>
+      <table style="margin-top:8px">
+        <tr><th>步骤</th><th>结果</th><th>说明</th></tr>
+        ${(r.steps || []).map((s) => `<tr>
+          <td class="small">${esc(s.name)}</td>
+          <td><span class="tag ${s.status === 'pass' ? 'pass' : s.status === 'fail' ? 'fail' : 'deferred'}">${esc(s.status)}</span></td>
+          <td class="small muted">${esc(s.detail || '')}</td>
+        </tr>`).join('')}
+      </table>`;
+  } catch (err) {
+    box.innerHTML = `<p class="tag fail">运行失败：${esc(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 /* ---------------- assets ---------------- */

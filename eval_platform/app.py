@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from eval_platform import adapters, registry, runners, store
+from eval_platform import adapters, registry, runners, scenarios, store
 
 DOCS_DIR = Path(os.getenv(
     "EVAL_DOCS", str(registry.RA_REPO / "docs" / "evaluation"),
@@ -137,6 +137,29 @@ def run_detail(run_id: str) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="RUN_NOT_FOUND")
     return row
+
+
+@app.get("/api/scenarios")
+def scenario_list() -> list[dict[str, Any]]:
+    """场景测试（多步、有状态）：增量更新 / 删除 / 跨库隔离。"""
+    return scenarios.list_scenarios()
+
+
+@app.post("/api/scenarios/{scenario_id}/run")
+async def scenario_run(scenario_id: str) -> dict[str, Any]:
+    try:
+        result = await scenarios.run_scenario(scenario_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except adapters.ServiceUnavailable as exc:
+        return {"status": "unavailable", "message": str(exc),
+                "hint": "ragent 服务未启动或凭据不通；历史与文档仍可查看"}
+    env = _env_snapshot()
+    run_id = store.save_run(
+        {**result, "case_id": scenario_id, "title": result["name"], "tier": "运行时实测"},
+        env=env,
+    )
+    return {"status": "ok", "run_id": run_id, "result": {**result, "run_id": run_id}, "env": env}
 
 
 @app.get("/api/risk")

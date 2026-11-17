@@ -148,6 +148,42 @@ def test_service_unavailable_is_typed() -> None:
     assert issubclass(adapters.ServiceUnavailable, RuntimeError)
 
 
+# --- 场景测试（不真的打服务：只测注册表与判定辅助） ------------------------
+
+
+class TestScenarios:
+    def test_registry_covers_incremental_delete_isolation(self) -> None:
+        from eval_platform import scenarios
+
+        ids = {s["id"] for s in scenarios.list_scenarios()}
+        assert ids == {"rag-incremental-upsert", "rag-delete-no-dirty-recall", "rag-kb-isolation"}
+        assert all(s["steps"] for s in scenarios.list_scenarios())
+
+    def test_hit_helper(self) -> None:
+        from eval_platform import scenarios
+
+        items = [{"document_id": "d1", "text": "关键标识：ALPHA12"}]
+        assert scenarios._hit(items, "ALPHA12", "d1") == (True, True)
+        assert scenarios._hit(items, "ALPHA12", "d2") == (False, True)
+        assert scenarios._hit(items, "BETA99") == (True, False)
+
+    def test_index_problem_distinguishes_timeout_from_failure(self) -> None:
+        """入库超时是**工具上限**，不是产品失败——判定必须分开，否则会误报。"""
+        from eval_platform import scenarios
+
+        assert scenarios._index_problem({"status": "indexed", "chunk_count": 1})[0] == "pass"
+        assert scenarios._index_problem({"status": "failed"})[0] == "fail"
+        assert scenarios._index_problem({"status": "timeout"})[0] == "timeout"
+
+    def test_run_verdict_timeout_is_error_not_fail(self) -> None:
+        from eval_platform import scenarios
+
+        run = scenarios._Run()
+        run.step("入库", False, "超时", status="timeout")
+        run.step("可召回", False, "跳过", status="skipped")
+        assert run.verdict == "error"
+
+
 # --- HTTP 面（TestClient，不触发 live 调用） --------------------------------
 
 
@@ -170,3 +206,6 @@ def test_http_surface() -> None:
     assert "判定标准" in md
 
     assert client.get("/api/cases/nope").status_code == 404
+
+    scen = client.get("/api/scenarios").json()
+    assert {s["id"] for s in scen} >= {"rag-incremental-upsert"}

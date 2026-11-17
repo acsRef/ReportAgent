@@ -26,6 +26,23 @@
 | `rag-sany` | ragent-py | 65 | 10 类别（A–J），64 题带 `gold_documents`，15 题人工核验带 `gold_evidence` | `gold_source` 区分 `human_verified_*` / `original_unverified` | 受限可用（人工核验） |
 | `rag-eval-snapshot` | ragent-py | 65 | 历史跑分（LLM 裁判 0–3） | LLM 裁判，未逐题复核 | 仅参考 |
 
+## 资产重挂（re-anchoring）：今天真踩到的坑
+
+`rag_testset.json` 里的 `gold_documents` 是 **2026-08 首次入库时**的 document_id。2026-11 三一重工三份年报
+重新入库后，`public.documents.document_id` 全变了：
+
+| 旧 gold id | 年份 | 当前 document_id |
+|---|---|---|
+| `c70ad0ddcb184c55` | 2023 | `e15c045948484d58` |
+| `f4b0be8aaa644522` | 2024 | `61be97f9c87742f5` |
+| `aebd3be225b8471f` | 2025 | `a005c3a33dea4d2a` |
+
+**不重挂的后果**：`doc_hit@5` 全量假失败（第一次跑 Q01 就是这样：检索明明命中，却被判 fail）。
+平台的处理：`eval_platform/assets/rag_doc_map.json` 记录映射，比对前先重挂；页面上会注明"已按 rag_doc_map 重挂"。
+
+> 纪律：**重入库 / 删库 / 换 embedding 模型都要重建这张表**，并在 commit message 里写明。
+> 这是资产维护动作，不许写死在代码或断言里。
+
 ## 维护规则
 
 1. **加用例**：改资产 JSON 即可，不动 schema（`evaluation/schema.py` 冻结）；
@@ -33,7 +50,8 @@
    并补 `gold_evidence.keyword`（平台会用关键词做检索命中判定）；
 3. **删用例**：只允许在覆盖率不下降时删；删了要在 commit message 写明原因；
 4. **版本绑定**：快照类资产（`eval_results.json`）不可重算，登记时必须标"快照"并注明生成时间；
-5. **不要写死数字**：金标 SQL / doc_id 可以写，金额、行数不许写死在断言里——直接跑出来比。
+5. **不要写死数字**：金标 SQL / doc_id 可以写，金额、行数不许写死在断言里——直接跑出来比；
+6. **重挂表要跟着库走**：库里 document_id 变了而 `rag_doc_map.json` 没更新 = 全部假失败（见上一节）。
 
 ## 缺口（下一轮该补的资产）
 

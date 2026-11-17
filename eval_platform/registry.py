@@ -20,6 +20,7 @@ RA_REPO = Path(os.getenv("RA_REPO", r"D:\PyProject\ReportAgent"))
 RAG_REPO = Path(os.getenv("RAG_REPO", r"D:\PyProject\ragent-py"))
 
 RA_BASELINE = RA_REPO / "evaluation" / "baseline_cases.json"
+DOC_MAP_PATH = Path(__file__).with_name("assets") / "rag_doc_map.json"
 RA_MEMORY_GOLD = RA_REPO / "evaluation" / "memory_gold_cases.json"
 RAG_TESTSET = RAG_REPO / "eval" / "sany_annual_reports" / "rag_testset.json"
 RAG_RESULTS = RAG_REPO / "eval" / "sany_annual_reports" / "eval_results.json"
@@ -183,6 +184,23 @@ def load_ragent_cases() -> list[Case]:
             ),
         ))
     return cases
+
+
+def load_rag_doc_map() -> dict[str, Any]:
+    """资产重挂表：gold_documents（旧 document_id）→ 当前库 document_id。
+
+    为什么必须有：重新入库后 document_id 会变，金标不重挂就会**全部假失败**。
+    这是资产维护动作（见 docs/evaluation/asset-registry.md），不是代码里的常量。
+    """
+    data = _read_json(DOC_MAP_PATH)
+    if not isinstance(data, dict):
+        return {"map": {}, "note": "未找到 rag_doc_map.json，gold_documents 按原值比对"}
+    return data
+
+
+def map_gold_documents(gold: Iterable[str], mapping: dict[str, Any] | None = None) -> list[str]:
+    table = (mapping or load_rag_doc_map()).get("map") or {}
+    return [str(table.get(doc, doc)) for doc in gold]
 
 
 def load_memory_gold_summary() -> dict[str, Any]:

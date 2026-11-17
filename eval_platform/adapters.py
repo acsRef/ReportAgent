@@ -19,6 +19,9 @@ import httpx
 
 RA_BASE = os.getenv("RA_BASE", "http://127.0.0.1:8100")
 RAG_BASE = os.getenv("RAG_BASE", "http://127.0.0.1:8000")
+# 手动兜底：登录被限流（ragent 10 次/5 分钟/IP）时，可用 env 直接注入 token
+RA_TOKEN_ENV = os.getenv("RA_TOKEN", "").strip()
+RAG_TOKEN_ENV = os.getenv("RAG_TOKEN", "").strip()
 RA_USERNAME = os.getenv("RA_USERNAME", "admin")
 RA_PASSWORD = os.getenv("RA_PASSWORD", "admin123")
 RAG_USERNAME = os.getenv("RAG_USERNAME", "admin")
@@ -26,6 +29,23 @@ RAG_PASSWORD = os.getenv("RAG_PASSWORD", "admin123")
 RAG_KB_IDS = [x.strip() for x in os.getenv("RAG_KB_IDS", "").split(",") if x.strip()]
 RAG_KB_NAME_HINT = os.getenv("RAG_KB_NAME_HINT", "三一")
 HTTP_TIMEOUT = float(os.getenv("EVAL_HTTP_TIMEOUT", "90"))
+
+
+# 进程内 token 缓存：ragent 有「登录尝试过于频繁」限流（实测 429），
+# 每次调用都登录会被限；缓存 9 分钟，过期再登录。
+_TOKEN_CACHE: dict[str, tuple[str, float]] = {}
+_TOKEN_TTL_S = 540.0
+
+
+def _cached_token(key: str) -> str | None:
+    item = _TOKEN_CACHE.get(key)
+    if item and time.monotonic() - item[1] < _TOKEN_TTL_S:
+        return item[0]
+    return None
+
+
+def _remember_token(key: str, token: str) -> None:
+    _TOKEN_CACHE[key] = (token, time.monotonic())
 
 
 class ServiceUnavailable(RuntimeError):
@@ -78,7 +98,12 @@ async def reportagent_health() -> dict[str, Any]:
 
 
 async def reportagent_login() -> str:
-    """ReportAgent 的 /chat 也要 JWT（默认 admin/admin123）。"""
+    """ReportAgent 的 /chat 也要 JWT（默认 admin/admin123）；token 进程内缓存。"""
+    if RA_TOKEN_ENV:
+        return RA_TOKEN_ENV
+    cached = _cached_token("reportagent")
+    if cached:
+        return cached
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
@@ -91,6 +116,7 @@ async def reportagent_login() -> str:
         token = body.get("access_token") or body.get("token")
         if not token:
             raise ServiceUnavailable(f"ra login 返回里没有 token：{list(body)}")
+        _remember_token("reportagent", str(token))
         return str(token)
     except ServiceUnavailable:
         raise
@@ -150,8 +176,17 @@ async def ragent_health() -> dict[str, Any]:
         return {"up": False, "base_url": RAG_BASE, "detail": str(exc)[:160]}
 
 
-async def ragent_login() -> str:
-    """登录拿 JWT（默认 admin/admin123，可用 env 覆盖）。"""
+async def ragent_login(force: bool = False) -> str:
+    """登录拿 JWT（默认 admin/admin123，可用 env 覆盖）；token 进程内缓存。
+
+    ragent 对登录有频率限制（实测连续调用会 429「登录尝试过于频繁」），所以缓存 + 429 重试一次。
+    """
+    if RAG_TOKEN_ENV and not force:
+        return RAG_TOKEN_ENV
+    if not force:
+        cached = _cached_token("ragent")
+        if cached:
+            return cached
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
@@ -164,6 +199,7 @@ async def ragent_login() -> str:
         token = body.get("access_token") or body.get("token")
         if not token:
             raise ServiceUnavailable(f"login 返回里没有 token：{list(body)}")
+        _remember_token("ragent", str(token))
         return str(token)
     except ServiceUnavailable:
         raise
@@ -195,10 +231,13 @@ async def ragent_kb_ids(token: str) -> list[str]:
         raise ServiceUnavailable(f"ragent 知识库列表失败：{exc}") from exc
 
 
-async def ragent_retrieve(query: str, *, top_k: int = 5) -> CallResult:
-    """向量检索（不生成）：返回 top-k chunk + 分数 + degraded 标记。"""
+async def ragent_retrieve(query: str, *, top_k: int = 5, kb_ids: list[str] | None = None) -> CallResult:
+    """向量检索（不生成）：返回 top-k chunk + 分数 + degraded 标记。
+
+    `kb_ids` 显式给定时不再自动发现——场景测试要 pin 住临时知识库，或反过来验证隔离。
+    """
     token = await ragent_login()
-    kb_ids = await ragent_kb_ids(token)
+    kb_ids = kb_ids or await ragent_kb_ids(token)
     started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -219,3 +258,86 @@ async def ragent_retrieve(query: str, *, top_k: int = 5) -> CallResult:
         raise
     except Exception as exc:  # noqa: BLE001
         raise ServiceUnavailable(f"ragent 检索失败：{exc}") from exc
+
+
+# --- ragent：知识库 / 文档生命周期（增量更新类场景测试用） -------------------
+
+
+async def _rag_client(token: str, timeout: float = HTTP_TIMEOUT) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=timeout, headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+async def ragent_create_kb(name: str, *, visibility: str = "public") -> dict[str, Any]:
+    token = await ragent_login()
+    try:
+        async with await _rag_client(token, 20) as client:
+            resp = await client.post(
+                f"{RAG_BASE}/api/v1/kb", json={"name": name, "visibility": visibility},
+            )
+        if resp.status_code not in (200, 201):
+            raise ServiceUnavailable(f"create_kb {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+    except ServiceUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ServiceUnavailable(f"建知识库失败：{exc}") from exc
+
+
+async def ragent_delete_kb(kb_id: str) -> bool:
+    token = await ragent_login()
+    try:
+        async with await _rag_client(token, 20) as client:
+            resp = await client.delete(f"{RAG_BASE}/api/v1/kb/{kb_id}")
+        return resp.status_code in (200, 204)
+    except Exception:  # noqa: BLE001 - 清理失败不影响结论
+        return False
+
+
+async def ragent_upload(
+    kb_id: str, filename: str, content: bytes, *, document_id: str | None = None,
+) -> dict[str, Any]:
+    """上传一份文档（`document_id` 给了就是**覆盖/增量更新**语义）。"""
+    token = await ragent_login()
+    data = {"kb_id": kb_id}
+    if document_id:
+        data["document_id"] = document_id
+    try:
+        async with await _rag_client(token, 120) as client:
+            resp = await client.post(
+                f"{RAG_BASE}/api/v1/documents/upload",
+                files={"file": (filename, content, "text/markdown")},
+                data=data,
+            )
+        if resp.status_code != 200:
+            raise ServiceUnavailable(f"upload {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+    except ServiceUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ServiceUnavailable(f"上传文档失败：{exc}") from exc
+
+
+async def ragent_docs(kb_id: str) -> list[dict[str, Any]]:
+    token = await ragent_login()
+    try:
+        async with await _rag_client(token, 20) as client:
+            resp = await client.get(f"{RAG_BASE}/api/v1/documents", params={"kb_id": kb_id})
+        if resp.status_code != 200:
+            raise ServiceUnavailable(f"list docs {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+    except ServiceUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ServiceUnavailable(f"列文档失败：{exc}") from exc
+
+
+async def ragent_delete_doc(document_id: str) -> bool:
+    token = await ragent_login()
+    try:
+        async with await _rag_client(token, 20) as client:
+            resp = await client.delete(f"{RAG_BASE}/api/v1/documents/{document_id}")
+        return resp.status_code in (200, 204)
+    except Exception:  # noqa: BLE001
+        return False

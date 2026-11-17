@@ -162,17 +162,20 @@ def _judge_retrieval(case: registry.Case, items: list[dict[str, Any]], *, degrad
     checks: list[dict[str, Any]] = []
     returned_docs = [str(it.get("document_id") or "") for it in items]
     returned_text = "\n".join(str(it.get("text") or "") for it in items)
+    gold = registry.map_gold_documents(case.gold_documents)
 
-    if case.gold_documents:
-        hits = [d for d in case.gold_documents if d in returned_docs]
+    if gold:
+        hits = [d for d in gold if d in returned_docs]
         checks.append(_check(
             f"retrieval.doc_hit@{top_k}", _LAYER_GOLD,
             _STATUS_PASS if hits else _STATUS_FAIL,
-            expected=list(case.gold_documents), observed=returned_docs,
-            detail=f"命中 {len(hits)}/{len(set(case.gold_documents))} 个金标文档",
+            expected=gold, observed=returned_docs,
+            detail=f"命中 {len(hits)}/{len(set(gold))} 个金标文档"
+                   + ("" if list(case.gold_documents) == gold
+                      else "（已按 rag_doc_map 重挂旧 document_id）"),
         ))
-        if len(set(case.gold_documents)) > 1:
-            ratio = len(set(hits)) / len(set(case.gold_documents))
+        if len(set(gold)) > 1:
+            ratio = len(set(hits)) / len(set(gold))
             checks.append(_check(
                 f"retrieval.doc_recall@{top_k}", _LAYER_GOLD,
                 _STATUS_PASS if ratio >= 0.67 else _STATUS_FAIL,

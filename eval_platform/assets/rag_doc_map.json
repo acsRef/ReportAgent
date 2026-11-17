@@ -1,0 +1,17 @@
+{
+  "note": "资产重挂（re-anchoring）：rag_testset.json 的 gold_documents 是 2026-08 首次入库时的 document_id；2026-11 三一重工三份年报重新入库后 document_id 变了（库内 public.documents.document_id）。平台比对前先按本表映射，依据 = 文件名年份。重入库/删库后必须重建本表——这是资产维护动作，不写死在代码里。",
+  "kb_id": "7e88fe99ccf541f3",
+  "kb_name": "三一重工年报",
+  "reanchored_at": "2026-11-17",
+  "map": {
+    "c70ad0ddcb184c55": "e15c045948484d58",
+    "f4b0be8aaa644522": "61be97f9c87742f5",
+    "aebd3be225b8471f": "a005c3a33dea4d2a"
+  },
+  "year_to_doc": {
+    "2023": "e15c045948484d58",
+    "2024": "61be97f9c87742f5",
+    "2025": "a005c3a33dea4d2a"
+  },
+  "evidence": "public.documents(document_id, filename): e15c=2023(436 chunks) / 61be=2024(471) / a005=2025(474)；旧 gold id → 年份由 testset 的 gold_evidence.year 与题目语义确定"
+}
