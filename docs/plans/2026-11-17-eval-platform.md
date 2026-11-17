@@ -180,3 +180,28 @@ POST /api/run?case_id=explicit-region-sales-ranking
   → 博客 `source/eval/index.html`（25.5 KB）+ `eval_platform/assets/snapshot.json`（可入库的快照）；
 - 博客：`skip_render: ['graph/**','eval/**']`、about 增「评测平台」小节、新文章 `eval-platform.md`
   （项目深挖的横向篇：讲三层判定 / 资产重挂 / 超时与失败的区分）。
+
+
+## 事故与恢复（2026-11-17，必须留在档）
+
+**发生了什么**：平台的场景测试清理逻辑（`_drop_kb`）按知识库列文档再逐个删除。但
+`GET /api/v1/documents` **不接受 `kb_id` 过滤**（签名只有 `limit/offset`，admin 会拿到全库），
+于是"删临时库的文档"变成了**删全库**：14 份文档 / 1391 chunks（三一重工 3 份年报 + 数据字典 11 份 + FAQ）全部被删。
+
+**为什么没马上发现**：第一次跑场景时它把"文档数=16（期望 1）"报成失败，我把它当成"入库慢/未就绪"的噪音，
+继续修等待上限——**这条告警其实就是事故本身**。教训：当断言数字和预期差一个数量级时，先查是不是作用域错了。
+
+**影响面**：ragent 的知识库（`knowledge_bases` 3 行）与 ReportAgent 的会话/报告未受影响；
+受影响的是"文档 → chunk → embedding"。三一 65 题评测、数据字典检索在恢复前不可用。
+
+**修复**：
+1. `adapters.ragent_docs(kb_id)` 改为**客户端过滤**（`kb_id` 不匹配的一律不收），注释写明事故原因；
+2. `_drop_kb` 只删"本库的 document_id"；
+3. 新增回归测试 `test_ragent_docs_filters_client_side`（构造一条别库文档，断言不会被收进列表）。
+
+**恢复**：用项目自带灌库路径重建，不手改数据库：
+- 数据字典：`mcp_server.server.cmd_ingest_table_schemas`（自省 PG → render → upload，幂等）；
+- FAQ：`cmd_ingest_faq`（`mcp_server/faq_seed.json` 20 条）；
+- 三一年报：`adapters.ragent_upload` 重传 3 份 PDF（`eval/sany_annual_reports/*.pdf`）。
+
+**恢复后必须做的事**：document_id 会变 → 重建 `assets/rag_doc_map.json`（资产重挂），否则 65 题 doc_hit 全假失败。

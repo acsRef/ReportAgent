@@ -320,13 +320,20 @@ async def ragent_upload(
 
 
 async def ragent_docs(kb_id: str) -> list[dict[str, Any]]:
+    """列**该知识库**的文档。
+
+    ⚠️ `GET /api/v1/documents` **不支持 kb_id 过滤**（实测：签名只有 limit/offset，admin 会拿到全部文档）。
+    2026-11-17 的真事故：清理逻辑按 kb 列文档 → 拿到全库 → 把 14 份文档 1391 个 chunk 全删了。
+    所以这里必须**客户端过滤**，且删除动作只许作用于本库的 document_id。
+    """
     token = await ragent_login()
     try:
         async with await _rag_client(token, 20) as client:
-            resp = await client.get(f"{RAG_BASE}/api/v1/documents", params={"kb_id": kb_id})
+            resp = await client.get(f"{RAG_BASE}/api/v1/documents", params={"limit": 200})
         if resp.status_code != 200:
             raise ServiceUnavailable(f"list docs {resp.status_code}: {resp.text[:200]}")
-        return resp.json()
+        items = resp.json()
+        return [d for d in items if str(d.get("kb_id")) == str(kb_id)]
     except ServiceUnavailable:
         raise
     except Exception as exc:  # noqa: BLE001

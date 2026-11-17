@@ -23,6 +23,14 @@
 | RA-R4 | 幻觉 | 编造 `dim_supplier` / `sales_amount` | 模型自由生成 SQL | 6 层 SQL 安全闸（含表 allowlist + EXPLAIN） |
 | RA-R5 | 越权 | 跨用户读会话 | 端点只按 session_id 查 | 所有 session 端点强制 `(user_id, session_id)` |
 
+## 评测工具自身（2026-11-17 真实事故）
+
+| ID | 风险 | 场景 | 触发条件 | 现有护栏 |
+|---|---|---|---|---|
+| EV-R1 | 错误执行（作用域过宽） | 平台清理临时库，把**全库 14 份文档 1391 chunks** 删了 | `GET /documents` 不支持 `kb_id` 过滤，admin 拿到全部；清理逻辑按列表逐个删 | `ragent_docs` 客户端过滤 + 回归测试；清理只作用于本库 document_id |
+
+> 这条必须记：**评测工具自己也会造成事故**。它和生产代码一样需要"作用域断言"和"破坏性动作的 dry-run"。
+
 ## ragent-py（自动派生）
 
 平台按题目元数据派生，规则：

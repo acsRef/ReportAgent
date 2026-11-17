@@ -148,6 +148,49 @@ def test_service_unavailable_is_typed() -> None:
     assert issubclass(adapters.ServiceUnavailable, RuntimeError)
 
 
+# --- 清理安全（2026-11-17 真事故回归） ---------------------------------------
+
+
+def test_ragent_docs_filters_client_side(monkeypatch) -> None:
+    """`GET /documents` 不接受 kb_id，必须客户端过滤——否则清理会把全库删掉。"""
+    import asyncio
+
+    from eval_platform import adapters
+
+    payload = [
+        {"document_id": "a", "kb_id": "kb-temp"},
+        {"document_id": "b", "kb_id": "kb-prod"},
+    ]
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, params=None):
+            return _Resp()
+
+    async def fake_login(force: bool = False):
+        return "tok"
+
+    async def fake_rag_client(token: str, timeout: float = 0):
+        return _Client()
+
+    monkeypatch.setattr(adapters, "ragent_login", fake_login)
+    monkeypatch.setattr(adapters, "_rag_client", fake_rag_client)
+
+    docs = asyncio.run(adapters.ragent_docs("kb-temp"))
+    assert [d["document_id"] for d in docs] == ["a"], "必须只返回本库文档"
+
+
 # --- 场景测试（不真的打服务：只测注册表与判定辅助） ------------------------
 
 
