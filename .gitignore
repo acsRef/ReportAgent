@@ -77,3 +77,6 @@ frontend/e2e/helpers/.e2e-vite.pid
 
 # 评测平台的运行记录（本地 SQLite，不进库）
 eval_platform/runs.sqlite
+
+# 归档的历史运行库（批次重跑前留档，仅本地可查）
+eval_platform/.archive/

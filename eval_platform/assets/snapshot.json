@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-11-17T19:19:13",
+  "generated_at": "2026-11-17T22:18:47",
   "overview": {
     "assets": 4,
     "cases": {
       "reportagent": 21,
       "ragent": 65
     },
-    "risks": 46,
+    "risks": 51,
     "human_verified": 15,
     "gold_documents": 64,
     "rag_snapshot": {
@@ -70,18 +70,18 @@
       ]
     },
     "versions": {
-      "reportagent": "df50eaf",
-      "ragent": "0318b02"
+      "reportagent": "ae1cba4",
+      "ragent": "0c47940"
     },
     "run_stats": {
-      "total": 15,
+      "total": 73,
       "by_verdict": {
-        "error": 1,
-        "fail": 5,
-        "pass": 9
+        "deferred": 1,
+        "fail": 4,
+        "pass": 68
       },
       "by_project": {
-        "ragent": 12,
+        "ragent": 70,
         "reportagent": 3
       }
     },
@@ -108,7 +108,7 @@
       "coverage": "需求理解 / 执行 / 报告 / 行为 4 段期望，9 维字段（requirement·execution·report·behavior·memory·retrieval·sql·tool_selection·repair）",
       "source": "人工设计（P0 冻结基线，逐例带 golden SQL）",
       "labeling": "expectations 手写；execution_accuracy 用金标 SQL 现跑比对",
-      "version": "df50eaf · 读取于 2026-11-17",
+      "version": "ae1cba4 · 读取于 2026-11-17",
       "reuse": "`python -m evaluation.runner`（需后端在跑）；本平台复用其「字段期望」做需求卡比对",
       "tier": "仅参考（未核验）",
       "maintain": "加 case 只改 JSON，`schema.py` 冻结不动"
@@ -121,7 +121,7 @@
       "coverage": "记忆召回：必中 / 禁召（forbidden）/ 保守空召回（expect_none）",
       "source": "人工设计（词交确定性）",
       "labeling": "hand-written gold + forbidden 列表",
-      "version": "df50eaf",
+      "version": "ae1cba4",
       "reuse": "`backend/tests/persistence/test_memory_gold_recall.py`；真 embedding runner",
       "tier": "仅参考（未核验）",
       "maintain": "25 记忆 / 30 金标 query"
@@ -134,7 +134,7 @@
       "coverage": "10 类别（A–J）· 64 题带 gold_documents · 15 题人工核验（含 gold_evidence 关键词）",
       "source": "基于三一重工 2023–2025 三份年报，人工出题 + 人工核验子集",
       "labeling": "gold_source 字段区分 `human_verified_2026-08-23` / `original_unverified`",
-      "version": "0318b02",
+      "version": "0c47940",
       "reuse": "本平台：检索层按 gold_documents 算命中，不跑 LLM 裁判",
       "tier": "受限可用（人工核验）",
       "maintain": "加题改 JSON；核实一题就把 gold_source 改成 human_verified"
@@ -193,6 +193,51 @@
       "trigger": "session 端点只按 session_id 查，不校验 owner",
       "evidence": "A-2 安全加固；`test_cross_user_isolation.py`；404 不区分「不存在/不是你的」",
       "guard": "所有 session 端点强制 (user_id, session_id) 双条件"
+    },
+    {
+      "id": "EV-R1",
+      "risk": "错误执行",
+      "title": "清理临时库把全库删了（14 份文档 / 1391 chunks）",
+      "trigger": "`GET /documents` 不支持 `kb_id` 过滤，admin 拿到全库；清理按列出的文档逐个删",
+      "evidence": "场景测试首跑「文档数=16（期望 1）」被当成未就绪噪音；plan 2026-11-17-eval-platform",
+      "guard": "`ragent_docs` 客户端过滤 + 回归测试；清理只作用于本库 document_id",
+      "project": "ragent"
+    },
+    {
+      "id": "EV-R2",
+      "risk": "不可追溯",
+      "title": "工具超时被当成产品失败（90s 等不到 indexed 就判 fail）",
+      "trigger": "PDF 走 OCR（250 页）+ 元数据 LLM 批处理，真实耗时分钟级；批量灌库时串行排队更久",
+      "evidence": "三个场景首跑全 fail，实际都在 141s+ 才 indexed",
+      "guard": "等待上限 300s；超时记 `timeout` / verdict `error`，与 `fail` 分开",
+      "project": "ragent"
+    },
+    {
+      "id": "EV-R3",
+      "risk": "误答",
+      "title": "判定器自己的口径错：2/3 召回永远判 fail",
+      "trigger": "阈值写 `ratio >= 0.67`，而 2/3 = 0.6666…，文案却写「至少 2/3」",
+      "evidence": "恢复后重跑 65 题，8 条 fail 里 4 条（Q18/Q19/Q51/Q54）由此造成",
+      "guard": "阈值改真分数 `CROSS_DOC_RECALL_MIN = 2/3` + 回归测试 `test_recall_two_of_three_passes`",
+      "project": "eval_platform"
+    },
+    {
+      "id": "EV-R4",
+      "risk": "越权",
+      "title": "金标证据不成立：问「金额单位」的金标关键词是员工人数",
+      "trigger": "标注时把「命中同一份文档」当成「证据成立」，关键词与该问无因果关系",
+      "evidence": "Q11 金标 keyword=25,930（员工情况表），与「主要会计数据单位」无关",
+      "guard": "判定记录保留 expected/observed，人工复核能看见关键词与问题不对应；不改数据让它变绿",
+      "project": "eval_platform"
+    },
+    {
+      "id": "EV-R5",
+      "risk": "错误执行",
+      "title": "提速开关的隐性代价：关掉元数据 LLM → `chunks.year` 全 NULL",
+      "trigger": "为了把入库从分钟级压到秒级设 `INGEST_METADATA_ENABLED=0`",
+      "evidence": "ragent 的 period / coverage_by_year / 跨年冲突检测退化为「不可比」；Q25（2025 年题）金标文档在 k≤12 完全不出现",
+      "guard": "平台量化该项代价；重灌必须显式选择档位，并写明「检索可用、元数据加成缺失」",
+      "project": "ragent"
     },
     {
       "id": "RAG-Q11",
@@ -634,6 +679,30 @@
       ]
     },
     {
+      "id": "rag-permission-visibility",
+      "name": "权限：知识库可见性（越权读）",
+      "project": "ragent",
+      "desc": "普通用户读 internal 库必须 403、读 public 库必须 200（拒绝要显式，不能静默空结果）",
+      "steps": [
+        "internal 库入库",
+        "普通用户读 internal 库 → 403",
+        "普通用户读 public 库 → 200"
+      ]
+    },
+    {
+      "id": "rag-permission-mutations",
+      "name": "权限：越权写（建库/上传/删除）",
+      "project": "ragent",
+      "desc": "普通用户没有 kb.create / doc.upload / doc.delete：三个写操作都必须 403，且数据不变",
+      "steps": [
+        "admin 入库",
+        "普通用户建库 → 403",
+        "普通用户向他人 KB 上传 → 403",
+        "普通用户删他人文档 → 403",
+        "数据未被改动"
+      ]
+    },
+    {
       "id": "rag-kb-isolation",
       "name": "跨库隔离（pin kb_ids）",
       "project": "ragent",
@@ -647,28 +716,8 @@
   ],
   "runs": [
     {
-      "run_id": "run-9a2d3b4d3d",
-      "created_at": "2026-11-17T11:18:57+00:00",
-      "project": "ragent",
-      "case_id": "rag-delete-no-dirty-recall",
-      "title": "删除后无脏召回",
-      "verdict": "pass",
-      "tier": "运行时实测",
-      "latency_ms": 0.0
-    },
-    {
-      "run_id": "run-ea9dbf721a",
-      "created_at": "2026-11-17T11:16:39+00:00",
-      "project": "ragent",
-      "case_id": "rag-incremental-upsert",
-      "title": "增量更新（同一文档覆盖）",
-      "verdict": "pass",
-      "tier": "运行时实测",
-      "latency_ms": 0.0
-    },
-    {
-      "run_id": "run-ef5702b5ab",
-      "created_at": "2026-11-17T11:11:42+00:00",
+      "run_id": "run-b54a7d68b0",
+      "created_at": "2026-11-17T14:18:40+00:00",
       "project": "ragent",
       "case_id": "rag-kb-isolation",
       "title": "跨库隔离（pin kb_ids）",
@@ -677,8 +726,28 @@
       "latency_ms": 0.0
     },
     {
-      "run_id": "run-a2c227fe80",
-      "created_at": "2026-11-17T11:09:16+00:00",
+      "run_id": "run-c6993ae47f",
+      "created_at": "2026-11-17T14:18:32+00:00",
+      "project": "ragent",
+      "case_id": "rag-permission-mutations",
+      "title": "权限：越权写（建库/上传/删除）",
+      "verdict": "pass",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-9a9b448656",
+      "created_at": "2026-11-17T14:18:23+00:00",
+      "project": "ragent",
+      "case_id": "rag-permission-visibility",
+      "title": "权限：知识库可见性（越权读）",
+      "verdict": "pass",
+      "tier": "运行时实测",
+      "latency_ms": 0.0
+    },
+    {
+      "run_id": "run-91b5fa427f",
+      "created_at": "2026-11-17T14:18:21+00:00",
       "project": "ragent",
       "case_id": "rag-delete-no-dirty-recall",
       "title": "删除后无脏召回",
@@ -687,114 +756,264 @@
       "latency_ms": 0.0
     },
     {
-      "run_id": "run-bf546eb178",
-      "created_at": "2026-11-17T11:03:02+00:00",
-      "project": "ragent",
-      "case_id": "rag-kb-isolation",
-      "title": "跨库隔离（pin kb_ids）",
-      "verdict": "fail",
-      "tier": "运行时实测",
-      "latency_ms": 0.0
-    },
-    {
-      "run_id": "run-d43085af19",
-      "created_at": "2026-11-17T11:01:27+00:00",
-      "project": "ragent",
-      "case_id": "rag-delete-no-dirty-recall",
-      "title": "删除后无脏召回",
-      "verdict": "fail",
-      "tier": "运行时实测",
-      "latency_ms": 0.0
-    },
-    {
-      "run_id": "run-2797e0526a",
-      "created_at": "2026-11-17T10:59:51+00:00",
+      "run_id": "run-19fa08e9c2",
+      "created_at": "2026-11-17T14:18:19+00:00",
       "project": "ragent",
       "case_id": "rag-incremental-upsert",
       "title": "增量更新（同一文档覆盖）",
-      "verdict": "fail",
+      "verdict": "pass",
       "tier": "运行时实测",
       "latency_ms": 0.0
     },
     {
-      "run_id": "run-d4d9716513",
-      "created_at": "2026-11-17T10:51:55+00:00",
+      "run_id": "run-8b9d08525a",
+      "created_at": "2026-11-17T14:18:15+00:00",
+      "project": "reportagent",
+      "case_id": "default-metric-when-unnamed",
+      "title": "没点名口径 → 按注册表默认口径直接前进并记 assumption，不再为口径拦一次（确定性断言，不依赖模型是否给出分析目标）。收敛后 baseline 不再钉「必须澄清」：真正确定性的澄清触发（对比基线缺失 / 选期单位）由 test_requirement_slots.py 与 Playwright 02 覆盖",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 3328.0
+    },
+    {
+      "run_id": "run-ce6230444b",
+      "created_at": "2026-11-17T14:18:12+00:00",
+      "project": "reportagent",
+      "case_id": "explicit-monthly-trend-east",
+      "title": "2024年华东月度趋势 —— 单区域 + 月粒度（rows_gt=6 抓「粒度丢失」回归：曾只按年分组返回 1 行）",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 14734.0
+    },
+    {
+      "run_id": "run-69d74e5b41",
+      "created_at": "2026-11-17T14:17:57+00:00",
+      "project": "reportagent",
+      "case_id": "explicit-region-sales-ranking",
+      "title": "2024年各区域销售额排名 —— 主干 explicit 查询，表+图+行数全链路",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 12281.0
+    },
+    {
+      "run_id": "run-4b538669dc",
+      "created_at": "2026-11-17T14:17:44+00:00",
+      "project": "ragent",
+      "case_id": "Q62",
+      "title": "2025年三一重工在全球市场推广了多少款产品？",
+      "verdict": "fail",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 266.0
+    },
+    {
+      "run_id": "run-9a0ba9d083",
+      "created_at": "2026-11-17T14:17:44+00:00",
+      "project": "ragent",
+      "case_id": "Q63",
+      "title": "三一重工董事长向文波的出生年月和籍贯是？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 250.0
+    },
+    {
+      "run_id": "run-70ebfee34d",
+      "created_at": "2026-11-17T14:17:44+00:00",
+      "project": "ragent",
+      "case_id": "Q64",
+      "title": "三一重工最近三个会计年度累计现金分红金额是多少（截至2025年报）？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 265.0
+    },
+    {
+      "run_id": "run-69b510f7f0",
+      "created_at": "2026-11-17T14:17:44+00:00",
+      "project": "ragent",
+      "case_id": "Q65",
+      "title": "2025年三一重工成立了什么新的全球营销组织？其职能是什么？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 250.0
+    },
+    {
+      "run_id": "run-b9679f2852",
+      "created_at": "2026-11-17T14:17:43+00:00",
+      "project": "ragent",
+      "case_id": "Q59",
+      "title": "2025年末三一重工H股的总市值是多少港元？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 250.0
+    },
+    {
+      "run_id": "run-2e6d77a98e",
+      "created_at": "2026-11-17T14:17:43+00:00",
+      "project": "ragent",
+      "case_id": "Q60",
+      "title": "截至2025年12月31日，三一重工总股本是多少股？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 266.0
+    },
+    {
+      "run_id": "run-3afaaa3b0c",
+      "created_at": "2026-11-17T14:17:43+00:00",
+      "project": "ragent",
+      "case_id": "Q61",
+      "title": "三一重工的统一客户互动界面MySANY覆盖多少个国家？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 266.0
+    },
+    {
+      "run_id": "run-c27355d813",
+      "created_at": "2026-11-17T14:17:42+00:00",
       "project": "ragent",
       "case_id": "Q56",
       "title": "三一重工2026年的营业收入增长目标是多少？",
       "verdict": "pass",
       "tier": "受限可用（人工核验）",
-      "latency_ms": 1390.0
+      "latency_ms": 281.0
     },
     {
-      "run_id": "run-cc7891e82b",
-      "created_at": "2026-11-17T10:51:54+00:00",
+      "run_id": "run-6055e7e925",
+      "created_at": "2026-11-17T14:17:42+00:00",
       "project": "ragent",
-      "case_id": "Q26",
-      "title": "2025年三一重工每股合计分红多少（含已实施的中期分红与年度预案）？",
+      "case_id": "Q57",
+      "title": "中联重科2025年的营业收入是多少？与三一重工相比如何？",
+      "verdict": "deferred",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 266.0
+    },
+    {
+      "run_id": "run-100329486e",
+      "created_at": "2026-11-17T14:17:42+00:00",
+      "project": "ragent",
+      "case_id": "Q58",
+      "title": "三一重工2025年在德国市场的销售额是多少？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 265.0
+    },
+    {
+      "run_id": "run-f2918bdc18",
+      "created_at": "2026-11-17T14:17:41+00:00",
+      "project": "ragent",
+      "case_id": "Q53",
+      "title": "三一重工挖掘机2023年是全球销量第一，对吗？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 265.0
+    },
+    {
+      "run_id": "run-f1f9cdce92",
+      "created_at": "2026-11-17T14:17:41+00:00",
+      "project": "ragent",
+      "case_id": "Q54",
+      "title": "2024年三一重工海外产品覆盖的国家数量比2023年增加了多少？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 266.0
+    },
+    {
+      "run_id": "run-65be699277",
+      "created_at": "2026-11-17T14:17:41+00:00",
+      "project": "ragent",
+      "case_id": "Q55",
+      "title": "三一重工2025年新能源（电动化）产品的收入是多少亿元？",
       "verdict": "pass",
       "tier": "受限可用（人工核验）",
-      "latency_ms": 4469.0
+      "latency_ms": 266.0
     },
     {
-      "run_id": "run-081375e313",
-      "created_at": "2026-11-17T10:51:49+00:00",
+      "run_id": "run-422281df65",
+      "created_at": "2026-11-17T14:17:40+00:00",
       "project": "ragent",
-      "case_id": "Q01",
-      "title": "三一重工2023年的营业收入是多少？",
+      "case_id": "Q49",
+      "title": "俞宏福在三一重工担任什么职务？2025年税前报酬多少？",
       "verdict": "pass",
-      "tier": "受限可用（人工核验）",
-      "latency_ms": 250.0
+      "tier": "仅参考（未核验）",
+      "latency_ms": 266.0
     },
     {
-      "run_id": "run-b4a5410320",
-      "created_at": "2026-11-17T10:51:08+00:00",
+      "run_id": "run-a7d9606bde",
+      "created_at": "2026-11-17T14:17:40+00:00",
       "project": "ragent",
-      "case_id": "Q01",
-      "title": "三一重工2023年的营业收入是多少？",
+      "case_id": "Q50",
+      "title": "2024年三一重工混凝土机械收入同比增长了多少？",
       "verdict": "fail",
+      "tier": "受限可用（人工核验）",
+      "latency_ms": 266.0
+    },
+    {
+      "run_id": "run-8b33705167",
+      "created_at": "2026-11-17T14:17:40+00:00",
+      "project": "ragent",
+      "case_id": "Q51",
+      "title": "为什么三一重工连续三年加大研发投入金额？",
+      "verdict": "pass",
       "tier": "受限可用（人工核验）",
       "latency_ms": 265.0
     },
     {
-      "run_id": "run-7e345266b0",
-      "created_at": "2026-11-17T10:49:25+00:00",
+      "run_id": "run-e4f2394a11",
+      "created_at": "2026-11-17T14:17:40+00:00",
       "project": "ragent",
-      "case_id": "Q01",
-      "title": "三一重工2023年的营业收入是多少？",
-      "verdict": "fail",
-      "tier": "受限可用（人工核验）",
-      "latency_ms": 14656.0
-    },
-    {
-      "run_id": "run-5c223b1421",
-      "created_at": "2026-11-17T10:37:14+00:00",
-      "project": "reportagent",
-      "case_id": "explicit-region-sales-ranking",
-      "title": "2024年各区域销售额排名 —— 主干 explicit 查询，表+图+行数全链路",
+      "case_id": "Q52",
+      "title": "2025年三一重工分红力度明显缩水了吧？年度预案才每10股1.8元，远低于2024年的3.6元。",
       "verdict": "pass",
       "tier": "仅参考（未核验）",
-      "latency_ms": 19563.0
+      "latency_ms": 265.0
     },
     {
-      "run_id": "run-8db20ef83b",
-      "created_at": "2026-11-17T10:36:33+00:00",
-      "project": "reportagent",
-      "case_id": "explicit-region-sales-ranking",
-      "title": "2024年各区域销售额排名 —— 主干 explicit 查询，表+图+行数全链路",
+      "run_id": "run-a750e4332e",
+      "created_at": "2026-11-17T14:17:39+00:00",
+      "project": "ragent",
+      "case_id": "Q46",
+      "title": "三一重工2025年年报和2023年年报中的境内签字会计师分别是谁？",
       "verdict": "pass",
       "tier": "仅参考（未核验）",
-      "latency_ms": 9343.0
+      "latency_ms": 266.0
     },
     {
-      "run_id": "run-4ed6cbf14e",
-      "created_at": "2026-11-17T10:34:59+00:00",
-      "project": "reportagent",
-      "case_id": "explicit-region-sales-ranking",
-      "title": "2024年各区域销售额排名 —— 主干 explicit 查询，表+图+行数全链路",
-      "verdict": "error",
+      "run_id": "run-b9adec4b1c",
+      "created_at": "2026-11-17T14:17:39+00:00",
+      "project": "ragent",
+      "case_id": "Q47",
+      "title": "600031和06031是三一重工的同一只股票吗？",
+      "verdict": "pass",
       "tier": "仅参考（未核验）",
-      "latency_ms": 8281.0
+      "latency_ms": 250.0
+    },
+    {
+      "run_id": "run-cfc0c70575",
+      "created_at": "2026-11-17T14:17:39+00:00",
+      "project": "ragent",
+      "case_id": "Q48",
+      "title": "普茨迈斯特（Putzmeister）与三一重工是什么关系？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 281.0
+    },
+    {
+      "run_id": "run-ce2cdd4d09",
+      "created_at": "2026-11-17T14:17:38+00:00",
+      "project": "ragent",
+      "case_id": "Q43",
+      "title": "2024年报说“国际业务毛利率29.72%，上升0.26个百分点”，2023年报说2023年国际业务毛利率30.78%，矛盾吗？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 266.0
+    },
+    {
+      "run_id": "run-e5feddb81c",
+      "created_at": "2026-11-17T14:17:38+00:00",
+      "project": "ragent",
+      "case_id": "Q44",
+      "title": "“三一集团”就是三一重工吗？两者什么关系？",
+      "verdict": "pass",
+      "tier": "仅参考（未核验）",
+      "latency_ms": 266.0
     }
   ]
 }
