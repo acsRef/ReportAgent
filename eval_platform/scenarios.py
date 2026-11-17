@@ -105,10 +105,10 @@ class _Run:
         return "pass"
 
 
-async def _temp_kb(name: str) -> tuple[str, str]:
-    """建一个临时知识库，返回 (kb_id, name)。"""
+async def _temp_kb(name: str, *, visibility: str = "public") -> tuple[str, str]:
+    """建一个临时知识库，返回 (kb_id, name)。`visibility` 可选 public/internal/restricted。"""
     kb_name = f"eval-tmp-{name}-{uuid.uuid4().hex[:6]}"
-    kb = await adapters.ragent_create_kb(kb_name)
+    kb = await adapters.ragent_create_kb(kb_name, visibility=visibility)
     return str(kb["id"]), kb_name
 
 
@@ -232,6 +232,86 @@ async def _scenario_isolation(run: _Run) -> dict[str, Any]:
         await _drop_kb(kb_id)
 
 
+# --- 场景 4：知识库可见性（越权读） -----------------------------------------
+
+
+async def _scenario_permission_visibility(run: _Run) -> dict[str, Any]:
+    """普通用户（无 admin、无角色）读 internal KB 必须 403；读 public KB 必须 200。
+
+    「拒绝」必须是**显式 403**，不能是"静默返回空"——后者会让越权看起来像"没搜到"。
+    """
+    admin_token = await adapters.ragent_login()
+    user_token, username = await adapters.ragent_permission_token()
+    # internal：非 owner、无角色 → 不可读（建库时直接指定，避免依赖 PATCH 接口）
+    kb_id, kb_name = await _temp_kb("perm", visibility="internal")
+    try:
+        up = await adapters.ragent_upload(kb_id, "perm-doc.md", _doc_text("权限验证", _token("PERM")))
+        doc = await _wait_indexed(kb_id, str(up["document_id"]))
+        st, detail = _index_problem(doc)
+        if not run.step("internal 库入库", st == "pass", detail, status=st):
+            return {"kb": kb_name, "user": username}
+
+        status_user, _ = await adapters.ragent_raw(
+            "POST", "/api/v1/retrieve", token=user_token,
+            json_body={"query": "权限验证", "kb_ids": [kb_id], "top_k": 3},
+        )
+        run.step("普通用户读 internal 库 → 403", status_user == 403,
+                 f"status={status_user}（期望 403，不泄露存在性）")
+
+        public_kbs = await adapters.ragent_kb_ids(admin_token)
+        status_public, body_public = await adapters.ragent_raw(
+            "POST", "/api/v1/retrieve", token=user_token,
+            json_body={"query": "三一重工营业收入", "kb_ids": public_kbs, "top_k": 3},
+        )
+        run.step("普通用户读 public 库 → 200", status_public == 200,
+                 f"status={status_public} items={len((body_public or {}).get('items') or [])}")
+        return {"kb": kb_name, "user": username, "public_kbs": public_kbs}
+    finally:
+        await _drop_kb(kb_id)
+
+
+# --- 场景 5：普通用户改数据（越权写） ---------------------------------------
+
+
+async def _scenario_permission_mutations(run: _Run) -> dict[str, Any]:
+    """普通用户没有 kb.create / doc.upload / doc.delete：三个写操作都必须 403，且数据不变。"""
+    admin_token = await adapters.ragent_login()
+    user_token, username = await adapters.ragent_permission_token()
+    kb_id, kb_name = await _temp_kb("mut")
+    doc_id = ""
+    try:
+        up = await adapters.ragent_upload(kb_id, "mut-doc.md", _doc_text("写权限验证", _token("MUT")))
+        doc_id = str(up["document_id"])
+        doc = await _wait_indexed(kb_id, doc_id)
+        st, detail = _index_problem(doc)
+        if not run.step("admin 入库", st == "pass", detail, status=st):
+            return {"kb": kb_name, "user": username}
+
+        code, _ = await adapters.ragent_raw(
+            "POST", "/api/v1/kb", token=user_token,
+            json_body={"name": f"eval-forbidden-{uuid.uuid4().hex[:6]}", "visibility": "public"},
+        )
+        run.step("普通用户建库 → 403", code == 403, f"status={code}")
+
+        code, _ = await adapters.ragent_raw(
+            "POST", "/api/v1/documents/upload", token=user_token,
+            files={"file": ("hack.md", b"# hack\n\ninhack", "text/markdown")},
+            data={"kb_id": kb_id},
+        )
+        run.step("普通用户向他人 KB 上传 → 403", code == 403, f"status={code}")
+
+        code, _ = await adapters.ragent_raw(
+            "DELETE", f"/api/v1/documents/{doc_id}", token=user_token,
+        )
+        run.step("普通用户删他人文档 → 403", code == 403, f"status={code}")
+
+        docs = await adapters.ragent_docs(kb_id)
+        run.step("数据未被改动", len(docs) == 1, f"剩余文档={len(docs)}（期望 1）")
+        return {"kb": kb_name, "user": username, "doc_id": doc_id}
+    finally:
+        await _drop_kb(kb_id)
+
+
 # --- 注册表 -----------------------------------------------------------------
 
 _SCENARIOS: dict[str, dict[str, Any]] = {
@@ -250,6 +330,23 @@ _SCENARIOS: dict[str, dict[str, Any]] = {
         "desc": "删文档后：列表清空、检索不再返回该文档内容",
         "steps": ["入库", "删除前可召回", "删除接口返回成功", "文档列表已清空", "删除后无脏召回"],
         "fn": _scenario_delete,
+    },
+    "rag-permission-visibility": {
+        "id": "rag-permission-visibility",
+        "name": "权限：知识库可见性（越权读）",
+        "project": "ragent",
+        "desc": "普通用户读 internal 库必须 403、读 public 库必须 200（拒绝要显式，不能静默空结果）",
+        "steps": ["internal 库入库", "普通用户读 internal 库 → 403", "普通用户读 public 库 → 200"],
+        "fn": _scenario_permission_visibility,
+    },
+    "rag-permission-mutations": {
+        "id": "rag-permission-mutations",
+        "name": "权限：越权写（建库/上传/删除）",
+        "project": "ragent",
+        "desc": "普通用户没有 kb.create / doc.upload / doc.delete：三个写操作都必须 403，且数据不变",
+        "steps": ["admin 入库", "普通用户建库 → 403", "普通用户向他人 KB 上传 → 403",
+                  "普通用户删他人文档 → 403", "数据未被改动"],
+        "fn": _scenario_permission_mutations,
     },
     "rag-kb-isolation": {
         "id": "rag-kb-isolation",

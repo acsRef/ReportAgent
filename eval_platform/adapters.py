@@ -348,3 +348,53 @@ async def ragent_delete_doc(document_id: str) -> bool:
         return resp.status_code in (200, 204)
     except Exception:  # noqa: BLE001
         return False
+
+
+# --- ragent：权限/越权场景用（原始状态码，不把 403 当"服务不可用"） ----------
+
+PERM_PROBE_USER = os.getenv("RAG_PERM_USER", "eval-probe-user")
+PERM_PROBE_PASS = os.getenv("RAG_PERM_PASSWORD", "eval-probe-pass-123")
+
+
+async def ragent_raw(
+    method: str, path: str, *, token: str, json_body: Any = None,
+    params: dict[str, Any] | None = None, data: dict[str, Any] | None = None,
+    files: dict[str, Any] | None = None, timeout: float = 60,
+) -> tuple[int, Any]:
+    """原始调用：返回 (status, body)，**不**把 403/400 归一成服务不可用（越权测试要看状态码）。"""
+    # 登录/注册接口不需要 token；空串会拼出非法头 `Bearer `（httpx 直接拒绝）
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.request(
+                method, f"{RAG_BASE}{path}",
+                headers=headers,
+                json=json_body, params=params, data=data, files=files,
+            )
+    except Exception as exc:  # noqa: BLE001 - 网络层问题才算不可用
+        raise ServiceUnavailable(f"ragent {method} {path} 失败：{exc}") from exc
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001
+        body = resp.text[:400]
+    return resp.status_code, body
+
+
+async def ragent_permission_token() -> tuple[str, str]:
+    """拿一个**普通用户**（非 admin、无角色/权限）的 token。
+
+    先尝试注册固定探针账号；已存在就登录。避免每次场景都新建用户污染库。
+    """
+    status, body = await ragent_raw(
+        "POST", "/api/v1/auth/register", token="",
+        json_body={"username": PERM_PROBE_USER, "password": PERM_PROBE_PASS},
+    )
+    if status in (200, 201) and isinstance(body, dict) and body.get("access_token"):
+        return str(body["access_token"]), PERM_PROBE_USER
+    status, body = await ragent_raw(
+        "POST", "/api/v1/auth/login", token="",
+        json_body={"username": PERM_PROBE_USER, "password": PERM_PROBE_PASS},
+    )
+    if status != 200 or not isinstance(body, dict) or not body.get("access_token"):
+        raise ServiceUnavailable(f"拿不到普通用户 token（register/login 均失败：{status}）")
+    return str(body["access_token"]), PERM_PROBE_USER

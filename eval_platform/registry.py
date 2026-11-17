@@ -355,6 +355,54 @@ _RA_CURATED_RISKS: tuple[dict[str, Any], ...] = (
     },
 )
 
+_EVAL_TOOL_RISKS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "EV-R1",
+        "risk": "错误执行",
+        "title": "清理临时库把全库删了（14 份文档 / 1391 chunks）",
+        "trigger": "`GET /documents` 不支持 `kb_id` 过滤，admin 拿到全库；清理按列出的文档逐个删",
+        "evidence": "场景测试首跑「文档数=16（期望 1）」被当成未就绪噪音；plan 2026-11-17-eval-platform",
+        "guard": "`ragent_docs` 客户端过滤 + 回归测试；清理只作用于本库 document_id",
+        "project": PROJECT_RAG,
+    },
+    {
+        "id": "EV-R2",
+        "risk": "不可追溯",
+        "title": "工具超时被当成产品失败（90s 等不到 indexed 就判 fail）",
+        "trigger": "PDF 走 OCR（250 页）+ 元数据 LLM 批处理，真实耗时分钟级；批量灌库时串行排队更久",
+        "evidence": "三个场景首跑全 fail，实际都在 141s+ 才 indexed",
+        "guard": "等待上限 300s；超时记 `timeout` / verdict `error`，与 `fail` 分开",
+        "project": PROJECT_RAG,
+    },
+    {
+        "id": "EV-R3",
+        "risk": "误答",
+        "title": "判定器自己的口径错：2/3 召回永远判 fail",
+        "trigger": "阈值写 `ratio >= 0.67`，而 2/3 = 0.6666…，文案却写「至少 2/3」",
+        "evidence": "恢复后重跑 65 题，8 条 fail 里 4 条（Q18/Q19/Q51/Q54）由此造成",
+        "guard": "阈值改真分数 `CROSS_DOC_RECALL_MIN = 2/3` + 回归测试 `test_recall_two_of_three_passes`",
+        "project": "eval_platform",
+    },
+    {
+        "id": "EV-R4",
+        "risk": "越权",
+        "title": "金标证据不成立：问「金额单位」的金标关键词是员工人数",
+        "trigger": "标注时把「命中同一份文档」当成「证据成立」，关键词与该问无因果关系",
+        "evidence": "Q11 金标 keyword=25,930（员工情况表），与「主要会计数据单位」无关",
+        "guard": "判定记录保留 expected/observed，人工复核能看见关键词与问题不对应；不改数据让它变绿",
+        "project": "eval_platform",
+    },
+    {
+        "id": "EV-R5",
+        "risk": "错误执行",
+        "title": "提速开关的隐性代价：关掉元数据 LLM → `chunks.year` 全 NULL",
+        "trigger": "为了把入库从分钟级压到秒级设 `INGEST_METADATA_ENABLED=0`",
+        "evidence": "ragent 的 period / coverage_by_year / 跨年冲突检测退化为「不可比」；Q25（2025 年题）金标文档在 k≤12 完全不出现",
+        "guard": "平台量化该项代价；重灌必须显式选择档位，并写明「检索可用、元数据加成缺失」",
+        "project": PROJECT_RAG,
+    },
+)
+
 _RISK_BY_CATEGORY = {
     "H-错误前提纠偏": "错误前提（迎合性）",
     "I-拒答与知识边界": "幻觉 / 知识边界",
@@ -367,8 +415,9 @@ _RISK_BY_CATEGORY = {
 
 
 def derive_risks(rag_cases: Iterable[Case]) -> list[dict[str, Any]]:
-    """风险案例库：ReportAgent 精选 5 条 + ragent 从题目元数据派生。"""
+    """风险案例库：两个项目的精选事故 + 评测工具自身事故 + ragent 从题目元数据派生。"""
     risks: list[dict[str, Any]] = [dict(r) for r in _RA_CURATED_RISKS]
+    risks += [dict(r) for r in _EVAL_TOOL_RISKS]
     for case in rag_cases:
         judgment = case.gold_judgment
         category = case.category

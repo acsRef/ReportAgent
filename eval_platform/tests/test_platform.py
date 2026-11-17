@@ -115,6 +115,23 @@ class TestRetrievalJudge:
         assert names["retrieval.doc_hit@5"] == "fail"
         assert names["retrieval.degraded"] == "fail"
 
+    def test_recall_two_of_three_passes(self) -> None:
+        """2/3 必须判过：阈值写成 0.67 时 2/3=0.6666 会被判 fail（Q18/Q19 实测踩到）。"""
+        case = registry.Case(
+            id="RAG-Q18", project=registry.PROJECT_RAG, suite="t", title="t", category="A",
+            query="q", gold_documents=("doc-a", "doc-b", "doc-c"),
+            gold_evidence=({"keyword": "58.5"},), gold_source="human_verified_2026-08-23",
+        )
+        items = [
+            {"document_id": "doc-a", "text": "归母净利润 58.5 亿元", "score": 0.9},
+            {"document_id": "doc-b", "text": "归母净利润 56.2 亿元", "score": 0.8},
+            {"document_id": "doc-x", "text": "无关", "score": 0.2},
+        ]
+        checks = runners._judge_retrieval(case, items, degraded=False, top_k=8)
+        names = {c["name"]: c["status"] for c in checks}
+        assert names["retrieval.doc_recall@8"] == "pass"
+        assert names["retrieval.doc_hit@8"] == "pass"
+
 
 class TestVerdict:
     def test_deferred_only_is_not_pass(self) -> None:
@@ -199,7 +216,10 @@ class TestScenarios:
         from eval_platform import scenarios
 
         ids = {s["id"] for s in scenarios.list_scenarios()}
-        assert ids == {"rag-incremental-upsert", "rag-delete-no-dirty-recall", "rag-kb-isolation"}
+        assert ids == {
+            "rag-incremental-upsert", "rag-delete-no-dirty-recall", "rag-kb-isolation",
+            "rag-permission-visibility", "rag-permission-mutations",
+        }
         assert all(s["steps"] for s in scenarios.list_scenarios())
 
     def test_hit_helper(self) -> None:

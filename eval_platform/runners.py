@@ -24,6 +24,10 @@ _STATUS_PASS = "pass"
 _STATUS_FAIL = "fail"
 _STATUS_SKIP = "deferred"
 
+# 跨文档题：k 放宽 + 召回阈值至少 2/3（写成真分数，避免 0.67 > 2/3 把及格判成不及格）
+CROSS_DOC_MIN_TOP_K = 8
+CROSS_DOC_RECALL_MIN = 2 / 3
+
 
 def _norm(text: Any) -> str:
     """时间/文本归一：去空白、去「年/月/日」尾缀，便于跨写法比较。"""
@@ -176,10 +180,12 @@ def _judge_retrieval(case: registry.Case, items: list[dict[str, Any]], *, degrad
         ))
         if len(set(gold)) > 1:
             ratio = len(set(hits)) / len(set(gold))
+            # 阈值必须写成「能真的通过 2/3」的形式：2/3 = 0.6666…，写 0.67 会让 2/3 永远 fail
+            # （实测 Q18/Q19 命中 2/3 判 fail，而 detail 文案写的是「至少 2/3」）。
             checks.append(_check(
                 f"retrieval.doc_recall@{top_k}", _LAYER_GOLD,
-                _STATUS_PASS if ratio >= 0.67 else _STATUS_FAIL,
-                expected="≥ 0.67", observed=round(ratio, 2),
+                _STATUS_PASS if ratio >= CROSS_DOC_RECALL_MIN - 1e-9 else _STATUS_FAIL,
+                expected=f"≥ {CROSS_DOC_RECALL_MIN:.2f}", observed=round(ratio, 2),
                 detail="跨文档题：至少命中 2/3 金标文档",
             ))
 
@@ -250,6 +256,10 @@ async def run_case(case_id: str, *, top_k: int = 5) -> dict[str, Any]:
     case = ds.find(case_id)
     if case is None:
         raise KeyError(f"case not found: {case_id}")
+    # 跨文档题（金标文档 >1）默认 k=5 太紧：实测 Q56（三年年报）k=5 只召回 1/2 → k=8 才够。
+    # 按需抬高，而不是把全局默认改大（单文档题用大 k 只会引入噪声）。
+    if case.project == registry.PROJECT_RAG and len(set(case.gold_documents)) > 1:
+        top_k = max(top_k, CROSS_DOC_MIN_TOP_K)
     if case.project == registry.PROJECT_RA:
         result = await _run_reportagent(case)
     elif case.project == registry.PROJECT_RAG:

@@ -219,3 +219,47 @@ POST /api/run?case_id=explicit-region-sales-ranking
    `documents.status` 永远是 `indexing`。恢复动作必须包含「清 stuck 文档」，否则队列看起来永远在忙。
 4. **ragent 的 `GET /documents` 加了 `kb_id`（上游修复，见 `acsRef/Rag` `3630539`）**：
    平台侧的客户端过滤保留（双保险），但真正的用途是让"按库统计/清理"不再依赖拿全库。
+
+
+## 第三轮：恢复后全量重跑 65 题（2026-11-17 夜，最终数字）
+
+恢复完成后**重跑全部 65 题**（不是抽查），逐条落 `runs.sqlite`。这一轮同时抓到了两个「平台自己的错」，
+所以结论要按修正后的口径读：
+
+| 阶段 | pass | fail | deferred | 说明 |
+|---|---|---|---|---|
+| 首跑（阈值未修） | 56 | 8 | 1 | 8 条 fail 里 4 条是判定器 bug |
+| 修正阈值后重跑非 pass 项 | **60** | **4** | **1** | 60/65 = 92.3%，deferred 不算通过 |
+
+### 四条真 fail 的归因（都是可复现的真问题，不是环境噪音）
+
+| 用例 | 现象 | 根因 | 归属 |
+|---|---|---|---|
+| Q11 | `doc_hit@8` 3/3 命中，但金标关键词 `25,930` 不在召回文本里 | 该关键词来自**员工情况表**，与「主要会计数据单位」无因果关系 → 金标证据本身不成立 | 资产缺陷（EV-R4） |
+| Q25 | 2025 年题，金标文档（2025 年报）在 k=5/8/12 **完全不出现**；top-k 全是 2024/2023 年报 | 元数据 LLM 关闭后 `chunks.year` 全为 NULL，跨年消歧退化；三份年报的同类表格文本高度相似，2024 版本排序压过 2025 | 产品行为回退（EV-R5） |
+| Q50 | 金标 2 篇，k=8 只中 1 篇（k=12 才 2/2） | 跨文档召回对 k 敏感；8 条里后补的文档排在 9–12 位 | 检索质量（已知局限） |
+| Q62 | 金标 2 篇（2025+2023），k=8/12 只中 2025 一篇 | 同 Q50，且 2023 篇从未进入 top-12 | 检索质量（已知局限） |
+
+> **EV-R3 是最值钱的一条**：8 条 fail 里 4 条是判定器自己算错（阈值 `0.67` 够不到 `2/3`），
+> 如果只看 verdict 汇总，会得出"恢复后检索整体变差"的错误结论。**判定器必须先被验证。**
+
+### `chunks.year` 为 NULL 的实测证据
+
+```sql
+SELECT d.filename, c.year, count(*) FROM public.chunks c
+JOIN public.documents d USING(document_id) GROUP BY 1,2;
+-- 三份年报 436/471/474 chunks，year 全为 NULL（字典/FAQ 同样）
+```
+
+ragent 里 `year` 是 `conflict_key` 的 period、`evidence.coverage_by_year`、跨年冲突检测的输入；
+NULL 的语义是「不可比」，于是这些质量特性静默退化——**没有报错，只是不再生效**。
+这也是为什么这一轮的 Q25 值得留档：它是「为了快关掉开关」这件事的**代价凭证**。
+
+### 平台自身的两条修正
+
+1. `runners.py`：跨文档召回阈值写成真分数 `CROSS_DOC_RECALL_MIN = 2/3`（原 `0.67` 使 2/3 永远 fail），
+   并加回归测试 `test_recall_two_of_three_passes`；
+2. `registry.py`：把评测工具自身事故（EV-R1…EV-R5）纳入平台风险库（`_EVAL_TOOL_RISKS`），
+   风险库从 46 → **51** 条——工具自己的坑必须出现在被展示的清单里，而不是只躺在 markdown。
+
+自测：`python -m pytest eval_platform/tests -q` → **22 passed**。
