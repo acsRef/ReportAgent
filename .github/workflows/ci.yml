@@ -125,6 +125,8 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - name: Install minimal deps
-        run: pip install -q fastapi httpx pyyaml
+        # 注意连 pytest 一起装：只装 fastapi/httpx 时 `python -m pytest` 直接
+        # "No module named pytest"（2026-11-18 第一次跑就踩到）
+        run: pip install -q pytest pytest-asyncio fastapi httpx pyyaml
       - name: Eval platform tests
         run: python -m pytest eval_platform/tests -q --tb=short
