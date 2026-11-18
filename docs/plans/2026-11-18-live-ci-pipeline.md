@@ -192,3 +192,20 @@ ragent 仓 L2 真跑（临时库 + 真 key，不动开发库）：
 1. 仓库 secrets：`LLM_API_KEY`（ReportAgent L2 必需）、`SILICONFLOW_API_KEY`（full 档 / ragent L2）；
 2. 手动触发一次 `live-eval`（mode=core）与 `e2e-contract` 确认远端绿；
 3. 之后即可把本 plan 移入「已完成」。
+
+### ragent 仓 CI 首跑：抓到的是「依赖漂移」，不是代码 bug
+
+这个仓库此前**零 CI**，第一次接上流水线（run 1/2）就抓出两个真实问题——都不是业务逻辑错，
+而是「本地环境碰巧装了旧版本」：
+
+| 问题 | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| `unit` + `integration` 全部收集失败（21 errors） | `ModuleNotFoundError: No module named 'psycopg'` | `requirements.txt` 里 `SQLAlchemy` **没钉版本**；CI 装到 **2.1.9**，而 2.1 起 `postgresql://` 的默认驱动从 psycopg2 变成 psycopg(v3)，本仓只 pin 了 `psycopg2-binary`。本地 conda 是 2.0.50 所以一直没暴露 | `SQLAlchemy>=2.0,<2.1` |
+| `integration` 仍失败 | passlib 抛 `ValueError: password cannot be longer than 72 bytes` | `passlib[bcrypt]` 拉到了 **bcrypt 5.0.0**，与 passlib 1.7.4 不兼容（本地是 bcrypt 4.0.1） | `bcrypt==4.0.1` |
+
+定位方式本身也值得记：GitHub Actions 的 job log 需要登录才能下载，而**匿名只能读 check-run
+annotations**。所以两个仓库的 workflow 都加了「失败时把日志尾部转成 `::error::` 注解」——
+这次就是靠注解里的 passlib traceback 直接看出根因的；第一轮没有注解时只能靠本地 Docker 复现。
+
+复现环境也固化了：`docker run python:3.11-slim` + `apt-get install postgresql` + pin 后的
+`requirements.txt`，在 Linux 上跑真 PG，避免「Windows 本地绿、CI 红」的循环。

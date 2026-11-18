@@ -127,7 +127,7 @@ D:\miniConda\envs\agent\python.exe -m pytest backend/tests/e2e/test_multiturn_fo
 | 压缩真数据保真 | ✅ 本地 12 passed（1m34s） |
 | Contract E2E（曾连红 7 天） | ✅ 本地全量 10 passed；根因与修复见 plan `2026-11-18-e2e-contract-fixture-realign` |
 | L2 远端 dispatch | ⏳ 需要配 secrets 后手动点一次（见第二节） |
-| ragent-py 仓 CI | ✅ 两个 workflow 已推送（`851a347`）；L2 本地真跑 65 题指标见其 `docs/ci-eval-pipelines.md` |
+| ragent-py 仓 CI | ✅ 两个 workflow 已推送；首跑即抓出两处**依赖漂移**（SQLAlchemy 2.1 换默认驱动 / bcrypt 5.0 与 passlib 不兼容），已 pin 修好，unit 转绿；L2 本地真跑 65 题指标见其 `docs/ci-eval-pipelines.md` |
 
 ## 八、还没做的
 
