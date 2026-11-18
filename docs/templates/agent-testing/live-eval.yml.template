@@ -1,0 +1,200 @@
+# L2「真链路」流水线模板 —— 复制成 `.github/workflows/live-eval.yml` 后改三处：
+#   ① secrets 名；② 依赖安装路径（requirements 文件位置）；③ 跑哪几个 live 用例。
+#
+# 设计要点（抄之前先读 docs/testing-playbook.md §3.3）：
+#   - 真链路**不进 push 门禁**：它贵、依赖外部服务，红了也不该拦提交；
+#   - 缺 secret 时 **skip 并 warning**，job 保持绿色（红了会训练人无视 CI；假绿更糟）；
+#   - 普通回归排在真链路**之后**（needs + always()），失败时先看到「哪一层坏了」；
+#   - 定时失败自动开/更新 Issue（同标题去重），手动触发失败不刷。
+name: live-eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "core（真 LLM 行为） / full（含外部服务） / offline（只跑普通回归）"
+        type: choice
+        options: [core, full, offline]
+        default: core
+  schedule:
+    - cron: "30 18 * * *"   # 每天 02:30 Asia/Shanghai → core
+    - cron: "30 19 * * 0"   # 每周一 03:30 Asia/Shanghai → full
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: live-eval
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  APP_ENV: development
+
+jobs:
+  # ── core：真 LLM 行为（不需要 DB / 外部服务）─────────────────────────────
+  prompt-behavior:
+    runs-on: ubuntu-latest
+    # N 例 × 3 采样 ≈ 10 min；多采样取多数，见 prompt_behavior_cases.template.json
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install deps
+        run: pip install -q -r requirements.txt -r requirements-dev.txt
+      - id: guard
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -z "${LLM_API_KEY}" ]; then
+            echo "::warning::缺少 LLM_API_KEY secret，L2 跳过（L1 门禁不受影响）"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Prompt behavior suite
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          RUN_PROMPT_BEHAVIOR: "1"
+          RUN_PROMPT_BEHAVIOR_SAMPLES: "3"
+        run: |
+          mkdir -p reports
+          python -m pytest evaluation/tests/test_prompt_behavior_live.py \
+            -q -s --junitxml=reports/prompt-behavior.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prompt-behavior-report
+          path: reports/
+          retention-days: 14
+
+  # ── 普通回归：排在真链路之后（贵而值的先跑）─────────────────────────────
+  offline-regression:
+    needs: [prompt-behavior]
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.mode != 'full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:0.7.0-pg15
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -q -r requirements.txt -r requirements-dev.txt
+      - name: Init DB
+        run: |
+          export PGPASSWORD=app
+          psql -h localhost -U app -d app -f scripts/init_db.sql
+      - name: Backend offline suite
+        env:
+          DATABASE_URL: postgresql://app:app@localhost:5432/app
+        run: |
+          set +e
+          python -m pytest -q --tb=short > /tmp/pytest.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            # 失败尾部转成 ::error 注解 —— Actions 的 job log 需要登录才能看，
+            # 但 annotations 匿名可读，排查时能少一轮来回。
+            tail -60 /tmp/pytest.log | while IFS= read -r line; do
+              echo "::error file=offline-regression::$line"
+            done
+          fi
+          exit $code
+
+  # ── full：需要外部服务/语料的真链路（每周 + 手动）───────────────────────
+  full-chain:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'full') ||
+      github.event.schedule == '30 19 * * 0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - id: guard
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+        run: |
+          if [ -z "${LLM_API_KEY}" ] || [ -z "${EMBEDDING_API_KEY}" ]; then
+            echo "::warning::full 档需要 LLM_API_KEY + EMBEDDING_API_KEY，缺一个就跳过"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install deps
+        if: steps.guard.outputs.ok == 'true'
+        run: pip install -q -r requirements.txt -r requirements-dev.txt
+      # ↓↓↓ 改这里：起外部服务 / 灌语料 / 等 ready（本仓的做法见 docs/ci-cd.md）↓↓↓
+      - name: Start external services
+        if: steps.guard.outputs.ok == 'true'
+        run: |
+          echo "TODO: clone/启动被测的 RAG/检索服务，并等待 /health"
+      - name: Live e2e
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          E2E: "1"
+        run: |
+          set +e
+          mkdir -p reports
+          python -m pytest tests/e2e -q -s --junitxml=reports/live-chain.xml > /tmp/live.log 2>&1
+          code=$?
+          sed 's/\x1b\[[0-9;]*m//g' /tmp/live.log | tail -80 | while IFS= read -r line; do
+            echo "::error file=live-chain::$line"
+          done
+          exit $code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-chain-report
+          path: reports/
+          retention-days: 14
+
+  # ── 失败要能吵醒人（手动触发不刷，避免调试噪音）─────────────────────────
+  notify-failure:
+    needs: [prompt-behavior, offline-regression, full-chain]
+    # needs 里被 skip 的 job 会让本 job 默认 skip，所以必须 always()；再判 failure()
+    if: always() && failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open or update tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="[live-eval] nightly 失败"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="nightly 失败：$run_url
+
+          排查顺序：① 看 job 的 ::error 注解 / artifact；② 先证明判定器对，再判定产品错。"
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

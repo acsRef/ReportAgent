@@ -20,6 +20,11 @@ if str(_BACKEND) not in sys.path:
 
 # Load .env from repo root so DATABASE_URL / LLM keys are present.
 _REPO_ROOT = _BACKEND.parent
+# 同时把 repo root 放进 sys.path：有 3 个测试会 `import evaluation.*`（仓库根包）。
+# 不放进来的话，结果**依赖当前目录**——从 repo root 跑 1937 例全收，从 backend/ 跑会 3 个收集错误
+# （playbook `docs/testing-playbook.md` §二·可复现性 P0 就是这条）。
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 _ENV_PATH = _REPO_ROOT / ".env"
 if _ENV_PATH.exists():
     from dotenv import load_dotenv

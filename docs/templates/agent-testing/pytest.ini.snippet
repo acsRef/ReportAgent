@@ -1,0 +1,28 @@
+# 并入仓库根 `pytest.ini`（必须在 repo root，否则 asyncio_mode 不生效）
+[pytest]
+asyncio_mode = auto
+asyncio_default_fixture_loop_scope = session
+# 从 repo root 跑：testpaths 用相对根目录的路径（不要 cd 进子目录再跑）
+testpaths = tests
+python_files = test_*.py
+python_classes = Test*
+python_functions = test_*
+addopts = -ra --strict-markers
+markers =
+    smoke: 秒级纯函数/常量，禁止 I/O
+    contracts: 契约层（工具 description / 状态 schema / 事件面 / reducer）
+    graphs: agent 图编排（mock LLM）
+    persistence: 真数据库（无 DATABASE_URL 时自动 skip）
+    api: HTTP 端点（TestClient，无真服务）
+    e2e: 真链路（需真服务 + 真 key；env-gate，默认 skip）
+
+# --- 按层跑（本地开发用） ---
+#   pytest -m smoke                 # 秒级反馈
+#   pytest -m "contracts or graphs" # 改 agent 逻辑后的最小回归
+#   pytest -m persistence           # 需要 DATABASE_URL
+#   E2E=1 pytest -m e2e             # 真链路（需要服务 + key）
+#
+# --- 纪律 ---
+# 1. 离线套件（smoke/contracts/graphs/api）禁止网络与真 LLM：conftest 里用 sentinel 环境变量钉死。
+# 2. e2e 必须 env-gate，缺 key 时 skip（不是 fail），且**不进 push 门禁**。
+# 3. 任何一条命令都从 repo root 跑；cwd 不同结果不同 = 可复现性缺陷，先修它。

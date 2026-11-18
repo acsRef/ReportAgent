@@ -1,5 +1,7 @@
 # CI/CD 现状：三层，各自回答不同问题
 
+> 方法论与「怎么把这套搬到别的 agent 项目」见 [testing-playbook.md](testing-playbook.md)；可整包复制的脚手架在 [docs/templates/agent-testing/](templates/agent-testing/README.md)。
+
 > 设计动机与取舍见 [plan 2026-11-18-live-ci-pipeline](plans/2026-11-18-live-ci-pipeline.md)。
 > 一句话：**L1 证明「代码没被改坏」，L2 证明「改完之后系统真的对」。** CD（镜像/发布/部署）本轮未做。
 
@@ -127,7 +129,7 @@ D:\miniConda\envs\agent\python.exe -m pytest backend/tests/e2e/test_multiturn_fo
 | 压缩真数据保真 | ✅ 本地 12 passed（1m34s） |
 | Contract E2E（曾连红 7 天） | ✅ 本地全量 10 passed；根因与修复见 plan `2026-11-18-e2e-contract-fixture-realign` |
 | L2 远端 dispatch | ⏳ 需要配 secrets 后手动点一次（见第二节） |
-| ragent-py 仓 CI | ✅ 两个 workflow 已推送；首跑即抓出两处**依赖漂移**（SQLAlchemy 2.1 换默认驱动 / bcrypt 5.0 与 passlib 不兼容），已 pin 修好，unit 转绿；L2 本地真跑 65 题指标见其 `docs/ci-eval-pipelines.md` |
+| ragent-py 仓 CI | ✅ 远端全绿（run 3, `620cfd9`：unit + integration 都 success）。首跑抓出两处**依赖漂移**（SQLAlchemy 2.1 换默认驱动 / bcrypt 5.0 与 passlib 不兼容），pin 后修好；L2 本地真跑 65 题：hit@5=1.0 / recall@5=0.945 / MRR=0.949，详见其 `docs/ci-eval-pipelines.md` |
 
 ## 八、还没做的
 

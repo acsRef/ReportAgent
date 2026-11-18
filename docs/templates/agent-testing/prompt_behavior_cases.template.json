@@ -1,0 +1,50 @@
+[
+  {
+    "id": "PB-01-intent-enum",
+    "area": "turn_understanding",
+    "why": "最常见入口问法：一句话要落成正确的目标类型，而不是泛化成的默认值。",
+    "input": "2024年各区域销售额排名",
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "new_task"},
+      {"type": "goal_types_include", "expected": ["ranking"]}
+    ],
+    "breaks_when": "规划 prompt 去掉「排名/排行」映射，或模型把它归成 overview"
+  },
+  {
+    "id": "PB-02-multiturn-inherit",
+    "area": "turn_understanding",
+    "why": "多轮里省略的年份/范围必须继承；判成新任务会丢掉已确认条件。",
+    "input": "再按产品细分一下",
+    "task": {"time_range": "2024年", "metrics": ["销售额"], "goals": [{"type": "ranking", "dimension": "区域"}]},
+    "history": ["2024年各区域销售额排名"],
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "follow_up"},
+      {"type": "goal_dimension_contains", "expected": ["产品"]}
+    ],
+    "breaks_when": "prompt 对多轮上下文描述变弱 → 判成 new_task，或把「细分」当新的时间范围改写"
+  },
+  {
+    "id": "PB-03-absolute-year-not-today",
+    "area": "turn_understanding",
+    "why": "相对时间（「七月份」）必须锚在上轮年份；按 today 算会静默算错一年。",
+    "input": "详细讲一下七月份",
+    "task": {"time_range": "2024年", "metrics": ["销售额"], "granularity": "month", "goals": [{"type": "trend"}]},
+    "history": ["2024年华东销售趋势和异常", "详细讲一下七月份"],
+    "criteria": [
+      {"type": "plan_json_contains_any", "expected": ["7月", "七月", "07月"]},
+      {"type": "plan_json_excludes", "expected": ["2026"]}
+    ],
+    "breaks_when": "prompt 里「时间以 today 为准」的例外说明被删 → 七月被算到当年"
+  },
+  {
+    "id": "PB-04-no-over-clarify",
+    "area": "turn_understanding",
+    "why": "产品口径：缺时间范围不拦澄清（按全部数据作答并标注），模型不该自作主张阻塞。",
+    "input": "销售额怎么样",
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "new_task"},
+      {"type": "goal_types_include", "expected": ["overview"]}
+    ],
+    "breaks_when": "prompt 把「时间范围」写成必填槽位 → 不再产出可执行目标，转而只问问题"
+  }
+]
