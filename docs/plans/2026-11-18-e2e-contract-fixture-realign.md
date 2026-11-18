@@ -1,4 +1,4 @@
-> 状态: 进行中
+> 状态: 已完成（2026-11-18）
 
 # 夜间 e2e-contract fixture 重对齐（连红 7 天的根因修复）
 
@@ -72,3 +72,18 @@
 - 不做 mock keying 兜底/轮转（A 方案，单独评审）；
 - 不缩 spec 子集、不改断言（B/C 方案 = 把核心契约测没了）；
 - 不处理 run 21 的 spec 10 偶发（时序问题，另案）。
+
+## 落地结果（2026-11-18）
+
+| 项 | 结果 |
+|---|---|
+| 3 个 fixture 的 canned SQL | 已补 `JOIN dim_date d ON d.full_date = o.order_date` + `d.year = 2024`（`empty-result` / `background-execution` / `report-version`） |
+| 防漂移闸 | 新增 `backend/tests/contracts/test_llm_mock_fixture_contract.py`：直接调同一条 `_missing_filter_violation`；**实测抽掉年份谓词 → 1 failed，还原 → 1 passed**（闸门确实会咬） |
+| 反向闸 | `_INTENTIONALLY_BROKEN` 里的 5 条（failed-result ×3 / retry:1 / replay-object-not-found:1，都是「坏 SQL 本身是被测对象」）必须仍然违约；夹具修好后要删白名单，避免豁免变成历史垃圾 |
+| 三条曾红的 spec | `04 / 06 / 07` → **3 passed (1.3m)**，backend stderr 不再出现 `required filter missing` / `MockLLMMiss` |
+| 全量 Contract | **10 passed (4.1m)**（本机，真 PG + mock LLM，与 CI 同配置） |
+| 远端 | 已推送 `854fabd`；另给 `e2e-contract` 加了「定时失败自动开 Issue」（这条连红 7 天没人看的另一半根因） |
+
+**顺带发现的潜在风险（未修，留档）**：mock 阶段 `report narration` 会打印
+`无法从 prompt 识别语义 kind（no marker matched）` —— 报告叙述 prompt 在 mock 里没有对应 kind marker，
+真触发时会静默降级。属 mock 覆盖缺口，不是本次红的成因，另案处理。
