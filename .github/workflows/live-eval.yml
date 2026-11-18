@@ -1,0 +1,376 @@
+# L2「真链路」流水线 —— 回答的是「改完之后系统是不是真的对」，不是「代码有没有被改坏」。
+#
+# 为什么单独一条流水线（plan 2026-11-18-live-ci-pipeline）：
+#   现有 ci.yml 的 189 个后端测试里 91 处是 mock LLM、78 处断言 prompt 文案，
+#   真 e2e 全部 skip；唯一接近真实的夜间 e2e-contract 自 2026-11-10 连红 7 次没人发现。
+#   于是把「真 LLM / 真 PG / 真 ragent」的用例单独放这里，并按价值分档，普通回归排最后。
+#
+# 分档（只挑有价值的，不追求「全用例都进 CI」）：
+#   core（每晚）      prompt 行为集（13 例，真 LLM）；普通离线回归排最后再跑一遍
+#   full（每周/手动） 真 RAG 链路：clone ragent + 起服务 + 灌字典 KB + 真 e2e（多轮/语义 SQL/真实问法）
+#
+# 需要 secrets：
+#   LLM_API_KEY        —— 必需；没配时真链路 job 打印 warning 并跳过（不会红）
+#   SILICONFLOW_API_KEY —— full 档灌 KB 时需要 embedding（没配则 full 档跳过）
+name: live-eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "跑哪一档：core（prompt） / full（含真 RAG 链路） / offline（只跑普通回归）"
+        type: choice
+        options: [core, full, offline]
+        default: core
+  schedule:
+    # 每天 18:30 UTC = 次日 02:30 Asia/Shanghai → core
+    - cron: "30 18 * * *"
+    # 每周日 19:30 UTC = 周一 03:30 Asia/Shanghai → full（真 RAG 链路慢且重）
+    - cron: "30 19 * * 0"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: live-eval
+  cancel-in-progress: false
+
+env:
+  APP_ENV: development
+  ALLOW_INSECURE_DEFAULT_AUTH: "1"
+  DATABASE_URL: postgresql://ragent:ragent@localhost:5432/ragent
+  ANALYSIS_DSN: postgresql://ragent_readonly:ragent_readonly@localhost:5432/ragent
+  REPORTAGENT_E2E: "1"
+  REPORTAGENT_E2E_BASE_URL: http://127.0.0.1:8100
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  # ── core-1：prompt 行为（只有真 LLM，不需要 PG / 后端进程）────────────────
+  prompt-behavior:
+    runs-on: ubuntu-latest
+    # 13 例 × 3 次采样 ≈ 9–12 min（多数通过才算过，见测试文件里的「为什么多采样」）
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install deps
+        run: |
+          pip install -q -r backend/requirements.txt -r backend/requirements-dev.txt
+      - id: guard
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -z "${LLM_API_KEY}" ]; then
+            echo "::warning::没有配置 LLM_API_KEY secret，L2 真链路跳过（L1 门禁不受影响）"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Prompt behavior suite（真 LLM，13 例）
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          RUN_PROMPT_BEHAVIOR: "1"
+          # 每个用例采样 3 次、多数通过才算过（prompt 行为是概率性的；单采样的红是噪音）
+          RUN_PROMPT_BEHAVIOR_SAMPLES: "3"
+        run: |
+          mkdir -p reports
+          python -m pytest evaluation/tests/test_prompt_behavior_live.py \
+            -q -s --junitxml=reports/prompt-behavior.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prompt-behavior-report
+          path: reports/
+          retention-days: 14
+
+  # ── core-2：压缩摘要的真数据保真（PG + 真 LLM；不需要 ragent）──────────────
+  # 压缩 prompt 是最「默默影响答案」的一处：摘要丢一个数，后面报告就错。合成用例钉算法边界，
+  # 这里拿真实数仓数据跑生产入口，回答「压缩到底丢没丢东西」。
+  compaction-real-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:0.7.0-pg15
+        env:
+          POSTGRES_USER: ragent
+          POSTGRES_PASSWORD: ragent
+          POSTGRES_DB: ragent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ragent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install deps
+        run: pip install -q -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Init PostgreSQL
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          export PGPASSWORD=ragent
+          psql -h localhost -U ragent -d ragent -f backend/scripts/init_pg.sql
+          psql -h localhost -U ragent -d ragent -f backend/scripts/seed_business_p15prelude.sql
+          psql -h localhost -U ragent -d ragent -f backend/scripts/setup_app_role.sql
+      - id: guard
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -z "${LLM_API_KEY}" ]; then
+            echo "::warning::没有配置 LLM_API_KEY secret，压缩真数据用例跳过"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Compaction real flow（真数仓 + 真 LLM）
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          RUN_REAL_COMPACTION: "1"
+        run: |
+          mkdir -p reports
+          python -m pytest backend/tests/persistence/test_compaction_real_flow.py \
+            -q -s --junitxml=reports/compaction-real-flow.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compaction-real-flow-report
+          path: reports/
+          retention-days: 14
+
+  # ── core-3：普通离线回归（校验「真链路绿了之后，普通套件也没回退」）────────
+  # 位置刻意放最后、且 `if: always()`：真链路红了也要把普通回归跑完，别让前一个信号掩盖后面的。
+  offline-regression:
+    needs: [prompt-behavior, compaction-real-flow]
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.mode != 'full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:0.7.0-pg15
+        env:
+          POSTGRES_USER: ragent
+          POSTGRES_PASSWORD: ragent
+          POSTGRES_DB: ragent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ragent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install deps
+        run: pip install -q -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Init PostgreSQL
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          export PGPASSWORD=ragent
+          psql -h localhost -U ragent -d ragent -f backend/scripts/init_pg.sql
+          psql -h localhost -U ragent -d ragent -f backend/scripts/seed_business_p15prelude.sql
+          psql -h localhost -U ragent -d ragent -f backend/scripts/setup_app_role.sql
+      - name: Backend offline suite（普通回归）
+        # e2e marker 在 CI 里仍自动 skip（REPORTAGENT_E2E 只在真链路 job 里用）
+        env:
+          REPORTAGENT_E2E: ""
+        run: |
+          set +e
+          python -m pytest -q --tb=short > /tmp/pytest.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            tail -60 /tmp/pytest.log | while IFS= read -r line; do
+              echo "::error file=offline-regression::$line"
+            done
+          fi
+          exit $code
+
+  # ── full：真 RAG 链路（clone ragent + 起服务 + 灌字典 KB + 真 e2e）──────────
+  full-chain:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'full') ||
+      github.event.schedule == '30 19 * * 0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: pgvector/pgvector:0.7.0-pg15
+        env:
+          POSTGRES_USER: ragent
+          POSTGRES_PASSWORD: ragent
+          POSTGRES_DB: ragent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ragent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - id: guard
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+        run: |
+          if [ -z "${LLM_API_KEY}" ] || [ -z "${SILICONFLOW_API_KEY}" ]; then
+            echo "::warning::full 档需要 LLM_API_KEY + SILICONFLOW_API_KEY（灌 KB 要 embedding），缺一个就跳过"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install ReportAgent deps
+        if: steps.guard.outputs.ok == 'true'
+        run: pip install -q -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Init PostgreSQL
+        if: steps.guard.outputs.ok == 'true'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          export PGPASSWORD=ragent
+          psql -h localhost -U ragent -d ragent -f backend/scripts/init_pg.sql
+          psql -h localhost -U ragent -d ragent -f backend/scripts/seed_business_p15prelude.sql
+          psql -h localhost -U ragent -d ragent -f backend/scripts/setup_app_role.sql
+      - name: Clone + install ragent-py（真检索运行时）
+        if: steps.guard.outputs.ok == 'true'
+        run: |
+          git clone --depth 1 https://github.com/acsRef/Rag.git /opt/ragent-py
+          pip install -q -r /opt/ragent-py/requirements.txt
+      - name: Start ragent-py :8000
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          cd /opt/ragent-py
+          nohup python -m app.main > /tmp/ragent.log 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then echo "ragent up"; break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8000/health || (tail -40 /tmp/ragent.log && exit 1)
+      - name: Ingest 业务表字典 KB（schema 检索的真数据）
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          RAGENT_URL: http://127.0.0.1:8000
+        run: |
+          cd /opt/ragent-py
+          python - <<'PY'
+          import asyncio, json
+          from mcp_server import server as mcp
+
+          rows = asyncio.run(mcp.cmd_ingest_table_schemas({}))
+          parsed = json.loads(rows)
+          ok = [r for r in parsed if r.get("status") == "indexed"]
+          print(f"dict KB: {len(ok)}/{len(parsed)} indexed")
+          if len(ok) < 5:
+              raise SystemExit("字典 KB 灌入不足，真链路无法验证 schema 检索")
+          PY
+      - name: Start backend :8100（REPORTAGENT_E2E=1）
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          RAGENT_MCP_PYTHON: python3
+          RAGENT_MCP_CWD: /opt/ragent-py
+          RAGENT_MCP_MODULE: mcp_server.server
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8100 > /tmp/backend.log 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8100/health > /dev/null; then echo "backend up"; break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8100/health || (tail -60 /tmp/backend.log && exit 1)
+      - name: Live E2E（多轮 / 语义 SQL / 真实问法）
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          RAGENT_MCP_PYTHON: python3
+          RAGENT_MCP_CWD: /opt/ragent-py
+          RAGENT_MCP_MODULE: mcp_server.server
+        run: |
+          set +e
+          mkdir -p reports
+          python -m pytest \
+            backend/tests/e2e/test_multiturn_followup.py \
+            backend/tests/e2e/test_real_user_questions.py \
+            evaluation/tests/test_semantic_sql_accuracy.py \
+            -q -s --junitxml=reports/live-chain.xml > /tmp/live.log 2>&1
+          code=$?
+          sed 's/\x1b\[[0-9;]*m//g' /tmp/live.log | tail -80 | while IFS= read -r line; do
+            echo "::error file=live-chain::$line"
+          done
+          exit $code
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p reports
+          for f in /tmp/ragent.log /tmp/backend.log /tmp/live.log; do
+            [ -f "$f" ] && cp "$f" reports/ || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-chain-report
+          path: reports/
+          retention-days: 14
+
+  # ── 失败要能吵醒人：定时失败自动开/更新 Issue（手动触发失败不刷 Issue）───────
+  notify-failure:
+    needs: [prompt-behavior, compaction-real-flow, offline-regression, full-chain]
+    # needs 里被 skip 的 job 会让本 job 默认 skip，所以必须 always()；再用 failure() 判要不要通知。
+    if: >-
+      always() && failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open or update tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="[live-eval] nightly 失败"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="nightly 真链路失败，需要有人看：$run_url
+
+          排查顺序：① `prompt-behavior` job 的模型原文（prompt 退化还是用例写错）
+          ② `full-chain` job 的 `/tmp/backend.log`、`/tmp/ragent.log`
+          ③ 历史对照：`docs/plans/2026-11-18-live-ci-pipeline.md`"
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

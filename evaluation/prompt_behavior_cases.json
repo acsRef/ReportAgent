@@ -1,0 +1,169 @@
+[
+  {
+    "id": "PB-01-new-ranking",
+    "area": "turn_understanding",
+    "why": "最常见的入口问法：一句中文要能落成「排名」目标，而不是泛化成 overview。",
+    "input": "2024年各区域销售额排名",
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "new_task"},
+      {"type": "goal_types_include", "expected": ["ranking"]}
+    ],
+    "breaks_when": "turn 规划 prompt 去掉「排名/排行/第几」的映射，或模型把它归成 overview"
+  },
+  {
+    "id": "PB-02-new-trend",
+    "area": "turn_understanding",
+    "why": "趋势类目标在报告层要出 chart；目标分类错了后面全歪。",
+    "input": "2024年华东月度销售趋势",
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "new_task"},
+      {"type": "goal_types_include", "expected": ["trend"]}
+    ],
+    "breaks_when": "prompt 把「趋势/走势/变化」从 trend 挪走，或强模型开始只输出 overview"
+  },
+  {
+    "id": "PB-03-extreme-max",
+    "area": "turn_understanding",
+    "why": "极值期要带 direction/unit，否则 SQL 不知道该 MAX 还是 MIN、按月还是按天。",
+    "input": "2024年哪个月销售额最高？",
+    "criteria": [
+      {"type": "goal_any", "where": {"type": "extreme_period"}, "expect": {"direction": "max", "unit": "month"}}
+    ],
+    "breaks_when": "prompt 丢掉 direction/unit 字段说明，模型只回 extreme_period 裸类型"
+  },
+  {
+    "id": "PB-04-distribution",
+    "area": "turn_understanding",
+    "why": "占比/分布与排名是两件事（需要百分比口径 + pie）。",
+    "input": "2024年各区域销售额占比",
+    "criteria": [
+      {"type": "goal_types_include", "expected": ["distribution"]},
+      {"type": "goal_types_exclude", "expected": ["ranking"]}
+    ],
+    "breaks_when": "prompt 把「占比/结构」和「排名」混成一类（历史事故：饼图被画成柱状排名）"
+  },
+  {
+    "id": "PB-05-detail-rows",
+    "area": "turn_understanding",
+    "why": "明细模式不能聚合；目标分类错会导致 SQL 加 GROUP BY。",
+    "input": "把2024年各区域销售额的明细数据给我",
+    "criteria": [
+      {"type": "goal_types_include", "expected": ["detail_rows"]}
+    ],
+    "breaks_when": "prompt 把「明细/逐条/原始」映射删掉，模型回 compare/overview"
+  },
+  {
+    "id": "PB-06-chitchat",
+    "area": "turn_understanding",
+    "why": "闲聊不能进分析链路（会白跑一次 SQL 并产出脏报告）。",
+    "input": "你好，在吗？",
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "chitchat"},
+      {"type": "goals_empty"}
+    ],
+    "breaks_when": "prompt 的闲聊判定收紧后，打招呼被当成 analysis 任务"
+  },
+  {
+    "id": "PB-07-followup-subdivide",
+    "area": "turn_understanding",
+    "why": "「再按产品细分」是追问，不是新任务；判错会丢掉已确认的时间/区域。",
+    "input": "再按产品细分一下",
+    "task": {
+      "time_range": "2024年",
+      "metrics": ["销售额"],
+      "goals": [{"type": "ranking", "dimension": "区域"}]
+    },
+    "history": ["2024年各区域销售额排名"],
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "follow_up"},
+      {"type": "goal_dimension_contains", "expected": ["产品"]}
+    ],
+    "breaks_when": "prompt 对多轮上下文描述变弱 → 模型判成 new_task，或把「按产品细分」当成新的时间范围改写"
+  },
+  {
+    "id": "PB-08-modify-scope",
+    "area": "turn_understanding",
+    "why": "「改成只看华南」是改写条件；要落到 update_fields.scope，而不是新建任务。",
+    "input": "改成只看华南",
+    "task": {
+      "time_range": "2024年",
+      "scope": ["华东"],
+      "metrics": ["销售额"],
+      "goals": [{"type": "ranking", "dimension": "区域"}]
+    },
+    "history": ["2024年华东各区域销售额排名"],
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "modify_task"},
+      {"type": "update_fields_contains", "field": "scope", "expected": ["华南"]}
+    ],
+    "breaks_when": "prompt 没写清「改写条件」与「新的分析目标」的区别 → 模型回 follow_up 且不改 scope"
+  },
+  {
+    "id": "PB-09-inherit-year-not-today",
+    "area": "turn_understanding",
+    "why": "真实事故：多轮里「七月份」被按 today 算成 2026 年，丢掉 2024 的锚。",
+    "input": "详细讲一下七月份",
+    "task": {
+      "time_range": "2024年",
+      "metrics": ["销售额"],
+      "granularity": "month",
+      "goals": [{"type": "trend"}]
+    },
+    "history": ["2024年华东销售趋势和异常", "详细讲一下七月份"],
+    "criteria": [
+      {"type": "plan_json_contains_any", "expected": ["7月", "七月", "07月"]},
+      {"type": "plan_json_excludes", "expected": ["2026"]}
+    ],
+    "breaks_when": "prompt 里「时间以 today 为准」的例外说明被删 → 模型把七月算到当年（2026）"
+  },
+  {
+    "id": "PB-10-veto-ranking",
+    "area": "turn_understanding",
+    "why": "用户否定词（「不用排名」）必须生效，否则报告还是排名。",
+    "input": "不用排名，按月份看趋势就行",
+    "criteria": [
+      {"type": "goal_types_include", "expected": ["trend"]},
+      {"type": "goal_types_exclude", "expected": ["ranking"]}
+    ],
+    "breaks_when": "prompt / 代码侧否决规则丢失 → 输出里同时留着 ranking"
+  },
+  {
+    "id": "PB-11-multi-goal",
+    "area": "turn_understanding",
+    "why": "一句话两件事（趋势 + 异常）要产出两个目标，不能只留一个。",
+    "input": "看2024年销售趋势，顺便指出哪几个月异常",
+    "criteria": [
+      {"type": "goal_types_include", "expected": ["trend", "anomaly"]}
+    ],
+    "breaks_when": "prompt 要求「只输出一个目标」或 _MAX_GOALS 收得过紧 → 只剩 trend"
+  },
+  {
+    "id": "PB-12-new-vs-followup",
+    "area": "turn_understanding",
+    "why": "有上一轮任务时，问的是另一套指标：可以延续会话，但**旧指标必须被替换**（不能 2024 销售额 + 库存周转率混着算）。",
+    "input": "帮我看看库存周转率",
+    "task": {
+      "time_range": "2024年",
+      "metrics": ["销售额"],
+      "goals": [{"type": "ranking", "dimension": "区域"}]
+    },
+    "history": ["2024年各区域销售额排名"],
+    "criteria": [
+      {"type": "metric_mentioned", "expected": ["库存周转率"]},
+      {"type": "plan_json_excludes", "expected": ["\"销售额\""]}
+    ],
+    "breaks_when": "prompt 让模型「沿用上一轮指标」过度 → 新问法既不更新指标，又保留旧指标"
+  },
+  {
+    "id": "PB-13-no-over-clarify",
+    "area": "turn_understanding",
+    "why": "产品口径：没给时间范围不拦澄清（按全部数据作答并在卡上标注），所以目标要是能直接执行的 overview，而不是「等信息才能干」。",
+    "input": "销售额怎么样",
+    "criteria": [
+      {"type": "enum_exact", "path": "conversation_act", "expected": "new_task"},
+      {"type": "goal_types_include", "expected": ["overview"]},
+      {"type": "metric_mentioned", "expected": ["销售额"]}
+    ],
+    "breaks_when": "prompt 把「时间范围」写成必填槽位 → 模型不再产出可执行目标，转而只问问题"
+  }
+]

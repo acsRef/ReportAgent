@@ -4,8 +4,10 @@
 #   - 触发：任意分支的 push + 所有 PR
 #   - backend-gate ：全量 pytest（PG service 真跑 persistence；e2e marker 无
 #                    REPORTAGENT_E2E 自动 skip）
-#   - frontend-gate：vitest 单测 + tsc 类型检查
-#   - Playwright Contract E2E **不在本 workflow**（见 e2e-contract.yml）：
+#   - frontend-gate：vitest 单测 + tsc 类型检查 + oxlint + vite build
+#   - eval-platform-gate：评测平台自测（判定器口径也算被测代码）
+# 真 LLM / 真 RAG 的「真链路」不在这里 —— 见 live-eval.yml（每晚 + 手动，plan 2026-11-18-live-ci-pipeline）。
+#   Playwright Contract E2E **不在本 workflow**（见 e2e-contract.yml）：
 #     mock keying = 语义 kind + 调用序，prompt 一改就错位，属于"改了文案就红"
 #     的假失败，不该拦提交。
 #
@@ -102,3 +104,27 @@ jobs:
         # frontend，tsc 会在仓库根找 tsconfig.json → TS5083。（2026-10-28 实测踩到）
         run: npx tsc -b
         working-directory: frontend
+      - name: Lint (oxlint)
+        run: npm run lint
+        working-directory: frontend
+      - name: Build (vite build)
+        # 单测跑在 jsdom 里，跑不出「生产构建坏了」这类问题（坏 import / 环境变量注入 / 产物拆分）。
+        run: npm run build
+        working-directory: frontend
+
+  # 评测平台自测：它自己也是代码（判定器 bug 会让「产品失败」的结论错 4 条，见 plan
+  # 2026-11-17-eval-platform），所以进 L1 门禁。依赖很轻（fastapi + httpx），几秒钟。
+  eval-platform-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install minimal deps
+        run: pip install -q fastapi httpx pyyaml
+      - name: Eval platform tests
+        run: python -m pytest eval_platform/tests -q --tb=short
