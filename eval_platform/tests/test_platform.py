@@ -5,7 +5,15 @@ import pytest
 
 from eval_platform import adapters, registry, runners
 
-pytestmark = pytest.mark.contracts
+# 平台的用例归一需要 ragent-py 的测试集（另一个仓库）。缺它时**跳过而不是报错**：
+# 报错会让人以为平台坏了，静默返回空用例又会假装通过。CI 里由 workflow clone 后指 RAG_REPO。
+pytestmark = [
+    pytest.mark.contracts,
+    pytest.mark.skipif(
+        not registry.rag_repo_available(),
+        reason=f"需要 ragent-py 检出（RAG_REPO）；缺失输入：{registry.missing_inputs()}",
+    ),
+]
 
 
 # --- 资产加载 ---------------------------------------------------------------

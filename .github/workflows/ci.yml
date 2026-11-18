@@ -128,5 +128,12 @@ jobs:
         # 注意连 pytest 一起装：只装 fastapi/httpx 时 `python -m pytest` 直接
         # "No module named pytest"（2026-11-18 第一次跑就踩到）
         run: pip install -q pytest pytest-asyncio fastapi httpx pyyaml
+      # 平台的用例归一要读 ragent-py 的测试集（另一个公开仓库）。只需要 JSON，不用装它的依赖。
+      - name: Checkout ragent-py testset
+        run: git clone --depth 1 https://github.com/acsRef/Rag.git /tmp/ragent-py
       - name: Eval platform tests
-        run: python -m pytest eval_platform/tests -q --tb=short
+        env:
+          RAG_REPO: /tmp/ragent-py
+        run: |
+          python -c "from eval_platform import registry; print('missing:', registry.missing_inputs())"
+          python -m pytest eval_platform/tests -q --tb=short

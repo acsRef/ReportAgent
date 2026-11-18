@@ -16,14 +16,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-RA_REPO = Path(os.getenv("RA_REPO", r"D:\PyProject\ReportAgent"))
-RAG_REPO = Path(os.getenv("RAG_REPO", r"D:\PyProject\ragent-py"))
+# 本仓默认路径从 `__file__` 推出来（CI checkout 到任意目录都能用）；本地可用 RA_REPO 覆盖。
+REPO_ROOT = Path(__file__).resolve().parents[1]
+RA_REPO = Path(os.getenv("RA_REPO") or REPO_ROOT)
+# ragent-py 是**另一个仓库**：本地默认放在同级目录；CI 里由 workflow clone 后通过 RAG_REPO 指过去。
+RAG_REPO = Path(os.getenv("RAG_REPO") or (REPO_ROOT.parent / "ragent-py"))
 
 RA_BASELINE = RA_REPO / "evaluation" / "baseline_cases.json"
 DOC_MAP_PATH = Path(__file__).with_name("assets") / "rag_doc_map.json"
 RA_MEMORY_GOLD = RA_REPO / "evaluation" / "memory_gold_cases.json"
 RAG_TESTSET = RAG_REPO / "eval" / "sany_annual_reports" / "rag_testset.json"
 RAG_RESULTS = RAG_REPO / "eval" / "sany_annual_reports" / "eval_results.json"
+
+
+def rag_repo_available() -> bool:
+    """ragent-py 的测试集是否可用（决定 RAG 相关用例能跑还是该跳过）。
+
+    没有它的时候不该「报错让人以为平台坏了」，也不要静默返回空用例假装通过——
+    调用方（测试）显式 skip 并说明缺什么。
+    """
+    return RAG_TESTSET.exists()
+
+
+def missing_inputs() -> list[str]:
+    """返回缺失的输入文件清单（诊断用；CI 里打印这个就知道该 clone/挂载什么）。"""
+    return [
+        f"{label}={path}"
+        for label, path in (
+            ("RA_BASELINE", RA_BASELINE),
+            ("RA_MEMORY_GOLD", RA_MEMORY_GOLD),
+            ("RAG_TESTSET", RAG_TESTSET),
+        )
+        if not path.exists()
+    ]
 
 PROJECT_RA = "reportagent"
 PROJECT_RAG = "ragent"
