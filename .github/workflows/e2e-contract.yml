@@ -18,6 +18,10 @@ on:
     # 每天 18:00 UTC（= 次日 02:00 Asia/Shanghai）
     - cron: "0 18 * * *"
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   contract-e2e:
     runs-on: ubuntu-latest
@@ -84,3 +88,29 @@ jobs:
           name: contract-e2e-artifacts
           path: frontend/e2e/artifacts
           retention-days: 7
+
+  # 失败要能吵醒人：这条流水线 2026-11-10 起连红 7 天没人发现（plan 2026-11-18-e2e-contract-fixture-realign）。
+  # 手动触发失败不刷 Issue（调试噪音），只有定时失败才开/更新。
+  notify-failure:
+    needs: [contract-e2e]
+    if: always() && failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open or update tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="[e2e-contract] nightly 失败"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="夜间 Contract E2E 失败：$run_url
+
+          排查顺序：① 下载 `contract-e2e-artifacts`（trace / 失败截图）
+          ② 在 backend stderr 里搜 \`required filter missing\` / \`MockLLMMiss\`
+          ③ 夹具是否跟上最新 SQL 契约：\`pytest backend/tests/contracts/test_llm_mock_fixture_contract.py\`"
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
