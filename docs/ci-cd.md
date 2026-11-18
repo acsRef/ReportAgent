@@ -118,7 +118,18 @@ D:\miniConda\envs\agent\python.exe -m pytest backend/tests/e2e/test_multiturn_fo
 
 跨仓真链路（ReportAgent 需要 ragent 的字典 KB）由 `full-chain` job 现场 clone 并启动，不依赖线上服务。
 
-## 七、还没做的
+## 七、已验证到哪一步（2026-11-18）
+
+| 项 | 状态 |
+|---|---|
+| L1 门禁（含新增前端 build/lint、评测平台自测） | ✅ 远端 GitHub Actions 实跑绿（run 126） |
+| prompt 行为集（13 例 × 3 采样） | ✅ 本地按 CI 配置真跑 13 passed（7m22s） |
+| 压缩真数据保真 | ✅ 本地 12 passed（1m34s） |
+| Contract E2E（曾连红 7 天） | ✅ 本地全量 10 passed；根因与修复见 plan `2026-11-18-e2e-contract-fixture-realign` |
+| L2 远端 dispatch | ⏳ 需要配 secrets 后手动点一次（见第二节） |
+| ragent-py 仓 CI | ✅ 两个 workflow 已推送（`851a347`）；L2 本地真跑 65 题指标见其 `docs/ci-eval-pipelines.md` |
+
+## 八、还没做的
 
 - **CD**：镜像构建（backend / frontend / mcp）、GHCR 推送、GitHub Release、SSH 部署 —— 本轮不做。
   理由：先把「测得准」解决掉，再谈「自动上线」；否则等于给不可信的绿灯装自动发布。

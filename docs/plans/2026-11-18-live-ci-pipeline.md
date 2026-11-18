@@ -141,3 +141,54 @@ L2 的定时触发失败时，自动开/更新一个 GitHub Issue：
 - 不做多机/多环境（staging）部署；
 - 不改两个项目的业务代码（除修 nightly 定位到的真缺陷）；
 - 不追求「全用例都进 CI」——按用户要求只挑有价值的，普通回归排最后。
+
+## 落地结果（2026-11-18 晚）
+
+### L1 门禁（远端已验证）
+
+`ci.yml` 新增的两个 job 在 GitHub Actions 上实跑通过（run 125 / 126，sha `f40ab12` / `17c6b7f`）：
+
+| job | 结果 |
+|---|---|
+| `backend-gate` | success（1900+ 例，真 PG service） |
+| `frontend-gate` | success（新增 **oxlint** + **vite build** 两步） |
+| `eval-platform-gate` | success（22 例；新增；两次修复后才绿，见下） |
+
+两次踩坑（都记进代码注释，防止再犯）：
+
+1. 只装 `fastapi/httpx` 没装 **pytest** → `No module named pytest`；
+2. `registry.RAG_REPO` 默认写死 `D:\PyProject\ragent-py`（本地路径）→ CI 没有这个目录。
+   修法：`RA_REPO` 从 `__file__` 推仓库根、`RAG_REPO` 允许环境变量覆盖并在缺检出时
+   **skip 而不是报错**；CI 里 `git clone --depth 1 acsRef/Rag`（只读 JSON，不装依赖）并设 `RAG_REPO`。
+
+### L2 真链路（本地按 CI 配置真跑）
+
+| 用例 | 结果 | 耗时 |
+|---|---|---|
+| prompt 行为集（13 例 × **3 采样取多数**） | **13 passed** | 7m22s |
+| 压缩真数据保真（`test_compaction_real_flow.py`） | **12 passed** | 1m34s |
+| 全量 Contract E2E（真 PG + mock LLM，10 条 spec） | **10 passed**（修完 fixture 后） | 4m06s |
+
+prompt 行为集开发过程中两次「假红」都是**判据写错**（`update_fields` 有没有值、`uncertainties`
+在产品里其实未被消费），已在用例文件里写明；另有两条真·概率性波动（PB-04/PB-06），
+用「3 采样取多数」解决——单次采样进 CI 就是噪音。
+
+### ragent-py 仓（另一个仓库，本轮补上了零 CI）
+
+| 文件 | 内容 |
+|---|---|
+| `ci.yml` | L1：`pytest tests/unit`（528 passed）+ `tests/integration`（66 passed / 13 skipped，真 PG service） |
+| `eval.yml` | L2：每晚 `retrieval-invariants`（复用既有 5 个 integration 场景）+ `retrieval-eval`（真 PG + 真 embedding，65 题，tier=full/regression/smoke），缺 `SILICONFLOW_API_KEY` 时跳过不红；新增定时失败自动开 Issue |
+| `docs/ci-eval-pipelines.md` | 两个流水线怎么跑、要什么 secret、怎么本地复跑 |
+| `eval/retrieval_eval.py` | 7 行 bug fix：`GoldQuestion` 迁移后仍用 `q['id']`/`q.get(...)` 式访问 → 直接 `AttributeError`，不修行 L2 每晚必崩 |
+
+ragent 仓 L2 真跑（临时库 + 真 key，不动开发库）：
+3 份年报 524 chunks 全部 embedding 成功 → 65 题 `hit@5=1.000 / hit@10=1.000 / recall@5=0.945 / recall@10=0.995 / MRR=0.949`。
+顺带发现两个仓库级缺口（未修，已写进它自己的文档）：`pymupdf4llm` 没进 `requirements.txt`（PDF 入库在干净环境会失败）、
+`pymupdf4llm` 的 GNN layout 在 CPU 上极慢（L2 里显式 `use_layout(False)`）。
+
+### 还差什么（需要人）
+
+1. 仓库 secrets：`LLM_API_KEY`（ReportAgent L2 必需）、`SILICONFLOW_API_KEY`（full 档 / ragent L2）；
+2. 手动触发一次 `live-eval`（mode=core）与 `e2e-contract` 确认远端绿；
+3. 之后即可把本 plan 移入「已完成」。
