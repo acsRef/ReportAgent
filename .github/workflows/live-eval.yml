@@ -83,8 +83,10 @@ jobs:
           RUN_PROMPT_BEHAVIOR_SAMPLES: "3"
         run: |
           mkdir -p reports
-          python -m pytest evaluation/tests/test_prompt_behavior_live.py \
-            -q -s --junitxml=reports/prompt-behavior.xml
+          # 定时任务允许重跑失败用例一次（push 门禁永不重跑）；flaky 会留痕到 reports/flaky-*.json
+          python scripts/ci/run_with_flaky_retry.py --name prompt-behavior -- \
+            evaluation/tests/test_prompt_behavior_live.py -q -s \
+            --junitxml=reports/prompt-behavior.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -147,8 +149,9 @@ jobs:
           RUN_REAL_COMPACTION: "1"
         run: |
           mkdir -p reports
-          python -m pytest backend/tests/persistence/test_compaction_real_flow.py \
-            -q -s --junitxml=reports/compaction-real-flow.xml
+          python scripts/ci/run_with_flaky_retry.py --name compaction-real-flow -- \
+            backend/tests/persistence/test_compaction_real_flow.py -q -s \
+            --junitxml=reports/compaction-real-flow.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -199,15 +202,8 @@ jobs:
         env:
           REPORTAGENT_E2E: ""
         run: |
-          set +e
-          python -m pytest -q --tb=short > /tmp/pytest.log 2>&1
-          code=$?
-          if [ $code -ne 0 ]; then
-            tail -60 /tmp/pytest.log | while IFS= read -r line; do
-              echo "::error file=offline-regression::$line"
-            done
-          fi
-          exit $code
+          mkdir -p reports
+          python scripts/ci/run_with_flaky_retry.py --name offline-regression -- -q --tb=short
 
   # ── full：真 RAG 链路（clone ragent + 起服务 + 灌字典 KB + 真 e2e）──────────
   full-chain:
@@ -322,18 +318,12 @@ jobs:
           RAGENT_MCP_CWD: /opt/ragent-py
           RAGENT_MCP_MODULE: mcp_server.server
         run: |
-          set +e
           mkdir -p reports
-          python -m pytest \
+          python scripts/ci/run_with_flaky_retry.py --name full-chain -- \
             backend/tests/e2e/test_multiturn_followup.py \
             backend/tests/e2e/test_real_user_questions.py \
             evaluation/tests/test_semantic_sql_accuracy.py \
-            -q -s --junitxml=reports/live-chain.xml > /tmp/live.log 2>&1
-          code=$?
-          sed 's/\x1b\[[0-9;]*m//g' /tmp/live.log | tail -80 | while IFS= read -r line; do
-            echo "::error file=live-chain::$line"
-          done
-          exit $code
+            -q -s --junitxml=reports/live-chain.xml
       - name: Collect logs
         if: always()
         run: |

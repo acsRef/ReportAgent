@@ -80,3 +80,6 @@ eval_platform/runs.sqlite
 
 # 归档的历史运行库（批次重跑前留档，仅本地可查）
 eval_platform/.archive/
+
+# CI 本地跑出来的报告/日志（workflow 里用 artifact 收集，不进版本库）
+reports/

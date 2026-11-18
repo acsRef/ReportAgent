@@ -38,14 +38,14 @@
 | 7 | **测试资产治理** | 用例/金标/夹具都有来源、版本、重挂机制；夹具与契约同步有闸 | 金标 `rag_doc_map.json` 重挂表、评测平台证据档位、**新增 fixture 防漂移闸** | ✅ |
 | 8 | **依赖与环境纪律** | 依赖 pin、干净环境可重建；"本地绿 ≠ CI 绿"要当成信号 | 本轮才钉住 `SQLAlchemy<2.1` / `bcrypt==4.0.1`；此前 ragent 仓零 CI、靠本地碰巧装的旧版本 | ❌→✅（刚补） |
 | 9 | **可复现性** | 一条命令在任何 cwd 给出同样结果 | 同一条 `pytest` 在 repo root 收集 1937 例、在 `backend/` 下出现 3 个收集错误（3 个文件 `import evaluation`）——**结果依赖 cwd**；已在 `backend/tests/conftest.py` 把 repo root 放进 `sys.path` 修好，两处都 1937 | ✅（当日修） |
-| 10 | **flaky 治理** | 有隔离名单/重跑策略/统计 | 无；真链路靠"多采样取多数"缓解，但没有 quarantine 机制与失败率统计 | ❌ |
+| 10 | **flaky 治理** | 有隔离名单/重跑策略/统计 | 已落地三纪律：push 永不重跑 / 定时只重跑失败用例一次 / 重跑通过必须留痕（warning + `reports/flaky-*.json` + Summary + artifact）；两次都失败才红并开 Issue。隔离名单仍人工月度复盘 | ✅（当日补） |
 
 ### 三个"不正规"的地方，怎么修（按 ROI 排序）
 
 | 优先级 | 问题 | 落地动作 | 成本 |
 |---|---|---|---|
 | ~~P0~~ | ~~结果依赖 cwd（#9）~~ | **已修**：`backend/tests/conftest.py` 把 repo root 加入 `sys.path`；`backend/` 与 repo root 都收集 1937 例 | 0.2h ✅ |
-| **P1** | flaky 无治理（#10） | 用 GitHub 的 `--rerun-failed` 只在 L2 定时任务上开 1 次重跑（**不掩盖 push 门禁的红**）；失败率记进 artifact，月底看一次 | 2h |
+| ~~P1~~ | ~~flaky 无治理（#10）~~ | **已落地**：`scripts/ci/run_with_flaky_retry.py`（push 不重跑 / 定时重跑失败用例一次 / 通过也留痕 + 注解）；L2 四个 pytest job + `e2e-contract` 已接入 | 1.5h ✅ |
 | **P1** | prompt 文案断言 78 处（#6） | 新行为集覆盖到的领域，把"只验文案"的断言删掉；目标：文案断言只保留"prompt 必须包含安全/口径硬约束"这一类 | 每迁一个领域 1h |
 | **P2** | 覆盖率无观测（#4 的旁支） | **只记趋势不设门禁**（mock 多，覆盖率数字会误导）；`pytest --cov` 出 artifact，月度看 | 1h |
 | **P2** | 变异测试缺失 | 不引入工具；用「手工抽掉实现看测试是否红」抽查（本轮 fixture 闸做过一次） | 0 |

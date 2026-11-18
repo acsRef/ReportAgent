@@ -73,6 +73,32 @@ jobs:
           set +e
           RAGENT_PYTHON=python3 npm run e2e:contract > /tmp/contract.log 2>&1
           code=$?
+          flaky=0
+          # flaky 治理（plan 2026-11-18-testing-playbook §二）：只有定时任务允许重跑失败 spec 一次，
+          # 且重跑通过也必须留痕（写 Job Summary + artifact），不能当成绿。
+          if [ $code -ne 0 ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "::warning title=flaky e2e::首跑失败，定时任务按纪律重跑失败 spec 一次"
+            RAGENT_PYTHON=python3 npx playwright test --config e2e/playwright.config.ts \
+              --last-failed > /tmp/contract-rerun.log 2>&1
+            rerun=$?
+            if [ $rerun -eq 0 ]; then
+              flaky=1
+              code=0
+            fi
+          fi
+          mkdir -p e2e/artifacts
+          cp -f /tmp/contract.log e2e/artifacts/ 2>/dev/null || true
+          [ -f /tmp/contract-rerun.log ] && cp -f /tmp/contract-rerun.log e2e/artifacts/ || true
+          if [ "$flaky" = "1" ]; then
+            failed=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/contract.log | grep -E '^  [0-9]+\) ' | head -5 || true)
+            {
+              echo "### ⚠️ flaky：contract e2e"
+              echo "- 首跑失败，重跑通过（按纪律 job 保持绿色，但**必须**排查或加隔离）"
+              echo '```'
+              echo "${failed:-（未解析到失败 spec 名，见 artifact 日志）}"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ $code -ne 0 ]; then
             sed 's/\x1b\[[0-9;]*m//g' /tmp/contract.log | tail -40 | while IFS= read -r line; do
               echo "::error file=contract-e2e::$line"

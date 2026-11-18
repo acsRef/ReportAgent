@@ -81,6 +81,27 @@ L2 只**编排**既有用例，不重写：`backend/tests/e2e/*`、`evaluation/t
 （都由 `REPORTAGENT_E2E=1` gate）。要加一条，就在 `live-eval.yml` 的对应 job 里加文件路径，
 并在 plan 里写清为什么值得每天/每周跑。
 
+## 三·五、flaky 治理（2026-11-18 P1）
+
+规则只有三条，缺一条都会退化成「重跑掩盖真回归」：
+
+| 规则 | 落地 |
+|---|---|
+| **push 门禁永不重跑** | `scripts/ci/run_with_flaky_retry.py` 只在 `GITHUB_EVENT_NAME=schedule` 时重跑 |
+| **只重跑失败用例一次** | `pytest --last-failed` / `playwright --last-failed`（不整组重跑，省时间也省额度） |
+| **重跑通过 ≠ 绿** | job 保持绿色，但强制留痕：`::warning title=flaky` + `reports/flaky-<name>.json` + Job Summary + artifact |
+
+两次都失败 → job 红 → `notify-failure` 开 Issue（那才是真缺陷）。
+
+L2 的四个 pytest job（`prompt-behavior` / `compaction-real-flow` / `offline-regression` / `full-chain`）
+和 `e2e-contract` 都已接入。本地验证：
+
+```powershell
+$env:GITHUB_EVENT_NAME='schedule'   # 模拟定时任务
+python scripts/ci/run_with_flaky_retry.py --name demo -- backend/tests/smoke -q
+# 想在 push 场景验证"不重跑"：去掉上面那行，脚本会打印「不是定时任务 → 不重跑」并以失败退出
+```
+
 ## 四、失败怎么看
 
 1. 定时失败会**自动开/更新 Issue**：`[live-eval] nightly 失败`（同标题去重，只加评论）；
